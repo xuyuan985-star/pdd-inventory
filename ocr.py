@@ -35,8 +35,8 @@ def _get_api_key() -> str:
     # 1. 环境变量
     key = os.environ.get('ZHIPU_API_KEY', '')
     if key: return key
-    # 2. 内置默认key
-    return 'b1581d75189d439dafdcb8d097e3013f.6nnE5G7MTvvzEnHQ'
+    # 2. 内置默认key（由 api_keys 模块管理）
+    return _get_key('zhipu')
 
 
 def _clean_json(text: str) -> str:
