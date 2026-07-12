@@ -8,9 +8,9 @@ import base64, json, os, sys, time
 
 # 密钥加载：优先本地 api_keys.py（gitignored），缺失时退回环境变量
 try:
-    from api_keys import _get_key
+    from api_keys import get_key
 except ImportError:
-    def _get_key(service):
+    def get_key(service):
         env_map = {'zhipu': 'ZHIPU_API_KEY', 'ark': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY'}
         return os.environ.get(env_map.get(service, ''), '')
 
