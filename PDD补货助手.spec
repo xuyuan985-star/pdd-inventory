@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='PDD EZ v2.1',
+    name='PDD EZ v2.2',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
