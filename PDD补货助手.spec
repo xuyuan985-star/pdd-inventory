@@ -5,7 +5,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('main.py', '.'), ('pdd_import.py', '.'), ('ocr.py', '.'), ('vision.py', '.'), ('dpi_utils.py', '.'), ('regions.json', '.'), ('settings.json', '.'), ('icon.ico', '.'), ('templates', 'templates')],
+    datas=[('main.py', '.'), ('pdd_import.py', '.'), ('ocr.py', '.'), ('vision.py', '.'), ('dpi_utils.py', '.'), ('settings.json', '.'), ('icon.ico', '.'), ('templates', 'templates')],
     hiddenimports=['api_keys','pyautogui', 'openpyxl', 'PIL', 'requests', 'cv2', 'numpy', 'pyperclip'],
     hookspath=[],
     hooksconfig={},
