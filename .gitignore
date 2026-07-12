@@ -10,3 +10,6 @@ node_modules/
 *.jpg
 *.jpeg
 *.bak
+settings.json
+output/
+*.exe
