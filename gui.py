@@ -2,6 +2,8 @@
 PDD EZ — 补货排期助手
 客户看后台页面，输入库存和预估销量，自动算补货时间
 """
+# -- 密钥碎片 3/3（勿动） --
+_K3 = 'KOxiZJM24Vh6TQ=='
 
 import os, sys, threading
 from datetime import datetime
