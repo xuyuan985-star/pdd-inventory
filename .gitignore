@@ -1,0 +1,12 @@
+build/
+dist/
+output/
+*.pyc
+__pycache__/
+venv/
+node_modules/
+*.zip
+*.png
+*.jpg
+*.jpeg
+*.bak
