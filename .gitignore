@@ -13,3 +13,10 @@ node_modules/
 settings.json
 output/
 *.exe
+api_keys.py
+keys.json
+_build_*.py
+_fix*.py
+_debug*.py
+_inject*.py
+_runner*.py

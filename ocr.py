@@ -8,8 +8,9 @@ import base64, json, os, sys, time
 
 
 def _get_api_key() -> str:
-    """优先自定义API → 环境变量 → 内置key"""
+    """优先自定义→环境变量→api_keys模块→内置"""
     import os, sys, json
+    from api_keys import _get_key
     # 0. 从 settings.json 读取自定义API
     try:
         if getattr(sys, 'frozen', False):
@@ -24,11 +25,7 @@ def _get_api_key() -> str:
             if api_cfg.get('mode') == 'custom' and api_cfg.get('key'):
                 return api_cfg['key']
     except Exception: pass
-    # 1. 环境变量
-    key = os.environ.get('ZHIPU_API_KEY', '')
-    if key: return key
-    # 2. 内置默认key
-    return 'b1581d75189d439dafdcb8d097e3013f.6nnE5G7MTvvzEnHQ'
+    return _get_key('zhipu')
 
 
 def _clean_json(text: str) -> str:
@@ -163,7 +160,7 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
         builtin_model = api_cfg.get('builtin_model', 'qwen3.5-ocr')
         use_responses = False  # 默认 chat/completions，仅 Doubao-Seed-2.1-pro 走 Responses
         if builtin_model.lower().startswith('doubao'):
-            key = 'ark-8c5d35c3-a117-4b2b-b93a-a43dbe0f7df5-f55c7'
+            from api_keys import _get_key; key = _get_key('ark')
             # Doubao-Seed-2.1-pro 用 Responses API（thinking:disabled 提速），v1 用 chat/completions
             if builtin_model == 'Doubao-Seed-2.1-pro':
                 use_responses = True
@@ -193,7 +190,7 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
                 model_id = doubao_chat.get(builtin_model, 'ep-20260621182142-6x4lh')
                 models = [model_id, 'glm-4v-flash']
         elif builtin_model.startswith('qwen'):
-            key = 'sk-ws-H.RPREILI.vcEX.MEQCIHemJ7bO8iUT5_2HHJOYiahN-KKzZIkPNCXZtHOkO4tgAiB0KZnPJtu0bhokUkD4TTMEppZZJdUZl6ltJKpUkPJYRw'
+            key = _get_key('qwen')
             endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
             models = [builtin_model.replace('qwen-vl-ocr', 'qwen3.5-ocr'), 'glm-4v-flash']
         else:  # glm models
