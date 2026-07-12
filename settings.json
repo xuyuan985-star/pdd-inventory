@@ -1,0 +1,24 @@
+{
+  "theme": "极简暖",
+  "backend": {
+    "url": "https://mms.pinduoduo.com/",
+    "account": "19237981142",
+    "password": "Ykh19237981142"
+  },
+  "calibrate": {
+    "mode": "absolute",
+    "dropdown": {
+      "x": 1308,
+      "y": 711
+    },
+    "query": {
+      "x": 1615,
+      "y": 879
+    }
+  },
+  "api": {
+    "mode": "default",
+    "key": "",
+    "builtin_model": "qwen3.5-ocr"
+  }
+}
