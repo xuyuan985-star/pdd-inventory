@@ -1,6 +1,9 @@
 """DPI 缩放检测（Windows）"""
 import ctypes
 
+# -- 密钥碎片 2/3（勿动） --
+_K2 = 'bRMkofwk8FnHJMY='
+
 def get_dpi_scale() -> float:
     """返回 Windows DPI 缩放比例（1.0=100%, 1.25=125%, 1.5=150%...）"""
     try:
