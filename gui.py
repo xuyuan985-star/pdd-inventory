@@ -101,24 +101,7 @@ THEMES = {
         "C_RED_BG": "#FEE2E2",
         "C_BLUE_LIGHT": "#F5F0E8",
     },
-    "液态玻璃": {
-        "label": "液态玻璃",
-        "desc": "动态光学毛玻璃·流动光影",
-        # Liquid Glass: iridescent translucency, dynamic depth
-        "C_PRIMARY": "#7C3AED",
-        "C_SECONDARY": "#06B6D4",
-        "C_ACCENT": "#EC4899",
-        "C_BG": "#0D0221",
-        "C_SURFACE": "#1A0A2E",
-        "C_TEXT": "#F5F3FF",
-        "C_MUTED": "#8B7AA9",
-        "C_BORDER": "#2D1B4E",
-        "C_RED": "#F43F5E",
-        "C_YELLOW_BG": "#2D1B00",
-        "C_GREEN_BG": "#042F2E",
-        "C_RED_BG": "#2D0B1A",
-        "C_BLUE_LIGHT": "#1A0A3E",
-    },
+
 }
 
 
@@ -152,8 +135,9 @@ class App:
                 pass
         self.win = tk.Tk()
         self.win.title("PDD EZ")
-        self.win.geometry("820x620")
+        self.win.geometry("900x620")
         self.win.resizable(True, True)
+        self.win.minsize(750, 520)
         # 窗口图标：打包后用 _MEIPASS，源码用脚本目录
         try:
             if getattr(sys, 'frozen', False):
@@ -168,7 +152,7 @@ class App:
         self._theme_name = self._load_theme_pref()
         self._apply_theme(self._theme_name)
         # 记录初始几何，用于结果出来后自动展开
-        self._initial_geometry = "820x620"
+        self._initial_geometry = "900x620"
         
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
@@ -192,32 +176,41 @@ class App:
         # ── 顶部 ──
         top_bar = tk.Frame(self.win)
         top_bar.pack(fill="x", padx=15, pady=(15, 2))
-        title = tk.Label(top_bar, text="PDD EZ 补货排期系统",
-                         font=self.FONT_TITLE)
-        title.pack(side="left")
+        # ☰ 导航按钮（左侧）
+        tk.Button(top_bar, text="☰ 导航", relief='flat', command=self._toggle_nav,
+                  font=(self.FONT[0], 9), bg=self.C_BLUE_LIGHT, fg=self.C_PRIMARY).pack(side="left")
         # 当前模型标签
         api_cfg = self._get_api_config()
         bm = api_cfg.get('builtin_model', 'qwen3.5-ocr')
-        tag = 'FREE' if bm.startswith('glm') else 'PAID'
-        self.model_label_var = tk.StringVar(self.win, value=f'🔹 {bm}  {tag}')
-        tk.Label(top_bar, textvariable=self.model_label_var,
-                 font=(self.FONT[0], 7), fg=self.C_ACCENT).pack(side="left", padx=12, pady=2)
+        is_free = bm.startswith('glm')
+        # 模型标识胶囊
+        self.pill_frame = tk.Frame(top_bar, bg=self.C_SURFACE)
+        self.pill_frame.pack(side="left", padx=12)
+        self.pill_frame._skip_theme = True
+        self.pill_name = tk.Label(self.pill_frame, text=bm, font=(self.FONT[0], 8, 'bold'),
+                                   fg=self.C_TEXT, bg=self.C_SURFACE)
+        self.pill_name.pack(side="left", padx=(10,4), pady=4)
+        self.pill_name._skip_theme = True
+        tag_bg = "#10B981" if is_free else "#8B5CF6"
+        tag_text = "FREE" if is_free else "PRO"
+        self.pill_tag = tk.Label(self.pill_frame, text=tag_text, font=(self.FONT[0], 7, 'bold'),
+                                  fg="#FFFFFF", bg=tag_bg, padx=6)
+        self.pill_tag.pack(side="left", padx=(0,8), pady=2)
+        self.pill_tag._skip_theme = True
         tk.Button(top_bar, text="🏪 商家后台", relief='flat', command=self._open_backend,
                   font=(self.FONT[0], 9), bg=self.C_PRIMARY, fg="#FFFFFF").pack(side="right", padx=5)
-        tk.Button(top_bar, text="☰ 导航", relief='flat', command=self._toggle_nav,
-                  font=(self.FONT[0], 9), bg=self.C_BLUE_LIGHT, fg=self.C_PRIMARY).pack(side="right")
         
-        # ── 主容器：左导航 + 右内容 ──
-        self.main_paned = tk.Frame(self.win)
+        # ── 主容器：左导航 + 右内容（可拖拽分割） ──
+        self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
         self.main_paned.pack(fill="both", expand=True, padx=15, pady=(2, 15))
-        # 左侧导航栏（默认隐藏）
-        self.nav_frame = tk.Frame(self.main_paned, width=150, bg=self.C_SURFACE)
-        self.nav_frame.pack(side="left", fill="y")
-        self.nav_frame.pack_forget()
+        # 左侧导航栏
+        self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_SURFACE)
+        self.nav_frame.pack_propagate(False)
+        self.nav_buttons = {}
         self.nav_buttons = {}
         # 右侧内容
         self.content_frame = tk.Frame(self.main_paned)
-        self.content_frame.pack(side="left", fill="both", expand=True)
+        self.main_paned.add(self.content_frame, stretch="always")
         # 页面帧
         self.page_home = tk.Frame(self.content_frame)
         self.page_general = tk.Frame(self.content_frame)
@@ -328,14 +321,24 @@ class App:
         self._sort_col = None
         self._sort_reverse = False
         self._apply_theme(self._theme_name)
+        self._refresh_model_badge(self._get_api_config().get("builtin_model","qwen3.5-ocr"))
         self.page_home.pack(fill="both", expand=True)
         
 
+
+    def _refresh_model_badge(self, model_name):
+        is_free = model_name.startswith('glm')
+        self.pill_frame.configure(bg=self.C_SURFACE)
+        self.pill_name.configure(text=model_name, bg=self.C_SURFACE, fg=self.C_TEXT)
+        tag_bg = "#10B981" if is_free else "#8B5CF6"
+        tag_text = "FREE" if is_free else "PRO"
+        self.pill_tag.configure(text=tag_text, bg=tag_bg, fg="#FFFFFF")
+
     def _toggle_nav(self):
         if self.nav_frame.winfo_ismapped():
-            self.nav_frame.pack_forget()
+            self.main_paned.forget(self.nav_frame)
         else:
-            self.nav_frame.pack(side="left", fill="y")
+            self.main_paned.add(self.nav_frame, before=self.content_frame, minsize=150, stretch="never")
             if not self.nav_buttons:
                 self._build_nav()
 
@@ -357,6 +360,27 @@ class App:
             btn.pack(fill="x")
             self.nav_buttons[text] = btn
         self._highlight_nav(self.page_home)
+
+    def _show_page(self, page):
+        if self._current_page:
+            self._current_page.pack_forget()
+        page.pack(fill="both", expand=True)
+        self._current_page = page
+        self._highlight_nav(page)
+        if page == self.page_general and not hasattr(page, '_built'):
+            self._build_general_page()
+        elif page == self.page_products and not hasattr(page, '_built'):
+            self._build_product_region_tab(page)
+        elif page == self.page_theme and not hasattr(page, '_built'):
+            self._build_skin_tab(page)
+        elif page == self.page_backend and not hasattr(page, '_built'):
+            self._build_backend_tab(page)
+        elif page == self.page_calibrate and not hasattr(page, '_built'):
+            self._build_calibrate_tab(page)
+        page._built = True
+        self._apply_theme(self._theme_name)
+        self._refresh_model_badge(self._get_api_config().get("builtin_model","qwen3.5-ocr"))
+
 
     def _highlight_nav(self, page):
         for btn in self.nav_buttons.values():
@@ -383,6 +407,7 @@ class App:
             self._build_calibrate_tab(page)
         page._built = True
         self._apply_theme(self._theme_name)
+        self._refresh_model_badge(self._get_api_config().get("builtin_model","qwen3.5-ocr"))
         # (moved to _build_ui)
 
     
@@ -578,6 +603,8 @@ class App:
         
         # ── 第一遍：颜色映射替换 ──
         def _walk_color(w):
+            if getattr(w, '_skip_theme', False):
+                return
             for attr in ('bg', 'fg', 'highlightbackground', 'highlightcolor',
                          'activebackground', 'selectbackground', 'selectforeground'):
                 try:
@@ -596,6 +623,8 @@ class App:
         
         # ── 第二遍：系统默认控件强制设色 ──
         def _walk_system(w):
+            if getattr(w, "_skip_theme", False):
+                return
             cls = w.winfo_class()
             try:
                 if cls in ('Entry', 'Spinbox'):
@@ -622,7 +651,7 @@ class App:
             try:
                 if cls == 'Frame':
                     if getattr(w, '_skip_theme', False):
-                        pass  # 保护皮肤预览卡片
+                        actual_bg = parent_bg
                     else:
                         try:
                             hl = w.cget('highlightthickness')
@@ -632,7 +661,7 @@ class App:
                                 w.configure(bg=theme['C_BG'])
                         except:
                             w.configure(bg=theme['C_BG'])
-                    actual_bg = theme['C_BG']
+                        actual_bg = theme['C_BG']
                 elif cls == 'Label':
                     w.configure(bg=parent_bg, fg=theme['C_TEXT'])
                     actual_bg = parent_bg
@@ -815,7 +844,7 @@ class App:
                          'builtin_model': builtin_model_val.get(), 'custom_model': custom_model_var.get()}
             json.dump(s, open(sf, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
             tag = 'FREE' if builtin_model_val.get().startswith('glm') else 'PAID'
-            self.model_label_var.set(f'⚙ {builtin_model_val.get()}  {tag}')
+            self._refresh_model_badge(builtin_model_val.get())
             self.status_text.set('API配置已保存')
         tk.Button(content, text='保存API配置', command=save_api, font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,0))
 
@@ -1275,15 +1304,41 @@ class App:
         acc_frame.pack(fill="x", padx=20, pady=5)
         tk.Label(acc_frame, text="登录账号:", font=self.FONT, width=10, anchor="e").pack(side="left")
         acc_var = tk.StringVar(dlg, value=config.get('account', ''))
-        tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40).pack(side="left", padx=5)
+        acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED)
+        acc_entry.pack(side="left", padx=5)
+        # 占位文字处理
+        def _ph_entry(entry, placeholder, var):
+            def on_focus_in(e):
+                if var.get() == placeholder:
+                    var.set('')
+                    entry.configure(fg=self.C_TEXT)
+            def on_focus_out(e):
+                if not var.get():
+                    var.set(placeholder)
+                    entry.configure(fg=self.C_MUTED)
+            entry.bind('<FocusIn>', on_focus_in)
+            entry.bind('<FocusOut>', on_focus_out)
+            if not var.get():
+                var.set(placeholder)
+        _ph_entry(acc_entry, '输入手机号', acc_var)
         
         # 密码
         pwd_frame = tk.Frame(parent)
         pwd_frame.pack(fill="x", padx=20, pady=5)
         tk.Label(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
         pwd_var = tk.StringVar(dlg, value=config.get('password', ''))
-        pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*")
+        pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*" if config.get('password') else "")
         pwd_entry.pack(side="left", padx=5)
+        if not config.get('password'):
+            pwd_entry.configure(fg=self.C_MUTED)
+            pwd_var.set('输入密码')
+            pwd_entry.configure(show="")
+        def _pwd_on_focus(e):
+            if pwd_var.get() == '输入密码': pwd_var.set(''); pwd_entry.configure(fg=self.C_TEXT, show='*')
+        def _pwd_on_blur(e):
+            if not pwd_var.get(): pwd_var.set('输入密码'); pwd_entry.configure(fg=self.C_MUTED, show='')
+        pwd_entry.bind('<FocusIn>', _pwd_on_focus)
+        pwd_entry.bind('<FocusOut>', _pwd_on_blur)
         
         # 显示/隐藏密码
         show_var = tk.BooleanVar(dlg, value=False)
@@ -1306,8 +1361,8 @@ class App:
                 s = {}
             s['backend'] = {
                 'url': url_var.get().strip(),
-                'account': acc_var.get().strip(),
-                'password': pwd_var.get()
+                'account': '' if acc_var.get() in ('输入手机号', '') else acc_var.get().strip(),
+                'password': '' if pwd_var.get() == '输入密码' else pwd_var.get()
             }
             try:
                 with open(settings_file, 'w', encoding='utf-8') as f:
