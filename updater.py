@@ -158,12 +158,12 @@ def _do_replace(src, target):
         print("[更新器] 启动主程序...")
         os.startfile(target)
     
-    # 清理
+    # 清理临时文件
     try:
-        shutil.rmtree(tmp)
+        if os.path.isdir(tmp):
+            shutil.rmtree(tmp)
     except:
         pass
-    
     print("[更新器] 完成")
 
 if __name__ == "__main__":
