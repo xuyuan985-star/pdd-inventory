@@ -58,13 +58,8 @@ def generate_schedule(plans: list) -> list:
 
 def export_results(plans: list, schedule: list, output_dir: str = None) -> str:
     """导出到 PDD补货记录.xlsx，每次追加新sheet（时间戳命名）"""
-    try:
-        import openpyxl
-        from export_xlsx import export_plans_to_xlsx
-        return export_plans_to_xlsx(plans, output_dir)
-    except ImportError:
-        from export_xlsx import export_plans_to_csv
-        return export_plans_to_csv(plans, schedule, output_dir)
+    from export_xlsx import export_plans_to_xlsx
+    return export_plans_to_xlsx(plans, output_dir)
 
 
 def run_pipeline(order_csv: str, inv_csv: str, output_dir: str = None):

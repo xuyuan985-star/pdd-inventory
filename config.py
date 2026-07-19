@@ -84,8 +84,11 @@ def _read_settings():
 def _write_settings(s):
     """写入 settings.json"""
     import os
-    with open(os.path.join(get_base_dir(), 'settings.json'), 'w', encoding='utf-8') as f:
+    path = os.path.join(get_base_dir(), 'settings.json')
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(s, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)  # 原子替换，防崩溃丢配置
 
 
 def load_theme_pref() -> str:
