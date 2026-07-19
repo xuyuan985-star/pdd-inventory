@@ -82,10 +82,18 @@ class App(SettingsUIMixin):
         if getattr(sys, 'frozen', False):
             try:
                 exe_dir = os.path.dirname(sys.executable)
+                # 删旧 EXE
                 for old in ['PDD EZ v2.2.exe', 'PDD EZ v2.1.exe', 'PDD补货助手.exe']:
                     old_path = os.path.join(exe_dir, old)
                     if os.path.exists(old_path) and old_path != sys.executable:
                         os.remove(old_path)
+                # 删 _internal/ 废弃文件
+                internal = os.path.join(exe_dir, "_internal")
+                if os.path.isdir(internal):
+                    for old in ['api_keys.py', 'dpi_utils.py', 'keys.enc', 'gui_bridge.py']:
+                        old_path = os.path.join(internal, old)
+                        if os.path.exists(old_path):
+                            os.remove(old_path)
             except Exception:
                 pass
         # 加载皮肤偏好
