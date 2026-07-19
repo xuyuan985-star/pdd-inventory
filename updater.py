@@ -52,7 +52,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", default="")
     ap.add_argument("--restart", action="store_true")
+    ap.add_argument("--resume-update", action="store_true")
     args = ap.parse_args()
+    
+    if args.resume_update:
+        print("[更新器] 自升级完成，继续更新流程...")
     
     if args.target:
         target = args.target
