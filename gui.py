@@ -96,6 +96,8 @@ class App(SettingsUIMixin):
                             os.remove(old_path)
             except Exception:
                 pass
+        # 配置文件版本迁移
+        self._migrate_config()
         # 加载皮肤偏好
         self._theme_name = load_theme_pref()
         self._apply_theme(self._theme_name)
@@ -116,6 +118,34 @@ class App(SettingsUIMixin):
         
         self._build_ui()
         self._check_update()  # 后台检查更新
+        
+    def _migrate_config(self):
+        """配置文件版本迁移：旧格式 → 新格式"""
+        import json as _json
+        sf = os.path.join(get_base_dir(), 'settings.json')
+        if not os.path.exists(sf):
+            return
+        try:
+            with open(sf, 'r', encoding='utf-8') as f:
+                s = _json.load(f)
+        except Exception:
+            return
+        if 'config_version' in s:
+            return  # 已是最新
+        # v0→v1: 旧格式（mode/builtin_model）→ 新格式（active_provider/providers）
+        old_api = s.get('api', {})
+        if 'active_provider' not in old_api and ('mode' in old_api or 'builtin_model' in old_api):
+            s['api'] = {
+                'active_provider': 'doubao',
+                'providers': {'doubao': {}, 'qwen': {}, 'glm': {}}
+            }
+        s['config_version'] = 1
+        try:
+            with open(sf + '.tmp', 'w', encoding='utf-8') as f:
+                _json.dump(s, f, ensure_ascii=False, indent=2)
+            os.replace(sf + '.tmp', sf)
+        except Exception:
+            pass
         
     def _check_update(self):
         """后台检查 GitHub 版本"""
