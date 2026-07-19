@@ -1,4 +1,4 @@
-# PDD EZ — 拼多多补货排期助手 v1.0
+# PDD EZ — 拼多多补货排期助手 v1.1
 
 拼多多商家后台的桌面端库存管理工具。截图 OCR 识别订货管理页面，自动计算补货时间和数量，导出 Excel。
 
@@ -15,7 +15,7 @@
 
 ## 使用方法
 
-1. 双击 `PDD EZ v1.0.exe`
+1. 双击 `PDD EZ v1.1.exe`
 2. 打开拼多多商家后台 → 订货管理页面
 3. 点 **实时截图**，窗口最小化后自动截屏识别
 4. 确认数据无误 → 点 **刷新计算**
@@ -45,4 +45,4 @@ pip install pyinstaller openpyxl pillow requests numpy opencv-python pyautogui p
 pyinstaller PDD补货助手.spec
 ```
 
-输出在 `dist/PDD EZ v1.0.exe`（~75MB）
+输出在 `dist/PDD EZ v1.1.exe`（~75MB）

@@ -4,8 +4,8 @@ PDD EZ — 公共工具函数
 """
 import os, sys, json
 
-VERSION = "v1.0"
-EXE_NAME = "PDD EZ v1.0.exe"
+VERSION = "v1.1"
+EXE_NAME = "PDD EZ v1.1.exe"
 
 
 def get_base_dir() -> str:

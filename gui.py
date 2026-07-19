@@ -83,7 +83,7 @@ class App(SettingsUIMixin):
             try:
                 exe_dir = os.path.dirname(sys.executable)
                 # 删旧 EXE
-                for old in ['PDD EZ v2.2.exe', 'PDD EZ v2.1.exe', 'PDD补货助手.exe']:
+                for old in ['PDD EZ v2.2.exe', 'PDD EZ v2.1.exe', 'PDD EZ v1.0.exe', 'PDD补货助手.exe']:
                     old_path = os.path.join(exe_dir, old)
                     if os.path.exists(old_path) and old_path != sys.executable:
                         os.remove(old_path)
@@ -630,6 +630,9 @@ class App(SettingsUIMixin):
         # ── 第一遍：颜色映射替换 ──
         def _walk_color(w):
             if getattr(w, '_skip_theme', False):
+                return
+            # ttk 控件由 _update_ttk_theme 统一管理，跳过避免 TclError
+            if w.winfo_class().startswith('T'):
                 return
             for attr in ('bg', 'fg', 'highlightbackground', 'highlightcolor',
                          'activebackground', 'selectbackground', 'selectforeground'):
@@ -1217,7 +1220,14 @@ class App(SettingsUIMixin):
                 if items:
                     done = threading.Event()
                     for it in items: it['region'] = reg
-                    self.win.after(0, lambda it=items, ev=done: (self._fill_from_ocr(it), ev.set()))
+                    def _safe_fill(it, ev):
+                        try:
+                            self._fill_from_ocr(it)
+                        except Exception as ex:
+                            self.win.after(0, lambda m=str(ex): self.status_text.set(f"填充失败: {m}"))
+                        finally:
+                            ev.set()
+                    self.win.after(0, lambda it=items, ev=done: _safe_fill(it, ev))
                     done.wait(timeout=10)
                     success += 1; total_items += len(items)
                     dlog(f"6.✓ {len(items)}个商品")
