@@ -411,8 +411,9 @@ class App(SettingsUIMixin):
             self._build_calibrate_tab(page)
         elif page == self.page_api and not hasattr(page, '_built'):
             self._build_api_page(page)
-        page._built = True
-        self._apply_theme(self._theme_name)
+        if not hasattr(page, '_built'):
+            page._built = True
+            self._apply_theme(self._theme_name)  # 仅新构建页面刷新
         self._refresh_model_badge()
         # (moved to _build_ui)
 
