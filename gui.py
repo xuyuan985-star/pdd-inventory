@@ -132,6 +132,12 @@ class App(SettingsUIMixin):
             return
         if 'config_version' in s:
             return  # 已是最新
+        # 先备份
+        try:
+            import shutil as _shutil
+            _shutil.copy2(sf, sf + '.bak')
+        except Exception:
+            pass
         # v0→v1: 旧格式（mode/builtin_model）→ 新格式（active_provider/providers）
         old_api = s.get('api', {})
         if 'active_provider' not in old_api and ('mode' in old_api or 'builtin_model' in old_api):

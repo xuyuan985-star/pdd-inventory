@@ -165,19 +165,27 @@ def main():
         input("按回车退出...")
         return
     
-    # 更新器自升级：检查 zip 中是否有新的 updater.exe
+    # 更新器自升级：zip 中有新 updater.exe → bat 脚本替换
     if new_dir:
         for f in os.listdir(new_dir):
             fp = os.path.join(new_dir, f)
             if f.lower().startswith("pdd ez updater") and f.endswith(".exe"):
                 my_path = sys.executable if getattr(sys, 'frozen', False) else os.path.join(os.path.dirname(__file__), 'PDD EZ Updater.exe')
-                new_updater = my_path + ".new"
+                new_updater = os.path.join(os.path.dirname(my_path), "updater.exe.new")
                 shutil.copy2(fp, new_updater)
-                # 尝试替换自身，失败则下次启动会自动换
-                try:
-                    os.replace(new_updater, my_path)
-                except OSError:
-                    pass
+                # 写 bat 脚本等待当前进程退出后替换
+                bat = os.path.join(tempfile.gettempdir(), "update_updater.bat")
+                with open(bat, 'w') as bf:
+                    bf.write(f'''@echo off
+:loop
+timeout /t 1 /nobreak >nul
+if exist "{new_updater}" (
+    move /y "{new_updater}" "{my_path}"
+    start "" "{my_path}" --resume-update
+)
+del "%~f0"
+''')
+                os.startfile(bat)
                 break
 
 
