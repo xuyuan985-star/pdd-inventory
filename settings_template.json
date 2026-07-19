@@ -1,0 +1,15 @@
+{
+  "theme": "极简白",
+  "api": {
+    "active_provider": "doubao",
+    "providers": {
+      "doubao": {"api_key": "", "model": "", "model_history": ["Doubao-Seed-2.1-pro", "Doubao-1.5-vision-pro-32k"], "endpoint": "https://ark.cn-beijing.volces.com/api/v3/chat/completions"},
+      "qwen":   {"api_key": "", "model": "", "model_history": ["qwen3.5-omni-flash"], "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"},
+      "glm":    {"api_key": "", "model": "", "model_history": ["glm-4v-flash"], "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions"}
+    }
+  },
+  "export_path": "",
+  "crop": {"left": 0.11, "top": 0.40},
+  "resolution": "1920×1080 (Full HD)",
+  "backend": {"url": "https://mms.pinduoduo.com/", "account": "", "password": ""}
+}

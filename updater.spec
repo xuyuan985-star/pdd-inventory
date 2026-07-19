@@ -1,12 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-
-
 a = Analysis(
-    ['gui.py'],
+    ['updater.py'],
     pathex=[],
     binaries=[],
-    datas=[('main.py', '.'), ('pdd_import.py', '.'), ('ocr.py', '.'), ('vision.py', '.'), ('utils.py', '.'), ('config.py', '.'), ('export_xlsx.py', '.'), ('settings_ui.py', '.'), ('settings.json', '.'), ('icon.ico', '.'), ('templates', 'templates')],
-    hiddenimports=['pyautogui', 'openpyxl', 'PIL', 'requests', 'cv2', 'numpy', 'pyperclip'],
+    datas=[],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -15,21 +13,20 @@ a = Analysis(
     optimize=0,
 )
 pyz = PYZ(a.pure)
-
 exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
     a.datas,
     [],
-    name='PDD EZ v1.0',
+    name='PDD EZ Updater',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
