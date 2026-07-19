@@ -830,11 +830,10 @@ class App(SettingsUIMixin):
             name = item.get('name', '')
             stock = int(item.get('stock', 0))
             daily = max(int(item.get('sales', 0)), 0)
-            if daily <= 0:
-                daily = 1  # 除零保护
+            calc_daily = daily if daily > 0 else 1  # 除法保护，显示保留原始值
             shipping = self._get_shipping(region, name)  # 逐商品查运输时效
             
-            ratio = stock / daily
+            ratio = stock / calc_daily
             lead_time = shipping + 1  # 补货时间 = 运输天数 + 1
             reorder = ratio - lead_time
             
@@ -1163,18 +1162,18 @@ class App(SettingsUIMixin):
                 else:
                     dx = int(sw * preset['dropdown_x']); dy = int(sh * preset['dropdown_y'])
                     dlog(f"1.预设({dx},{dy})")
-                pyautogui.click(dx, dy); time.sleep(0.3); pyautogui.click(dx, dy); time.sleep(0.2)
-                
-                # 2. 粘贴省份 — 先复制到剪贴板，再三击选中+粘贴
-                full = reg if reg in ('内蒙古','广西','西藏','宁夏','新疆','北京','上海','天津','重庆') else reg + '省'
-                pyperclip.copy(full)
-                pyautogui.tripleClick(dx, dy); time.sleep(0.15)
-                pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
-                dlog(f"2.粘贴'{full}'")
-                
-                # 3. 回车
-                pyautogui.press('enter'); time.sleep(1.0)
-                dlog("3.回车确认")
+                try:
+                    pyautogui.click(dx, dy); time.sleep(0.3); pyautogui.click(dx, dy); time.sleep(0.2)
+                    full = reg if reg in ('内蒙古','广西','西藏','宁夏','新疆','北京','上海','天津','重庆') else reg + '省'
+                    pyperclip.copy(full)
+                    pyautogui.tripleClick(dx, dy); time.sleep(0.15)
+                    pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
+                    dlog(f"2.粘贴'{full}'")
+                    pyautogui.press('enter'); time.sleep(1.0)
+                    dlog("3.回车确认")
+                except Exception as ex:
+                    dlog(f"操作失败(剪贴板/按键): {ex}")
+                    continue
                 
                 # 4. 找查询按钮 — 仅依靠校准系统
                 if _cal.get('query') and _cal.get('mode','absolute') == 'absolute':
@@ -1321,7 +1320,6 @@ class App(SettingsUIMixin):
             return
         
         self.status_text.set("识别中...")
-        self._clear_input_rows()
         self.win.update()
         
         def task():
