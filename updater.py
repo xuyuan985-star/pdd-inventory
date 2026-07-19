@@ -95,49 +95,63 @@ def main():
         input("按回车退出...")
         return
     
-    # 如果是 zip，递归找 exe
-    if new_exe.endswith(".zip"):
-        import zipfile
-        print("[更新器] 解压...")
-        extract_dir = os.path.join(tmp, "extracted")
-        os.makedirs(extract_dir, exist_ok=True)
-        with zipfile.ZipFile(new_exe, 'r') as zf:
-            zf.extractall(extract_dir)
-        # 递归查找 exe
-        found = None
-        for root, dirs, files in os.walk(extract_dir):
-            for f in files:
-                if f.endswith(".exe"):
-                    found = os.path.join(root, f)
-                    break
-            if found:
-                break
-        if found:
-            new_exe = found
-        else:
-            print("[更新器] zip 中未找到 EXE")
-            input("按回车退出...")
-            return
-    
-    # 替换 — 先改名旧文件，再写入新版，延迟删除旧文件
+    # 替换
     try:
-        if sys.platform == 'win32' and os.path.exists(target):
-            old = target + ".old"
-            if os.path.exists(old):
-                os.remove(old)
-            os.rename(target, old)  # 重命名不触发占用锁
-            import ctypes
-            ctypes.windll.kernel32.MoveFileExW(old, None, 4)  # 重启后删 old
-        shutil.copy2(new_exe, target)
-        print(f"[更新器] 已更新: {target}")
-    except PermissionError:
-        tmp_exe = target + ".new"
-        shutil.copy2(new_exe, tmp_exe)
-        print(f"[更新器] 文件被占用，已保存为 {tmp_exe}，请手动替换或重启后重试")
+        target_dir = os.path.dirname(target)
+        if new_exe.endswith(".zip"):
+            import zipfile
+            print("[更新器] 解压更新包...")
+            extract_dir = os.path.join(tmp, "extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+            with zipfile.ZipFile(new_exe, 'r') as zf:
+                zf.extractall(extract_dir)
+            new_dir = None
+            single_exe = None
+            for item in os.listdir(extract_dir):
+                item_path = os.path.join(extract_dir, item)
+                if os.path.isdir(item_path) and item.startswith("PDD EZ"):
+                    new_dir = item_path; break
+                elif item.endswith(".exe") and "PDD" in item:
+                    single_exe = item_path
+            if new_dir:
+                print("[更新器] 覆盖程序文件夹...")
+                for root, dirs, files in os.walk(new_dir):
+                    rel = os.path.relpath(root, new_dir)
+                    dest_root = target_dir if rel == '.' else os.path.join(target_dir, rel)
+                    os.makedirs(dest_root, exist_ok=True)
+                    for f in files:
+                        try:
+                            shutil.copy2(os.path.join(root, f), os.path.join(dest_root, f))
+                        except PermissionError:
+                            pass
+                print(f"[更新器] 已更新: {target_dir}")
+            elif single_exe:
+                _do_replace(single_exe, target)
+            else:
+                print("[更新器] 未找到有效更新内容")
+        else:
+            _do_replace(new_exe, target)
     except Exception as e:
         print(f"[更新器] 替换失败: {e}")
         input("按回车退出...")
         return
+
+
+def _do_replace(src, target):
+    if sys.platform == 'win32' and os.path.exists(target):
+        old = target + ".old"
+        if os.path.exists(old):
+            os.remove(old)
+        os.rename(target, old)
+        import ctypes
+        ctypes.windll.kernel32.MoveFileExW(old, None, 4)
+    try:
+        shutil.copy2(src, target)
+        print(f"[更新器] 已更新: {target}")
+    except PermissionError:
+        tmp = target + ".new"
+        shutil.copy2(src, tmp)
+        print(f"[更新器] 文件被占用，已保存为 {tmp}，请手动替换或重启后重试")
     
     # 启动主程序
     if args.restart and os.path.exists(target):
