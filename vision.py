@@ -166,4 +166,3 @@ def locate_element(screenshot_path, template_name, method='auto', threshold=0.75
     if result and scale != 1.0:
         return (int(result[0] / scale), int(result[1] / scale))
     return result
-

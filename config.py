@@ -111,4 +111,3 @@ def save_resolution_pref(name: str):
     s = _read_settings()
     s['resolution'] = name
     _write_settings(s)
-

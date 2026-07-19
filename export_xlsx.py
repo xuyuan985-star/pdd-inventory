@@ -161,4 +161,3 @@ def export_plans_to_csv(plans: list, schedule: list, export_dir: str = None) -> 
                         p.get('ratio', p.get('days_left', '')), p['status'], p['qty'],
                         p['order_date'], p['arrive_date']])
     return path
-
