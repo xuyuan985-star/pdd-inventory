@@ -6,7 +6,7 @@ PDD EZ — 补货排期助手
 import os, sys, threading
 from datetime import datetime
 
-from utils import get_base_dir, get_api_config
+from utils import get_base_dir, get_api_config, VERSION
 from settings_ui import SettingsUIMixin
 
 # ── 抢先设置 DPI 感知，防止 pyautogui 截图后窗口缩放 ──
@@ -97,6 +97,29 @@ class App(SettingsUIMixin):
         self.active_region = None
         
         self._build_ui()
+        self._check_update()  # 后台检查更新
+        
+    def _check_update(self):
+        """后台检查 GitHub 版本"""
+        threading.Thread(target=self._do_check_update, daemon=True).start()
+    
+    def _do_check_update(self):
+        import json as _json
+        try:
+            from urllib.request import urlopen, Request
+            req = Request("https://api.github.com/repos/xuyuan985-star/pdd-inventory/releases/latest",
+                         headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "PDD-EZ"})
+            with urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode())
+                latest = data.get("tag_name", "")
+                body = data.get("body", "")
+                if latest and latest != VERSION:
+                    self._latest_tag = latest
+                    self._latest_body = body
+                    msg = f"🔄 有新版本 {latest}，点击「更新」查看详情"
+                    self.win.after(0, lambda: self.status_text.set(msg))
+        except Exception:
+            pass
     
     def _build_ui(self):
         # ── 全局热键 ──
@@ -131,6 +154,8 @@ class App(SettingsUIMixin):
         self.pill_tag._skip_theme = True
         tk.Button(top_bar, text="🏪 商家后台", relief='flat', command=self._open_backend,
                   font=(self.FONT[0], 9), bg=self.C_PRIMARY, fg="#FFFFFF").pack(side="right", padx=5)
+        tk.Button(top_bar, text="🔄 更新", relief='flat', command=self._run_updater,
+                  font=(self.FONT[0], 9), bg="#10B981", fg="#FFFFFF").pack(side="right", padx=5)
         
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
@@ -444,6 +469,93 @@ class App(SettingsUIMixin):
             url = 'https://' + url
         webbrowser.open(url)
         self.status_text.set("已打开商家后台 → 请手动登录")
+    
+    def _run_updater(self):
+        """显示更新详情 + 进度 + 错误处理"""
+        # 获取缓存的版本信息
+        latest = getattr(self, '_latest_tag', '')
+        body = getattr(self, '_latest_body', '')
+        if not latest:
+            # 手动检查一次
+            try:
+                from urllib.request import urlopen, Request
+                import json as _json
+                req = Request("https://api.github.com/repos/xuyuan985-star/pdd-inventory/releases/latest",
+                             headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "PDD-EZ"})
+                with urlopen(req, timeout=10) as resp:
+                    data = _json.loads(resp.read().decode())
+                    latest = data.get("tag_name", "")
+                    body = data.get("body", "")
+            except Exception as e:
+                messagebox.showerror("检查失败", f"无法连接更新服务器：{e}")
+                return
+        
+        if not latest or latest == VERSION:
+            messagebox.showinfo("已是最新", f"当前已是最新版本 {VERSION}")
+            return
+        
+        # 弹窗显示更新日志 + 确认
+        changelog = body or "(无更新日志)"
+        # 截断过长的日志
+        if len(changelog) > 500:
+            changelog = changelog[:500] + "..."
+        
+        dlg = tk.Toplevel(self.win)
+        dlg.title("软件更新")
+        dlg.geometry("450x300")
+        dlg.resizable(False, False)
+        dlg.configure(bg=self.C_BG)
+        dlg.transient(self.win)
+        dlg.grab_set()
+        
+        tk.Label(dlg, text=f"发现新版本 {latest}", font=self.FONT_HEADING,
+                bg=self.C_BG, fg=self.C_TEXT).pack(pady=(15,5))
+        
+        # 更新日志
+        log_frame = tk.Frame(dlg, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        log_frame.pack(fill="both", expand=True, padx=15, pady=5)
+        log_text = tk.Text(log_frame, font=(self.FONT[0], 8), wrap="word", height=8,
+                          bg=self.C_SURFACE, fg=self.C_TEXT, relief="flat")
+        log_text.insert("1.0", changelog)
+        log_text.configure(state="disabled")
+        log_text.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # 进度条
+        progress = ttk.Progressbar(dlg, mode="indeterminate", length=380)
+        progress.pack(pady=8)
+        status_lbl = tk.Label(dlg, text="", font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED)
+        status_lbl.pack()
+        
+        def do_update():
+            progress.start(10)
+            status_lbl.configure(text="正在下载...")
+            dlg.update()
+            
+            import subprocess, tempfile
+            updater = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else get_base_dir(),
+                                  'PDD EZ Updater.exe')
+            if not os.path.exists(updater):
+                progress.stop()
+                messagebox.showerror("更新失败", "未找到更新器，请重新下载完整安装包", parent=dlg)
+                dlg.destroy()
+                return
+            
+            try:
+                subprocess.Popen([updater, '--target', sys.executable, '--restart'])
+                progress.stop()
+                status_lbl.configure(text="更新器已启动，主程序即将关闭...")
+                dlg.after(500, self.win.destroy)
+            except Exception as e:
+                progress.stop()
+                messagebox.showerror("启动失败", f"无法启动更新器：{e}\n请手动下载最新版本", parent=dlg)
+                dlg.destroy()
+        
+        btn_frame = tk.Frame(dlg, bg=self.C_BG)
+        btn_frame.pack(pady=10)
+        tk.Button(btn_frame, text="立即更新", command=do_update,
+                 font=self.FONT_BOLD, bg="#10B981", fg="#FFFFFF", width=12).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="稍后再说", command=dlg.destroy,
+                 font=self.FONT, bg=self.C_MUTED, fg="#FFFFFF", width=12).pack(side="left", padx=5)
     
     def _apply_theme(self, name):
         """应用皮肤：更新类属性 + 递归刷新所有控件颜色"""

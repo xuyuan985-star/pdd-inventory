@@ -4,6 +4,9 @@ PDD EZ — 公共工具函数
 """
 import os, sys, json
 
+VERSION = "v1.0"
+EXE_NAME = "PDD EZ v1.0.exe"
+
 
 def get_base_dir() -> str:
     """可写数据目录：打包后 → %APPDATA%/PDD补货助手，源码 → 脚本目录"""
