@@ -87,10 +87,17 @@ def main():
         input("按回车退出...")
         return
     
-    # 等待主程序退出
+    # 等待主程序退出（轮询文件释放）
     if args.restart:
         print("[更新器] 等待主程序退出...")
-        time.sleep(3)
+        for _ in range(15):
+            try:
+                with open(target, 'rb') as _f:
+                    pass
+                time.sleep(0.5)
+            except (PermissionError, OSError):
+                break
+        time.sleep(1)  # 额外缓冲
     
     # 下载到临时目录
     tmp = os.path.join(tempfile.gettempdir(), "pdd_update")
@@ -111,7 +118,11 @@ def main():
             extract_dir = os.path.join(tmp, "extracted")
             os.makedirs(extract_dir, exist_ok=True)
             with zipfile.ZipFile(new_exe, 'r') as zf:
-                zf.extractall(extract_dir)
+                for zi in zf.infolist():
+                    # 拒绝路径遍历
+                    if zi.filename.startswith('/') or '..' in zi.filename:
+                        continue
+                    zf.extract(zi, extract_dir)
             new_dir = None
             single_exe = None
             for item in os.listdir(extract_dir):
@@ -145,12 +156,21 @@ def main():
                     print(f"[更新器] 已更新: {target_dir}")
                     shutil.rmtree(backup_dir, ignore_errors=True)
                 except Exception:
-                    # 回滚
+                    # 回滚：逐文件从备份恢复
                     print("[更新器] 更新失败，正在回滚...")
                     if os.path.exists(target_dir):
                         shutil.rmtree(target_dir, ignore_errors=True)
                     if os.path.exists(backup_dir):
-                        os.rename(backup_dir, target_dir)
+                        for root, dirs, files in os.walk(backup_dir):
+                            rel = os.path.relpath(root, backup_dir)
+                            dest = target_dir if rel == '.' else os.path.join(target_dir, rel)
+                            os.makedirs(dest, exist_ok=True)
+                            for f in files:
+                                try:
+                                    shutil.copy2(os.path.join(root, f), os.path.join(dest, f))
+                                except OSError:
+                                    pass
+                        shutil.rmtree(backup_dir, ignore_errors=True)
                     print("[更新器] 已回滚至旧版本")
                     input("按回车退出...")
                     return
@@ -177,12 +197,17 @@ def main():
                 bat = os.path.join(tempfile.gettempdir(), "update_updater.bat")
                 with open(bat, 'w') as bf:
                     bf.write(f'''@echo off
+set cnt=0
 :loop
 timeout /t 1 /nobreak >nul
+set /a cnt+=1
+if %cnt% geq 30 goto :done
 if exist "{new_updater}" (
     move /y "{new_updater}" "{my_path}"
     start "" "{my_path}" --resume-update
 )
+goto :loop
+:done
 del "%~f0"
 ''')
                 os.startfile(bat)
