@@ -5,7 +5,7 @@ PDD 商家后台数据导入 — 纯标准库，零依赖
 
 import csv
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def _read_csv_auto(path: str):

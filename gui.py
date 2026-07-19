@@ -2,11 +2,12 @@
 PDD EZ — 补货排期助手
 客户看后台页面，输入库存和预估销量，自动算补货时间
 """
-# -- 密钥碎片 3/3（勿动） --
-_K3 = 'KOxiZJM24Vh6TQ=='
 
 import os, sys, threading
 from datetime import datetime
+
+from utils import get_base_dir, get_api_config
+from settings_ui import SettingsUIMixin
 
 # ── 抢先设置 DPI 感知，防止 pyautogui 截图后窗口缩放 ──
 if sys.platform == 'win32':
@@ -21,15 +22,7 @@ if sys.platform == 'win32':
         except Exception:
             pass
 
-def _base_dir():
-    """可写数据目录：打包后 → %APPDATA%/PDD补货助手，源码 → 脚本目录"""
-    if getattr(sys, 'frozen', False):
-        data_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'PDD补货助手')
-        os.makedirs(data_dir, exist_ok=True)
-        return data_dir
-    return os.path.dirname(os.path.abspath(__file__))
-
-sys.path.insert(0, _base_dir())
+sys.path.insert(0, get_base_dir())
 
 try:
     import tkinter as tk
@@ -39,75 +32,10 @@ except ImportError:
     sys.exit(1)
 
 
-# ── 分辨率预设 ──────────────────────────────────────────────────
-# 坐标是相对于屏幕的比例 (0.0~1.0)，适配所有分辨率
-RESOLUTION_PRESETS = {
-    "1920×1080 (Full HD)": {"w": 1920, "h": 1080, "dropdown_x": 0.28, "dropdown_y": 0.38, "query_x": 0.82, "query_y": 0.38},
-    "2560×1440 (2K)":      {"w": 2560, "h": 1440, "dropdown_x": 0.28, "dropdown_y": 0.38, "query_x": 0.82, "query_y": 0.38},
-    "3840×2160 (4K)":      {"w": 3840, "h": 2160, "dropdown_x": 0.26, "dropdown_y": 0.36, "query_x": 0.83, "query_y": 0.36},
-    "1366×768 (HD)":       {"w": 1366, "h": 768,  "dropdown_x": 0.30, "dropdown_y": 0.40, "query_x": 0.80, "query_y": 0.40},
-}
-
-# ── 皮肤系统 — New Minimalism ────────────────────────────────────
-THEMES = {
-    "极简白": {
-        "label": "极简白",
-        "desc": "纯白底·灰蓝字·蓝点缀",
-        # Flat Design: 无阴影无渐变，4-6色限制，高对比
-        "C_PRIMARY": "#1E293B",       # Slate 800 — 标题/表头
-        "C_SECONDARY": "#64748B",     # Slate 500 — 辅助
-        "C_ACCENT": "#2563EB",        # Blue 600 — 仅一处强调
-        "C_BG": "#FFFFFF",            # 纯白背景
-        "C_SURFACE": "#F8FAFC",       # Slate 50 — 微妙区分
-        "C_TEXT": "#0F172A",          # Slate 900 — 正文
-        "C_MUTED": "#94A3B8",        # Slate 400 — 淡化
-        "C_BORDER": "#E2E8F0",       # Slate 200 — 极细分割
-        "C_RED": "#DC2626",
-        "C_YELLOW_BG": "#FEF9C3",
-        "C_GREEN_BG": "#DCFCE7",
-        "C_RED_BG": "#FEE2E2",
-        "C_BLUE_LIGHT": "#EFF6FF",
-    },
-    "极简墨": {
-        "label": "极简墨",
-        "desc": "墨灰底·浅灰字·白线",
-        # 暗色极简：墨灰底，极低对比度表面
-        "C_PRIMARY": "#64748B",
-        "C_SECONDARY": "#94A3B8",
-        "C_ACCENT": "#60A5FA",
-        "C_BG": "#1E293B",
-        "C_SURFACE": "#0F172A",
-        "C_TEXT": "#F1F5F9",
-        "C_MUTED": "#64748B",
-        "C_BORDER": "#334155",
-        "C_RED": "#EF4444",
-        "C_YELLOW_BG": "#3B2F00",
-        "C_GREEN_BG": "#052E16",
-        "C_RED_BG": "#450A0A",
-        "C_BLUE_LIGHT": "#1E293B",
-    },
-    "极简暖": {
-        "label": "极简暖",
-        "desc": "暖杏底·褐字·金点缀",
-        "C_PRIMARY": "#292524",
-        "C_SECONDARY": "#78716C",
-        "C_ACCENT": "#D97706",
-        "C_BG": "#FEF7ED",
-        "C_SURFACE": "#F5F0E8",
-        "C_TEXT": "#1C1917",
-        "C_MUTED": "#A8A29E",
-        "C_BORDER": "#E7D8C4",
-        "C_RED": "#DC2626",
-        "C_YELLOW_BG": "#FEF3C7",
-        "C_GREEN_BG": "#DCFCE7",
-        "C_RED_BG": "#FEE2E2",
-        "C_BLUE_LIGHT": "#F5F0E8",
-    },
-
-}
+from config import RESOLUTION_PRESETS, THEMES, load_theme_pref, load_resolution_pref
 
 
-class App:
+class App(SettingsUIMixin):
     # Design system — New Minimalism / Flat Design
     C_PRIMARY = '#1E293B'      # Slate 800
     C_SECONDARY = '#64748B'    # Slate 500
@@ -145,20 +73,19 @@ class App:
             if getattr(sys, 'frozen', False):
                 ico = os.path.join(sys._MEIPASS, 'icon.ico')
             else:
-                ico = os.path.join(_base_dir(), 'icon.ico')
+                ico = os.path.join(get_base_dir(), 'icon.ico')
             if os.path.exists(ico):
                 self.win.iconbitmap(default=ico)
         except Exception:
             pass
         # 加载皮肤偏好
-        self._theme_name = self._load_theme_pref()
+        self._theme_name = load_theme_pref()
         self._apply_theme(self._theme_name)
         # 记录初始几何，用于结果出来后自动展开
         self._initial_geometry = "900x620"
         
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
-        import threading
         self._batch_stop = threading.Event()  # 紧急停止信号
         self.status_text = tk.StringVar(self.win, value="就绪 — 输入库存和预估销量后点计算")
         self.regions = self._load_regions()
@@ -182,9 +109,12 @@ class App:
         tk.Button(top_bar, text="☰ 导航", relief='flat', command=self._toggle_nav,
                   font=(self.FONT[0], 9), bg=self.C_BLUE_LIGHT, fg=self.C_PRIMARY).pack(side="left")
         # 当前模型标签
-        api_cfg = self._get_api_config()
-        bm = api_cfg.get('builtin_model', 'qwen3.5-ocr')
-        is_free = bm.startswith('glm')
+        api_cfg = get_api_config()
+        active = api_cfg.get('active_provider', 'doubao')
+        providers = api_cfg.get('providers', {})
+        provider = providers.get(active, {}) if isinstance(providers, dict) else {}
+        bm = provider.get('model', '') or active
+        is_free = active == 'glm'
         # 模型标识胶囊
         self.pill_frame = tk.Frame(top_bar, bg=self.C_SURFACE)
         self.pill_frame.pack(side="left", padx=12)
@@ -209,7 +139,6 @@ class App:
         self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_SURFACE)
         self.nav_frame.pack_propagate(False)
         self.nav_buttons = {}
-        self.nav_buttons = {}
         # 右侧内容
         self.content_frame = tk.Frame(self.main_paned)
         self.main_paned.add(self.content_frame, stretch="always")
@@ -220,6 +149,7 @@ class App:
         self.page_theme = tk.Frame(self.content_frame)
         self.page_backend = tk.Frame(self.content_frame)
         self.page_calibrate = tk.Frame(self.content_frame)
+        self.page_api = tk.Frame(self.content_frame)
         self._current_page = self.page_home
         
         # ── 输入表格 ──
@@ -309,7 +239,7 @@ class App:
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
         
         columns = ("商品", "库存", "预估销量", "可售卖天数", "状态", "补货量")
-        self.tree = ttk.Treeview(self.result_frame, columns=columns, show="headings", height=10)
+        self.tree = ttk.Treeview(self.result_frame, columns=columns, show="headings", height=15)
         self.tree.pack(fill="both", expand=True, padx=3, pady=3)
         
         for col, w in zip(columns, [260, 80, 80, 80, 100, 70]):
@@ -322,14 +252,24 @@ class App:
         # 排序状态
         self._sort_col = None
         self._sort_reverse = False
+        
+        # Treeview 行高加大，避免计算结果条目上下拥挤
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=28)
+        
         self._apply_theme(self._theme_name)
-        self._refresh_model_badge(self._get_api_config().get("builtin_model","qwen3.5-ocr"))
+        self._refresh_model_badge()
         self.page_home.pack(fill="both", expand=True)
         
 
 
-    def _refresh_model_badge(self, model_name):
-        is_free = model_name.startswith('glm')
+    def _refresh_model_badge(self):
+        api_cfg = get_api_config()
+        active = api_cfg.get('active_provider', 'doubao')
+        providers = api_cfg.get('providers', {})
+        provider = providers.get(active, {}) if isinstance(providers, dict) else {}
+        model_name = provider.get('model', '') or active
+        is_free = active == 'glm'
         self.pill_frame.configure(bg=self.C_SURFACE)
         self.pill_name.configure(text=model_name, bg=self.C_SURFACE, fg=self.C_TEXT)
         tag_bg = "#10B981" if is_free else "#8B5CF6"
@@ -349,6 +289,7 @@ class App:
             ("🏠 首页", self.page_home),
             ("⚙ 通用", self.page_general),
             ("📦 商品", self.page_products),
+            ("🔑 API", self.page_api),
             ("🎨 主题", self.page_theme),
             ("🔗 后台", self.page_backend),
             ("📐 校准", self.page_calibrate),
@@ -362,27 +303,6 @@ class App:
             btn.pack(fill="x")
             self.nav_buttons[text] = btn
         self._highlight_nav(self.page_home)
-
-    def _show_page(self, page):
-        if self._current_page:
-            self._current_page.pack_forget()
-        page.pack(fill="both", expand=True)
-        self._current_page = page
-        self._highlight_nav(page)
-        if page == self.page_general and not hasattr(page, '_built'):
-            self._build_general_page()
-        elif page == self.page_products and not hasattr(page, '_built'):
-            self._build_product_region_tab(page)
-        elif page == self.page_theme and not hasattr(page, '_built'):
-            self._build_skin_tab(page)
-        elif page == self.page_backend and not hasattr(page, '_built'):
-            self._build_backend_tab(page)
-        elif page == self.page_calibrate and not hasattr(page, '_built'):
-            self._build_calibrate_tab(page)
-        page._built = True
-        self._apply_theme(self._theme_name)
-        self._refresh_model_badge(self._get_api_config().get("builtin_model","qwen3.5-ocr"))
-
 
     def _highlight_nav(self, page):
         for btn in self.nav_buttons.values():
@@ -407,9 +327,11 @@ class App:
             self._build_backend_tab(page)
         elif page == self.page_calibrate and not hasattr(page, '_built'):
             self._build_calibrate_tab(page)
+        elif page == self.page_api and not hasattr(page, '_built'):
+            self._build_api_page(page)
         page._built = True
         self._apply_theme(self._theme_name)
-        self._refresh_model_badge(self._get_api_config().get("builtin_model","qwen3.5-ocr"))
+        self._refresh_model_badge()
         # (moved to _build_ui)
 
     
@@ -431,7 +353,7 @@ class App:
         
         # Treeview 可见行数 + 列头 + 内边距
         ROW_HEIGHT = 20
-        MIN_VISIBLE = 6
+        MIN_VISIBLE = 8
         visible_rows = max(row_count, MIN_VISIBLE)
         tree_needed = 25 + visible_rows * ROW_HEIGHT  # 列头 ~25px
         
@@ -447,7 +369,7 @@ class App:
         target_h = min(ideal_height, max_h)
         current_h = self.win.winfo_height()
         
-        if target_h > current_h + 10:
+        if target_h > current_h:
             current_w = max(self.win.winfo_width(), 200)
             x = (self.win.winfo_screenwidth() - current_w) // 2
             y = max(0, (screen_h - target_h) // 3)
@@ -480,7 +402,7 @@ class App:
     def _load_regions(self):
         """加载地区→商品运输时效映射，兼容旧格式 {region: days} → {region: {product: days}}"""
         import json, shutil
-        path = os.path.join(_base_dir(), 'regions.json')
+        path = os.path.join(get_base_dir(), 'regions.json')
         # EXE 首次运行：从内置资源复制模板
         if not os.path.exists(path) and getattr(sys, 'frozen', False):
             bundled = os.path.join(sys._MEIPASS, 'regions.json')
@@ -505,21 +427,11 @@ class App:
     def _get_backend_config(self):
         """读取商家后台配置（URL/账号/密码）"""
         import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
+        settings_file = os.path.join(get_base_dir(), 'settings.json')
         try:
             with open(settings_file, 'r', encoding='utf-8') as f:
                 s = json.load(f)
                 return s.get('backend', {})
-        except:
-            return {}
-    
-    def _get_api_config(self):
-        """读取API配置"""
-        import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                return json.load(f).get('api', {})
         except:
             return {}
     
@@ -532,56 +444,6 @@ class App:
             url = 'https://' + url
         webbrowser.open(url)
         self.status_text.set("已打开商家后台 → 请手动登录")
-    
-    def _load_theme_pref(self):
-        """从 settings.json 读取主题偏好，默认极简白"""
-        import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                s = json.load(f)
-                name = s.get('theme', '极简白')
-                if name in THEMES:
-                    return name
-        except Exception:
-            pass
-        return '极简白'
-    
-    def _load_resolution_pref(self):
-        """读取分辨率偏好"""
-        import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                return json.load(f).get('resolution', '1920×1080 (Full HD)')
-        except Exception:
-            return '1920×1080 (Full HD)'
-    
-    def _save_resolution_pref(self, name):
-        """保存分辨率偏好"""
-        import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                s = json.load(f)
-        except Exception:
-            s = {}
-        s['resolution'] = name
-        with open(settings_file, 'w', encoding='utf-8') as f:
-            json.dump(s, f, ensure_ascii=False, indent=2)
-    
-    def _save_theme_pref(self, name):
-        """保存皮肤偏好到 settings.json"""
-        import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                s = json.load(f)
-        except:
-            s = {}
-        s['theme'] = name
-        with open(settings_file, 'w', encoding='utf-8') as f:
-            json.dump(s, f, ensure_ascii=False, indent=2)
     
     def _apply_theme(self, name):
         """应用皮肤：更新类属性 + 递归刷新所有控件颜色"""
@@ -782,7 +644,7 @@ class App:
     
     def _save_regions(self):
         import json
-        path = os.path.join(_base_dir(), 'regions.json')
+        path = os.path.join(get_base_dir(), 'regions.json')
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(self.regions, f, ensure_ascii=False, indent=2)
     
@@ -792,590 +654,6 @@ class App:
         if isinstance(region_data, dict):
             return region_data.get(product_name, 3)
         return 3  # 兼容旧格式
-    
-    def _build_general_page(self):
-        canvas = tk.Canvas(self.page_general, highlightthickness=0)
-        scroll = ttk.Scrollbar(self.page_general, orient='vertical', command=canvas.yview)
-        content = tk.Frame(canvas)
-        content.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        wid = canvas.create_window((0, 0), window=content, anchor='nw')
-        canvas.bind('<Configure>', lambda e: canvas.itemconfig(wid, width=e.width))
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side='left', fill='both', expand=True)
-        scroll.pack(side='right', fill='y')
-        def _mw(e): canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
-        canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _mw))
-        canvas.bind('<Leave>', lambda e: canvas.unbind('<MouseWheel>'))
-
-        tk.Label(content, text='导出路径', font=self.FONT_HEADING).pack(pady=(15,5))
-        pf = tk.Frame(content); pf.pack(pady=8, padx=20, fill='x')
-        self.export_path_var = tk.StringVar(self.win, value=self._get_export_path())
-        tk.Entry(pf, textvariable=self.export_path_var, font=self.FONT, width=50).pack(side='left')
-        tk.Button(pf, text='浏览', command=lambda: self._pick_export_path(None), font=(self.FONT[0], 8)).pack(side='left', padx=5)
-        tk.Button(content, text='保存', command=lambda: self._save_settings(None), font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
-        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
-
-        tk.Label(content, text='画面识别 API', font=self.FONT_HEADING).pack(pady=(10,5))
-        api_cfg = self._get_api_config()
-        api_mode = tk.StringVar(self.win, value=api_cfg.get('mode', 'default'))
-        rf = tk.Frame(content); rf.pack(pady=8, padx=20, fill='x')
-        tk.Radiobutton(rf, text='默认API（内置）', variable=api_mode, value='default').pack(anchor='w')
-        tk.Radiobutton(rf, text='自定义API', variable=api_mode, value='custom').pack(anchor='w')
-        custom_model_var = tk.StringVar(self.win, value=api_cfg.get('custom_model', ''))
-        cmf = tk.Frame(content); cmf.pack(pady=3, padx=40, fill='x')
-        tk.Label(cmf, text='自定义模型名:', font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side='left')
-        tk.Entry(cmf, textvariable=custom_model_var, font=(self.FONT[0], 8), width=30).pack(side='left', padx=5)
-        builtin_model_val = tk.StringVar(self.win, value=api_cfg.get('builtin_model', 'qwen3.5-ocr'))
-        mf = tk.Frame(content); mf.pack(pady=3, padx=40, fill='x')
-        tk.Label(mf, text='模型:', font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side='left')
-        ttk.Combobox(mf, textvariable=builtin_model_val, values=['qwen3.5-ocr', 'Doubao-Seed-2.1-pro', 'doubao-v1', 'glm-4v-flash'], state='readonly', width=30).pack(side='left', padx=5)
-        tk.Label(mf, text='PAID  |  FREE', font=(self.FONT[0], 6), fg=self.C_MUTED).pack(side='left')
-        api_key_var = tk.StringVar(self.win, value=api_cfg.get('key', ''))
-        kf = tk.Frame(content); kf.pack(pady=5, padx=40, fill='x')
-        tk.Label(kf, text='Key:', font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side='left')
-        ke = tk.Entry(kf, textvariable=api_key_var, font=(self.FONT[0], 8), width=45, show='*'); ke.pack(side='left', padx=5)
-        show_key = tk.BooleanVar(self.win, value=False)
-        tk.Checkbutton(kf, text='显示', variable=show_key, command=lambda: ke.configure(show='' if show_key.get() else '*')).pack(side='left')
-
-        def save_api():
-            import json
-            sf = os.path.join(_base_dir(), 'settings.json')
-            try: s = json.load(open(sf, 'r', encoding='utf-8'))
-            except: s = {}
-            s['api'] = {'mode': api_mode.get(), 'key': api_key_var.get().strip(),
-                         'builtin_model': builtin_model_val.get(), 'custom_model': custom_model_var.get()}
-            json.dump(s, open(sf, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
-            tag = 'FREE' if builtin_model_val.get().startswith('glm') else 'PAID'
-            self._refresh_model_badge(builtin_model_val.get())
-            self.status_text.set('API配置已保存')
-        tk.Button(content, text='保存API配置', command=save_api, font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,0))
-
-        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=10)
-        tk.Label(content, text='截图裁剪', font=self.FONT_HEADING).pack(pady=(5,2))
-        cf = tk.Frame(content); cf.pack(pady=5)
-        tk.Label(cf, text='左:', font=(self.FONT[0], 8), fg=self.C_TEXT).pack(side='left')
-        left_var = tk.StringVar(self.win, value='0.11')
-        tk.Entry(cf, textvariable=left_var, font=(self.FONT[0], 8), width=5).pack(side='left', padx=3)
-        tk.Label(cf, text='上:', font=(self.FONT[0], 8), fg=self.C_TEXT).pack(side='left', padx=(10,0))
-        top_var = tk.StringVar(self.win, value='0.40')
-        tk.Entry(cf, textvariable=top_var, font=(self.FONT[0], 8), width=5).pack(side='left', padx=3)
-        def save_crop():
-            import json
-            sf = os.path.join(_base_dir(), 'settings.json')
-            try: s = json.load(open(sf, 'r', encoding='utf-8'))
-            except: s = {}
-            try: s['crop'] = {'left': float(left_var.get()), 'top': float(top_var.get())}
-            except: s['crop'] = {'left': 0.11, 'top': 0.40}
-            json.dump(s, open(sf, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
-        tk.Button(cf, text='保存', command=save_crop, font=(self.FONT[0], 7)).pack(side='left', padx=10)
-    def _pick_export_path(self, parent):
-        from tkinter import filedialog
-        path = filedialog.askdirectory(title="选择导出文件夹")
-        if path:
-            self.export_path_var.set(path)
-
-    def _get_export_path(self):
-        import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                s = json.load(f)
-                return s.get('export_path', os.path.join(os.path.expanduser('~'), 'Desktop'))
-        except:
-            return os.path.join(os.path.expanduser('~'), 'Desktop')
-    
-    def _save_settings(self, dlg):
-        import json
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        path = self.export_path_var.get().strip()
-        if not path:
-            messagebox.showwarning("路径为空", "请先选择或输入导出路径", parent=dlg)
-            return
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                s = json.load(f)
-        except:
-            s = {}
-        s['export_path'] = path
-        try:
-            with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(s, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            messagebox.showerror("保存失败", f"无法写入配置文件：\n{settings_file}\n\n{str(e)}", parent=dlg)
-            return
-        self.status_text.set(f"导出路径已更新 → {path}")
-        messagebox.showinfo("已保存", f"导出路径已设置为：\n{path}")
-        if dlg: dlg.destroy()
-    
-    def _build_product_region_tab(self, parent, dlg=None):
-        """商品运输时效设置：选地区 → 显示商品列表 → 逐商品调运输天数"""
-        tk.Label(parent, text="商品运输时效设置", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="不同商品发往不同地区，运输时间可能不同", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-        
-        # 地区选择
-        sel_frame = tk.Frame(parent)
-        sel_frame.pack(fill="x", padx=20, pady=(12,5))
-        tk.Label(sel_frame, text="选择地区:", font=self.FONT).pack(side="left")
-        region_names = sorted(self.cache.keys()) if self.cache else sorted(self.regions.keys())
-        if not region_names:
-            region_names = ['（暂无识别数据）']
-        self._settings_region_var = tk.StringVar(dlg, value=region_names[0] if region_names else '')
-        region_combo = ttk.Combobox(sel_frame, textvariable=self._settings_region_var,
-            values=region_names, width=18, font=self.FONT, state="readonly")
-        region_combo.pack(side="left", padx=8)
-        
-        def delete_region():
-            region = self._settings_region_var.get()
-            if not region or region.startswith('（'):
-                return
-            if not messagebox.askyesno("确认删除", f"确定删除地区「{region}」及其所有商品时效设置？\n已识别的缓存数据也会一并清除。"):
-                return
-            # 删 regions
-            if region in self.regions:
-                del self.regions[region]
-            # 删 cache
-            if region in self.cache:
-                del self.cache[region]
-            self._save_regions()
-            # 更新下拉列表
-            new_names = sorted(self.cache.keys()) if self.cache else sorted(self.regions.keys())
-            if not new_names:
-                new_names = ['（暂无识别数据）']
-            region_combo['values'] = new_names
-            self._settings_region_var.set(new_names[0])
-            # 清空商品列表
-            for w in self._settings_list_frame.winfo_children():
-                w.destroy()
-            tk.Label(self._settings_list_frame, text="地区已删除",
-                     font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=20)
-            self._update_tabs()
-            self.status_text.set(f"地区「{region}」已删除")
-        
-        tk.Button(sel_frame, text="删除地区", relief='flat', command=delete_region,
-                  font=(self.FONT[0], 8), fg=self.C_RED).pack(side="left", padx=5)
-        
-        # 商品列表区（可滚动）
-        canvas_frame = tk.Frame(parent)
-        canvas_frame.pack(fill="both", expand=True, padx=20, pady=5)
-        
-        canvas = tk.Canvas(canvas_frame, height=220, highlightthickness=0)
-        scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
-        self._settings_list_frame = tk.Frame(canvas)
-        
-        self._settings_list_frame.bind("<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self._settings_list_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # 刷新商品列表
-        def refresh_products(*args):
-            for w in self._settings_list_frame.winfo_children():
-                w.destroy()
-            region = self._settings_region_var.get()
-            if not region or region.startswith('（'):
-                tk.Label(self._settings_list_frame, text="暂无识别数据，请先截图识别",
-                         font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=20)
-                return
-            
-            products = []
-            if region in self.cache:
-                for item in self.cache[region].get('items', []):
-                    name = item.get('name', '')
-                    if name and name not in products:
-                        products.append(name)
-            
-            if not products:
-                tk.Label(self._settings_list_frame, text="该地区暂无商品，请先截图识别",
-                         font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=20)
-                return
-            
-            # 表头
-            hdr = tk.Frame(self._settings_list_frame)
-            hdr.pack(fill="x", pady=(0,4))
-            tk.Label(hdr, text="商品名称", font=self.FONT_BOLD, width=22, anchor="w").pack(side="left")
-            tk.Label(hdr, text="运输天数", font=self.FONT_BOLD, width=10).pack(side="left", padx=5)
-            
-            # 商品行
-            spinboxes = {}
-            current_settings = self.regions.get(region, {})
-            if not isinstance(current_settings, dict):
-                current_settings = {}
-            
-            for prod in products:
-                row = tk.Frame(self._settings_list_frame)
-                row.pack(fill="x", pady=1)
-                tk.Label(row, text=prod, font=self.FONT, width=22, anchor="w").pack(side="left")
-                spin = tk.Spinbox(row, from_=1, to=30, width=8, font=self.FONT)
-                spin.delete(0, "end")
-                spin.insert(0, str(current_settings.get(prod, 3)))
-                spin.pack(side="left", padx=5)
-                spinboxes[prod] = spin
-            
-            self._settings_spinboxes = spinboxes
-        
-        self._settings_region_var.trace('w', refresh_products)
-        
-        # 初始加载
-        if region_names and region_names[0] and not region_names[0].startswith('（'):
-            refresh_products()
-        
-        def save_all():
-            region = self._settings_region_var.get()
-            if not region or region.startswith('（'):
-                return
-            spinboxes = getattr(self, '_settings_spinboxes', {})
-            if region not in self.regions or not isinstance(self.regions[region], dict):
-                self.regions[region] = {}
-            for prod, spin in spinboxes.items():
-                try:
-                    self.regions[region][prod] = int(spin.get())
-                except ValueError:
-                    self.regions[region][prod] = 3
-            self._save_regions()
-            self.status_text.set(f"「{region}」商品运输时效已保存 — {len(spinboxes)} 个商品")
-            # 刷新当前显示的计算结果
-            if region == self.region_var.get() and region in self.cache:
-                self._calc_from_items(self.cache[region]['items'])
-        
-        # 按钮
-        btn_frame = tk.Frame(parent)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="保存时效设置", command=save_all,
-                  bg="#4CAF50", fg="#FFFFFF", font=self.FONT_BOLD).pack(side="left", padx=5)
-    
-    def _build_skin_tab(self, parent, dlg=None):
-        """主题选择：四套主题 2×2 网格，点击预览卡即切换"""
-        tk.Label(parent, text="选择界面主题", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="点击卡片即时切换，自动保存偏好", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-        
-        cards_frame = tk.Frame(parent)
-        cards_frame.pack(fill="both", expand=True, padx=15, pady=10)
-        cards_frame.grid_columnconfigure(0, weight=1, uniform="card")
-        cards_frame.grid_columnconfigure(1, weight=1, uniform="card")
-        cards_frame.grid_rowconfigure(0, weight=1, uniform="card")
-        cards_frame.grid_rowconfigure(1, weight=1, uniform="card")
-        
-        def select_theme(name):
-            self._apply_theme(name)
-            self._save_theme_pref(name)
-            self.status_text.set(f"皮肤已切换为「{name}」")
-            # 刷新卡片边框 + 选中标记
-            for child in cards_frame.winfo_children():
-                is_sel = getattr(child, '_skin_name', '') == name
-                child.configure(highlightbackground="#3B82F6" if is_sel else "#E2E8F0",
-                               highlightthickness=2 if is_sel else 1)
-                # 更新 "✓ 当前" 标签
-                for gc in child.winfo_children():
-                    if isinstance(gc, tk.Frame):
-                        for gcc in gc.winfo_children():
-                            if isinstance(gcc, tk.Label) and gcc.cget('text') == '✓ 当前':
-                                if is_sel:
-                                    gcc.configure(text='✓ 当前', fg='#3B82F6')
-                                else:
-                                    gcc.configure(text='')
-        
-        for i, (name, theme_data) in enumerate(THEMES.items()):
-            p = theme_data['C_PRIMARY']
-            s = theme_data['C_SECONDARY']
-            bg = theme_data['C_BG']
-            sf = theme_data['C_SURFACE']
-            ac = theme_data['C_ACCENT']
-            tx = theme_data['C_TEXT']
-            mu = theme_data['C_MUTED']
-            
-            # 卡片容器
-            is_sel = name == self._theme_name
-            card = tk.Frame(cards_frame, bg="#FFFFFF",
-                           highlightbackground="#3B82F6" if is_sel else "#E2E8F0",
-                           highlightthickness=2 if is_sel else 1)
-            card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
-            card._skin_name = name
-            card._skip_theme = True
-            
-            # ── 预览模拟区 ──
-            mock = tk.Frame(card, bg="#FFFFFF", height=110)
-            mock.pack(fill="x", padx=1, pady=1)
-            mock.pack_propagate(False)
-            
-            # 模拟顶部栏
-            bar = tk.Frame(mock, bg=p, height=22)
-            bar.pack(fill="x")
-            bar.pack_propagate(False)
-            tk.Label(bar, text="PDD", font=("Microsoft YaHei UI", 7, "bold"),
-                    bg=p, fg="#FFFFFF").place(x=8, y=2)
-            
-            # 模拟内容区
-            body = tk.Frame(mock, bg=bg)
-            body.pack(fill="both", expand=True)
-            # 模拟卡片
-            sim_card = tk.Frame(body, bg=sf, height=28, highlightbackground=theme_data['C_BORDER'],
-                               highlightthickness=1)
-            sim_card.pack(fill="x", padx=10, pady=8)
-            sim_card.pack_propagate(False)
-            tk.Label(sim_card, text="库存 500  销量 50", font=("Microsoft YaHei UI", 6),
-                    bg=sf, fg=tx).place(x=6, y=4)
-            # 模拟状态标签
-            tag = tk.Frame(sim_card, bg=theme_data['C_YELLOW_BG'], width=28, height=12)
-            tag.place(x=130, y=6)
-            tag.pack_propagate(False)
-            # 模拟按钮
-            btn = tk.Frame(body, bg=ac, width=50, height=12)
-            btn.place(x=15, y=50)
-            btn.pack_propagate(False)
-            
-            # ── 信息区 ──
-            info = tk.Frame(card, bg="#FFFFFF")
-            info.pack(fill="x", padx=8, pady=(6,4))
-            tk.Label(info, text=theme_data['label'], font=self.FONT_BOLD,
-                    bg="#FFFFFF", fg="#1E293B").pack(anchor="w")
-            tk.Label(info, text=theme_data['desc'], font=(self.FONT[0], 7),
-                    bg="#FFFFFF", fg="#94A3B8").pack(anchor="w")
-            if is_sel:
-                tk.Label(info, text="✓ 当前", font=(self.FONT[0], 8, 'bold'),
-                        bg="#FFFFFF", fg="#3B82F6").pack(anchor="w")
-            else:
-                tk.Label(info, text=" ", font=(self.FONT[0], 8),
-                        bg="#FFFFFF", fg="#FFFFFF").pack(anchor="w")
-            
-            # ── 色标条 ──
-            swatch = tk.Frame(card, bg="#FFFFFF", height=14)
-            swatch.pack(fill="x", padx=8, pady=(0,6))
-            swatch.pack_propagate(False)
-            for j, c in enumerate([p, s, ac, bg, sf]):
-                dot = tk.Frame(swatch, bg=c, width=14, height=14, highlightbackground="#E2E8F0",
-                              highlightthickness=1)
-                dot.place(x=j * 18, y=0)
-                dot.pack_propagate(False)
-            
-            # 点击切换
-            for w in [card, mock, info, swatch] + list(card.winfo_children()):
-                try:
-                    w.bind("<Button-1>", lambda e, n=name: select_theme(n))
-                except:
-                    pass
-    
-    def _build_calibrate_tab(self, parent, dlg=None):
-        """点击校准：记录用户手动点击的销售区域和查询按钮位置"""
-        import json
-        tk.Label(parent, text="点击位置校准", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="打开PDD后台，依次点击两个位置，软件自动记录坐标",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-        
-        settings_file = os.path.join(_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f: s = json.load(f)
-        except: s = {}
-        cal = s.get('calibrate', {})
-        
-        def show_val(key, label):
-            v = cal.get(key, {})
-            txt = f"{label}: X={v.get('x','?')} Y={v.get('y','?')}" if v else f"{label}: 未校准"
-            return tk.Label(parent, text=txt, font=self.FONT, fg=self.C_TEXT)
-        
-        lbl_dd = show_val('dropdown', '销售区域文本框')
-        lbl_dd.pack(pady=(15,3))
-        lbl_qq = show_val('query', '查询按钮')
-        lbl_qq.pack(pady=3)
-        
-        # 偏移显示
-        offset_x = cal.get('query',{}).get('x',0) - cal.get('dropdown',{}).get('x',0)
-        offset_y = cal.get('query',{}).get('y',0) - cal.get('dropdown',{}).get('y',0)
-        lbl_offset = tk.Label(parent, text=f"查询相对偏移: ΔX={offset_x} ΔY={offset_y}" if cal else "查询相对偏移: 未校准",
-                             font=(self.FONT[0], 8), fg=self.C_MUTED)
-        lbl_offset.pack(pady=3)
-        
-        # 定位模式
-        mode_var = tk.StringVar(dlg, value=cal.get('mode', 'absolute'))
-        mode_frame = tk.Frame(parent)
-        mode_frame.pack(pady=10)
-        tk.Label(mode_frame, text="定位模式:", font=self.FONT, fg=self.C_TEXT).pack(side='left')
-        rb1 = tk.Radiobutton(mode_frame, text="绝对坐标（直接使用校准位置）", variable=mode_var,
-                            value='absolute', font=(self.FONT[0], 8), fg=self.C_TEXT,
-                            selectcolor=self.C_BG, activebackground=self.C_BG)
-        rb1.pack(anchor='w')
-        rb2 = tk.Radiobutton(mode_frame, text="相对偏移（文本框模板匹配 + 校准偏移推算查询按钮）", variable=mode_var,
-                            value='offset', font=(self.FONT[0], 8), fg=self.C_TEXT,
-                            selectcolor=self.C_BG, activebackground=self.C_BG)
-        rb2.pack(anchor='w')
-        
-        def save_mode():
-            cal['mode'] = mode_var.get()
-            s['calibrate'] = cal
-            with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(s, f, ensure_ascii=False, indent=2)
-            self.status_text.set(f"定位模式已设为: {'绝对坐标' if mode_var.get()=='absolute' else '相对偏移'}")
-        
-        tk.Button(mode_frame, text="保存模式", command=save_mode,
-                  font=(self.FONT[0], 8)).pack(pady=5)
-        
-        status_lbl = tk.Label(parent, text="", font=(self.FONT[0], 8), fg=self.C_ACCENT)
-        status_lbl.pack(pady=5)
-        
-        def start_calibrate():
-            import pyautogui, json
-            sf = os.path.join(_base_dir(), 'settings.json')
-            try: s2 = json.load(open(sf, 'r', encoding='utf-8'))
-            except: s2 = {}
-            cal2 = s2.get('calibrate', {})
-            pos = {}
-            for step, hint in enumerate(['销售区域文本框', '查询按钮']):
-                pw = tk.Toplevel()
-                pw.title(f"校准 {step+1}/2")
-                pw.geometry("400x200"); pw.attributes('-topmost', True)
-                pw.configure(bg=self.C_BG)
-                tk.Label(pw, text=f"第{step+1}步：鼠标移到「{hint}」上", font=self.FONT_HEADING, fg=self.C_TEXT).pack(pady=(15,5))
-                cdlbl = tk.Label(pw, text="", font=('Consolas', 36, 'bold'), fg=self.C_PRIMARY)
-                cdlbl.pack(pady=10)
-                tk.Label(pw, text="倒计时结束后自动记录鼠标位置", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-                
-                recorded = [False]
-                def countdown(n=3):
-                    if recorded[0]: return
-                    if n > 0:
-                        cdlbl.configure(text=str(n))
-                        pw.after(1000, lambda: countdown(n-1))
-                    else:
-                        pos[step] = pyautogui.position()
-                        recorded[0] = True
-                        cdlbl.configure(text="✓ 已记录")
-                        pw.after(500, pw.destroy)
-                pw.after(500, countdown)
-                pw.grab_set(); pw.wait_window()
-                if step not in pos: status_lbl.configure(text="已取消"); return
-            cal2['dropdown'] = {'x': pos[0][0], 'y': pos[0][1]}
-            cal2['query'] = {'x': pos[1][0], 'y': pos[1][1]}
-            if 'mode' not in cal2: cal2['mode'] = 'absolute'
-            s2['calibrate'] = cal2
-            with open(sf, 'w', encoding='utf-8') as f:
-                json.dump(s2, f, ensure_ascii=False, indent=2)
-            lbl_dd.configure(text=f"销售区域文本框: X={pos[0][0]} Y={pos[0][1]}")
-            lbl_qq.configure(text=f"查询按钮: X={pos[1][0]} Y={pos[1][1]}")
-            status_lbl.configure(text="✅ 校准完成！")
-        
-        tk.Button(parent, text="开始校准", command=start_calibrate,
-                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=15, height=2).pack(pady=15)
-        tk.Label(parent, text="移好鼠标→点记录按钮→重复两次", font=(self.FONT[0], 7), fg=self.C_MUTED).pack()
-    
-    def _build_resolution_tab(self, parent, dlg):
-        """分辨率预设：选择屏幕分辨率，批量识别自动适配点击坐标"""
-        tk.Label(parent, text="屏幕分辨率设置", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="选择与您电脑匹配的分辨率，批量识别将使用预设坐标",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-        
-        current = self._load_resolution_pref()
-        res_var = tk.StringVar(dlg, value=current)
-        
-        list_frame = tk.Frame(parent)
-        list_frame.pack(fill="both", expand=True, padx=30, pady=15)
-        
-        for name, preset in RESOLUTION_PRESETS.items():
-            rb = tk.Radiobutton(list_frame, text=f"{name}  —  下拉({preset['dropdown_x']:.0%},{preset['dropdown_y']:.0%})  查询({preset['query_x']:.0%},{preset['query_y']:.0%})",
-                               variable=res_var, value=name, font=self.FONT,
-                               bg=self.C_SURFACE, fg=self.C_TEXT,
-                               selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE,
-                               anchor="w")
-            rb.pack(fill="x", pady=3)
-        
-        def save_res():
-            self._save_resolution_pref(res_var.get())
-            self.status_text.set(f"分辨率已设为 {res_var.get()}")
-            messagebox.showinfo("已保存", f"分辨率预设已保存\n批量识别将使用对应坐标", parent=dlg)
-        
-        tk.Button(parent, text="保存", command=save_res,
-                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=15).pack(pady=15)
-    
-    def _build_backend_tab(self, parent, dlg=None):
-        """配置拼多多商家后台链接和登录凭据"""
-        tk.Label(parent, text="商家后台快捷入口", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="设置后可通过主页「🏪 商家后台」按钮一键打开", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-        
-        config = self._get_backend_config()
-        
-        # URL
-        url_frame = tk.Frame(parent)
-        url_frame.pack(fill="x", padx=20, pady=(15,5))
-        tk.Label(url_frame, text="后台地址:", font=self.FONT, width=10, anchor="e").pack(side="left")
-        url_var = tk.StringVar(dlg, value=config.get('url', 'https://mms.pinduoduo.com/'))
-        tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40).pack(side="left", padx=5)
-        
-        # 账号
-        acc_frame = tk.Frame(parent)
-        acc_frame.pack(fill="x", padx=20, pady=5)
-        tk.Label(acc_frame, text="登录账号:", font=self.FONT, width=10, anchor="e").pack(side="left")
-        acc_var = tk.StringVar(dlg, value=config.get('account', ''))
-        acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED)
-        acc_entry.pack(side="left", padx=5)
-        # 占位文字处理
-        def _ph_entry(entry, placeholder, var):
-            def on_focus_in(e):
-                if var.get() == placeholder:
-                    var.set('')
-                    entry.configure(fg=self.C_TEXT)
-            def on_focus_out(e):
-                if not var.get():
-                    var.set(placeholder)
-                    entry.configure(fg=self.C_MUTED)
-            entry.bind('<FocusIn>', on_focus_in)
-            entry.bind('<FocusOut>', on_focus_out)
-            if not var.get():
-                var.set(placeholder)
-        _ph_entry(acc_entry, '输入手机号', acc_var)
-        
-        # 密码
-        pwd_frame = tk.Frame(parent)
-        pwd_frame.pack(fill="x", padx=20, pady=5)
-        tk.Label(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
-        pwd_var = tk.StringVar(dlg, value=config.get('password', ''))
-        pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*" if config.get('password') else "")
-        pwd_entry.pack(side="left", padx=5)
-        if not config.get('password'):
-            pwd_entry.configure(fg=self.C_MUTED)
-            pwd_var.set('输入密码')
-            pwd_entry.configure(show="")
-        def _pwd_on_focus(e):
-            if pwd_var.get() == '输入密码': pwd_var.set(''); pwd_entry.configure(fg=self.C_TEXT, show='*')
-        def _pwd_on_blur(e):
-            if not pwd_var.get(): pwd_var.set('输入密码'); pwd_entry.configure(fg=self.C_MUTED, show='')
-        pwd_entry.bind('<FocusIn>', _pwd_on_focus)
-        pwd_entry.bind('<FocusOut>', _pwd_on_blur)
-        
-        # 显示/隐藏密码
-        show_var = tk.BooleanVar(dlg, value=False)
-        def toggle_pwd():
-            pwd_entry.configure(show="" if show_var.get() else "*")
-        tk.Checkbutton(pwd_frame, text="显示", variable=show_var, command=toggle_pwd,
-                       font=(self.FONT[0], 8)).pack(side="left")
-        
-        # 提示
-        tk.Label(parent, text="⚠ 密码以明文存储在本机配置文件，请确保电脑安全",
-                 font=(self.FONT[0], 7), fg=self.C_MUTED).pack(pady=(10,0))
-        
-        def save_backend():
-            import json
-            settings_file = os.path.join(_base_dir(), 'settings.json')
-            try:
-                with open(settings_file, 'r', encoding='utf-8') as f:
-                    s = json.load(f)
-            except:
-                s = {}
-            s['backend'] = {
-                'url': url_var.get().strip(),
-                'account': '' if acc_var.get() in ('输入手机号', '') else acc_var.get().strip(),
-                'password': '' if pwd_var.get() == '输入密码' else pwd_var.get()
-            }
-            try:
-                with open(settings_file, 'w', encoding='utf-8') as f:
-                    json.dump(s, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                messagebox.showerror("保存失败", str(e), parent=dlg)
-                return
-            messagebox.showinfo("已保存", "商家后台配置已保存", parent=dlg)
-        
-        tk.Button(parent, text="保存配置", command=save_backend,
-                  font=self.FONT_BOLD, bg="#4CAF50", fg="#FFFFFF", width=15).pack(pady=15)
     
     def _calc_from_items(self, items):
         """直接从OCR结果计算并显示"""
@@ -1643,7 +921,7 @@ class App:
             # 读裁剪比例
             crop_cfg = {'left': 0.11, 'top': 0.40}
             try:
-                sf = os.path.join(_base_dir(), 'settings.json')
+                sf = os.path.join(get_base_dir(), 'settings.json')
                 if os.path.exists(sf):
                     with open(sf, 'r', encoding='utf-8') as f:
                         crop_cfg = json.load(f).get('crop', crop_cfg)
@@ -1672,25 +950,36 @@ class App:
             if w > 2560:
                 img = img.resize((2560, int(img.size[1] * 2560 / w)), PILImage.LANCZOS)
             img.save(path)
-        preset = RESOLUTION_PRESETS.get(self._load_resolution_pref(), RESOLUTION_PRESETS['1920×1080 (Full HD)'])
+        preset = RESOLUTION_PRESETS.get(load_resolution_pref(), RESOLUTION_PRESETS['1920×1080 (Full HD)'])
         sw, sh = pyautogui.size()
         # 加载校准坐标（一次性）
         import json as _json
         # 加载校准（多路径尝试）
         _cal = {}
         try:
-            with open(os.path.join(_base_dir(), 'settings.json'), 'r', encoding='utf-8') as _f:
+            with open(os.path.join(get_base_dir(), 'settings.json'), 'r', encoding='utf-8') as _f:
                 _cal = _json.load(_f).get('calibrate', {})
         except Exception: pass
         if _cal: dlog(f"校准OK: dd({_cal['dropdown']['x']},{_cal['dropdown']['y']}) q({_cal['query']['x']},{_cal['query']['y']})")
         else: dlog("未校准，请先到设置→校准")
+        # 打印当前API配置状态
+        try:
+            api_cfg = get_api_config()
+            active = api_cfg.get('active_provider', '?')
+            providers = api_cfg.get('providers', {})
+            provider = providers.get(active, {}) if isinstance(providers, dict) else {}
+            model = provider.get('model', '?')
+            has_key = '✓' if provider.get('api_key', '') else '✗'
+            dlog(f"API: {active}/{model} Key:{has_key}")
+        except Exception as _e:
+            dlog(f"API配置读取失败: {_e}")
         
         for i, reg in enumerate(regions):
             if self._batch_stop.is_set(): dlog("⏹ 停止"); break
             dlog(f"── [{reg}] ({i+1}/{total}) ──")
             try:
                 # 1. 截图 → 找文本框 → 优先校准坐标
-                sp = os.path.join(_base_dir(), 'output', f'_vis_{i}.png')
+                sp = os.path.join(get_base_dir(), 'output', f'_vis_{i}.png')
                 os.makedirs(os.path.dirname(sp), exist_ok=True)
                 ss(sp)
                 tm_x = tm_y = None
@@ -1737,12 +1026,12 @@ class App:
                 # 5. 等待页面刷新（加截图验证：拍两次对比是否变化）
                 time.sleep(4.0)
                 # 快速验证截图看页面是否真的刷新了
-                sp_check = os.path.join(_base_dir(), 'output', f'_check_{i}.png')
+                sp_check = os.path.join(get_base_dir(), 'output', f'_check_{i}.png')
                 ss(sp_check)
                 dlog(f"5.页面刷新完成")
                 
                 # 6. 截图 → OCR识别（阻塞，API返回才继续）
-                sp2 = os.path.join(_base_dir(), 'output', f'_result_{i}.png')
+                sp2 = os.path.join(get_base_dir(), 'output', f'_result_{i}.png')
                 ss(sp2)
                 try:
                     im = PILImage.open(sp2); w, h = im.size
@@ -1787,7 +1076,7 @@ class App:
                 self.win.after(0, self.win.iconify)
                 time.sleep(0.5)
                 
-                ss_path = os.path.join(_base_dir(), 'output', '_live_screenshot.png')
+                ss_path = os.path.join(get_base_dir(), 'output', '_live_screenshot.png')
                 os.makedirs(os.path.dirname(ss_path), exist_ok=True)
                 
                 # 与批量识别完全一致的截图逻辑
@@ -1816,7 +1105,7 @@ class App:
                 import json
                 crop = {'left':0.11, 'top':0.40}
                 try:
-                    sf = os.path.join(_base_dir(), 'settings.json')
+                    sf = os.path.join(get_base_dir(), 'settings.json')
                     if os.path.exists(sf):
                         with open(sf,'r') as f: crop = json.load(f).get('crop', crop)
                 except: pass
@@ -1969,7 +1258,7 @@ class App:
             self.tree.heading(c, text=text, command=lambda cc=c: self._sort_tree(cc))
     
     def _export(self):
-        """导出所有缓存地区到单个 Excel 单 Sheet"""
+        """导出所有缓存地区到 Excel"""
         if not self.cache:
             if hasattr(self, 'plans') and self.plans:
                 self.cache[self.region_var.get()] = {'plans': self.plans, 'items': []}
@@ -1981,61 +1270,12 @@ class App:
         except ImportError:
             messagebox.showerror("缺少依赖", "请安装 openpyxl: pip install openpyxl")
             return
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
-        from datetime import datetime
-        
-        path = os.path.join(self._get_export_path(), 'PDD补货记录.xlsx')
-        ts_date = datetime.now().strftime('%m.%d')
-        
         try:
-            fills = {'red': PatternFill('solid', fgColor='FFC7CE'),
-                     'yellow': PatternFill('solid', fgColor='FFEB9C'),
-                     'green': PatternFill('solid', fgColor='C6EFCE')}
-            region_fill = PatternFill('solid', fgColor='D9E2F3')
-            cell_font = Font(name='微软雅黑', size=9)
-            region_font = Font(name='微软雅黑', size=9, bold=True, color='1E40AF')
-            thin = Border(left=Side('thin'), right=Side('thin'), top=Side('thin'), bottom=Side('thin'))
-            center = Alignment(horizontal='center', vertical='center')
-            header_fill = PatternFill('solid', fgColor='4472C4')
-            header_font = Font(name='微软雅黑', size=9, bold=True, color='FFFFFF')
-            
-            if os.path.exists(path):
-                wb = openpyxl.load_workbook(path)
-                ws = wb.create_sheet(ts_date)
-            else:
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = ts_date
-            
-            # 表头（含地区列）
-            headers = ['地区', '商品名称', f'库存({ts_date})', '当日销量', '可售卖天数', '补货状态', '建议补货量']
-            for i, h in enumerate(headers, 1):
-                c = ws.cell(row=1, column=i, value=h)
-                c.font = header_font; c.fill = header_fill; c.alignment = center; c.border = thin
-            
-            row = 2
-            for region, data in sorted(self.cache.items()):
-                plans = data.get('plans', [])
-                if not plans:
-                    continue
-                for p in plans:
-                    vals = [region, p['name'], p['stock'], p['daily'],
-                            p.get('ratio', p.get('days_left', '')), p['status'], p['qty']]
-                    for ci, v in enumerate(vals, 1):
-                        c = ws.cell(row=row, column=ci, value=v)
-                        c.font = cell_font; c.border = thin; c.alignment = center
-                        if p.get('color') in fills:
-                            c.fill = fills[p['color']]
-                    row += 1
-            
-            widths = [10, 20, 10, 10, 10, 12, 10]
-            for i, w in enumerate(widths, 1):
-                ws.column_dimensions[get_column_letter(i)].width = w
-            
-            wb.save(path)
+            from export_xlsx import export_cache_to_xlsx
+            export_dir = self._get_export_path()
+            path = export_cache_to_xlsx(self.cache, export_dir)
             self.status_text.set(f"已导出 {len(self.cache)} 个地区 → PDD补货记录.xlsx")
-            os.startfile(self._get_export_path())
+            os.startfile(export_dir)
             messagebox.showinfo("导出成功", f"已导出 {len(self.cache)} 个地区\n文件: {path}")
         except Exception as e:
             messagebox.showerror("导出失败", str(e))

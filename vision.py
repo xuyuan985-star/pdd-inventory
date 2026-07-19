@@ -4,7 +4,7 @@
 - 分辨率无关，所有坐标来自识别结果
 - 状态机驱动，交叉校验
 """
-import os, sys, time, random
+import os, sys
 try:
     import cv2
     import numpy as np
@@ -46,6 +46,8 @@ def template_match(screenshot, template_name, threshold=0.75):
     templates = _load_templates(template_name)
     if not templates:
         return None
+    if cv2 is None:
+        return None
     
     screen_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
     best_val, best_loc, best_scale, best_tw, best_th = -1, None, 1.0, 0, 0
@@ -66,7 +68,7 @@ def template_match(screenshot, template_name, threshold=0.75):
                     best_scale = scale
                     best_tw = template_gray.shape[1]
                     best_th = template_gray.shape[0]
-            except Exception:
+            except (cv2.error if cv2 else Exception):
                 continue
     
     if best_val < threshold or best_loc is None:
@@ -86,6 +88,8 @@ def orb_match(screenshot, template_name, min_matches=8, threshold=0.6):
     """
     template = _load_template(template_name)
     if template is None:
+        return None
+    if cv2 is None:
         return None
     
     orb = cv2.ORB_create(nfeatures=500)
@@ -162,16 +166,3 @@ def locate_element(screenshot_path, template_name, method='auto', threshold=0.75
     if result and scale != 1.0:
         return (int(result[0] / scale), int(result[1] / scale))
     return result
-
-
-def wait_and_click(x, y, delay_range=(100, 400)):
-    """随机延迟后点击，模拟人类操作"""
-    time.sleep(random.randint(*delay_range) / 1000.0)
-    import pyautogui
-    pyautogui.click(x, y)
-
-
-def init_templates():
-    """初始化模板目录"""
-    os.makedirs(_TEMPLATE_DIR, exist_ok=True)
-    return _TEMPLATE_DIR
