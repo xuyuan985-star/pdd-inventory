@@ -133,7 +133,7 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
         # 根据 endpoint 判断 API 类型，而非模型名
         use_responses = ('responses' in endpoint)
         if use_responses:
-            models = ['ep-20260710230432-jccpg', 'glm-4v-flash']
+            models = [m for m in ['ep-20260710230432-jccpg', 'glm-4v-flash'] if m]
             # 图片预处理：1280px JPEG 压缩
             try:
                 from PIL import Image as PILImg
@@ -151,15 +151,15 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
         else:
             doubao_chat = {'doubao-v1': 'ep-20260621182142-6x4lh'}
             model_id = doubao_chat.get(model_name, model_name)
-            models = [model_id, 'glm-4v-flash']
+            models = [m for m in [model_id, 'glm-4v-flash'] if m]
     elif active == 'qwen':
         if not endpoint:
             endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-        models = [model_name, 'glm-4v-flash'] if model_name else ['qwen3.5-omni-flash', 'glm-4v-flash']
+        models = [m for m in [model_name, 'glm-4v-flash'] if m] if model_name else ['qwen3.5-omni-flash', 'glm-4v-flash']
     else:  # glm
         if not endpoint:
             endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-        models = [model_name, 'glm-4v-flash'] if model_name else ['glm-4v-flash']
+        models = [m for m in [model_name, 'glm-4v-flash'] if m] if model_name else ['glm-4v-flash']
 
     # 统一提示词 — 所有模型用同一套详细版
     prompt = """你现在处理的是软件截图内的竖向表格，执行流程：

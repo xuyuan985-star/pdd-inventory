@@ -193,10 +193,17 @@ def _do_replace(src, target):
     if sys.platform == 'win32' and os.path.exists(target):
         old = target + ".old"
         if os.path.exists(old):
-            os.remove(old)
+            try:
+                os.remove(old)
+            except PermissionError:
+                import ctypes
+                ctypes.windll.kernel32.MoveFileExW(old, None, 4)
         os.rename(target, old)
-        import ctypes
-        ctypes.windll.kernel32.MoveFileExW(old, None, 4)
+        try:
+            os.remove(old)  # 主程序已退出，句柄应释放
+        except PermissionError:
+            import ctypes
+            ctypes.windll.kernel32.MoveFileExW(old, None, 4)
     try:
         shutil.copy2(src, target)
         print(f"[更新器] 已更新: {target}")
