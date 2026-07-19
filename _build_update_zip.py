@@ -30,6 +30,11 @@ def build_update_zip(onedir_path, output_path, force=False):
             zf.write(exe, arcname)
             curr["/"] = os.path.getmtime(exe)
             changed += 1
+        # 更新器 EXE（始终包含，避免增量更新跳过更新器自身升级）
+        updater_exe = os.path.join(dist_parent, "PDD EZ Updater.exe")
+        if os.path.exists(updater_exe):
+            zf.write(updater_exe, os.path.basename(updater_exe))
+            changed += 1
 
         internal = os.path.join(onedir, "_internal")
         if os.path.isdir(internal):
