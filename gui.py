@@ -121,21 +121,24 @@ class App(SettingsUIMixin):
         """后台检查 GitHub 版本"""
         threading.Thread(target=self._do_check_update, daemon=True).start()
     
-    def _do_check_update(self):
+    def _fetch_latest_release(self):
+        """从 GitHub API 获取最新 release 的 tag 和 body"""
+        from urllib.request import urlopen, Request
         import json as _json
+        req = Request("https://api.github.com/repos/xuyuan985-star/pdd-inventory/releases/latest",
+                     headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "PDD-EZ"})
+        with urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode())
+            return data.get("tag_name", ""), data.get("body", "")
+    
+    def _do_check_update(self):
         try:
-            from urllib.request import urlopen, Request
-            req = Request("https://api.github.com/repos/xuyuan985-star/pdd-inventory/releases/latest",
-                         headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "PDD-EZ"})
-            with urlopen(req, timeout=10) as resp:
-                data = _json.loads(resp.read().decode())
-                latest = data.get("tag_name", "")
-                body = data.get("body", "")
-                if latest and latest != VERSION:
-                    self._latest_tag = latest
-                    self._latest_body = body
-                    msg = f"🔄 有新版本 {latest}，点击「更新」查看详情"
-                    self.win.after(0, lambda: self.status_text.set(msg))
+            latest, body = self._fetch_latest_release()
+            if latest and latest != VERSION:
+                self._latest_tag = latest
+                self._latest_body = body
+                msg = f"🔄 有新版本 {latest}，点击「更新」查看详情"
+                self.win.after(0, lambda: self.status_text.set(msg))
         except Exception:
             pass
     
@@ -393,6 +396,8 @@ class App(SettingsUIMixin):
         
         # 动态测量：结果区域顶部距离窗口顶部的实际像素
         result_top = self.result_frame.winfo_rooty() - self.win.winfo_rooty()
+        if result_top <= 0:
+            result_top = 400  # 窗口最小化或未完成布局时的默认值
         
         # Treeview 可见行数 + 列头 + 内边距
         ROW_HEIGHT = 20
@@ -490,20 +495,11 @@ class App(SettingsUIMixin):
     
     def _run_updater(self):
         """显示更新详情 + 进度 + 错误处理"""
-        # 获取缓存的版本信息
         latest = getattr(self, '_latest_tag', '')
         body = getattr(self, '_latest_body', '')
         if not latest:
-            # 手动检查一次
             try:
-                from urllib.request import urlopen, Request
-                import json as _json
-                req = Request("https://api.github.com/repos/xuyuan985-star/pdd-inventory/releases/latest",
-                             headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "PDD-EZ"})
-                with urlopen(req, timeout=10) as resp:
-                    data = _json.loads(resp.read().decode())
-                    latest = data.get("tag_name", "")
-                    body = data.get("body", "")
+                latest, body = self._fetch_latest_release()
             except Exception as e:
                 messagebox.showerror("检查失败", f"无法连接更新服务器：{e}")
                 return
@@ -1021,6 +1017,10 @@ class App(SettingsUIMixin):
                 hud_text.insert('end', '🔍 测试模式启动\n')
                 hud_text.see('end')
             dlg.destroy()
+            # 禁用操作按钮防止并发
+            for btn in [self.export_btn]:
+                self.win.after(0, lambda b=btn: b.configure(state='disabled'))
+            self.status_text.set("批量识别中 — 请不要操作")
             threading.Thread(target=self._run_batch_sequence, args=(selected, hud, hud_text), daemon=True).start()
         
         tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
@@ -1192,6 +1192,9 @@ class App(SettingsUIMixin):
         
         self.win.after(0, self.win.deiconify)
         if hud: time.sleep(1); self.win.after(0, hud.destroy)
+        # 恢复按钮
+        self.win.after(0, lambda: self.export_btn.configure(state='normal'))
+        self.win.after(0, lambda: self.status_text.set("就绪 — 批量识别完成"))
         self.win.after(0, lambda: messagebox.showinfo("批量识别完成", f"成功 {success}/{total} 地区\n合计 {total_items} 商品"))
     
     def _live_screenshot(self):

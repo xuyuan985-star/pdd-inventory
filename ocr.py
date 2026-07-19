@@ -81,11 +81,16 @@ def _validate_items(items: list) -> list:
     if regions_found and not regions_found & KNOWN_REGIONS:
         return []
     
-    # 检查2：所有商品的stock和sales都一模一样 → 幻觉
+    # 检查2：>4个商品 stock+sales 都相同且名称也相似 → 幻觉
     stocks = {it['stock'] for it in cleaned}
     sales_set = {it['sales'] for it in cleaned}
-    if len(stocks) == 1 and len(sales_set) == 1 and len(cleaned) >= 2:
-            return []  # 多个商品库存/销量完全相同，极可疑
+    if len(stocks) == 1 and len(sales_set) == 1 and len(cleaned) >= 5:
+        # 检查商品名是否也高度相似
+        names = [it['name'] for it in cleaned]
+        sample = names[0]
+        similar = sum(1 for n in names if n[:4] == sample[:4])
+        if similar == len(names):
+            return []
     
     # 检查3：商品名过短（<3字）或全是数字/符号 → 幻觉
     valid_names = 0
@@ -187,10 +192,14 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
         if 'glm' in mdl and 'dashscope' in cur_endpoint:
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
+            if not cur_key:
+                continue
             cur_responses = False
         elif 'glm' in mdl and 'ark' in cur_endpoint:
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
+            if not cur_key:
+                continue
             cur_responses = False
         try:
             if cur_responses and mdl != 'glm-4v-flash':
