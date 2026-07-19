@@ -122,19 +122,38 @@ def main():
                     single_exe = item_path
             if new_dir:
                 print("[更新器] 覆盖程序文件夹...")
-                skipped = 0
-                for root, dirs, files in os.walk(new_dir):
-                    rel = os.path.relpath(root, new_dir)
-                    dest_root = target_dir if rel == '.' else os.path.join(target_dir, rel)
-                    os.makedirs(dest_root, exist_ok=True)
-                    for f in files:
-                        try:
-                            shutil.copy2(os.path.join(root, f), os.path.join(dest_root, f))
-                        except PermissionError:
-                            skipped += 1
-                if skipped:
-                    print(f"[更新器] {skipped} 个文件被占用跳过，重启后生效")
-                print(f"[更新器] 已更新: {target_dir}")
+                # 备份旧版本
+                backup_dir = target_dir + "_backup"
+                if os.path.exists(backup_dir):
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                try:
+                    if os.path.exists(target_dir):
+                        os.rename(target_dir, backup_dir)
+                    # 复制新文件
+                    skipped = 0
+                    for root, dirs, files in os.walk(new_dir):
+                        rel = os.path.relpath(root, new_dir)
+                        dest_root = target_dir if rel == '.' else os.path.join(target_dir, rel)
+                        os.makedirs(dest_root, exist_ok=True)
+                        for f in files:
+                            try:
+                                shutil.copy2(os.path.join(root, f), os.path.join(dest_root, f))
+                            except PermissionError:
+                                skipped += 1
+                    if skipped:
+                        print(f"[更新器] {skipped} 个文件被占用跳过，重启后生效")
+                    print(f"[更新器] 已更新: {target_dir}")
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                except Exception:
+                    # 回滚
+                    print("[更新器] 更新失败，正在回滚...")
+                    if os.path.exists(target_dir):
+                        shutil.rmtree(target_dir, ignore_errors=True)
+                    if os.path.exists(backup_dir):
+                        os.rename(backup_dir, target_dir)
+                    print("[更新器] 已回滚至旧版本")
+                    input("按回车退出...")
+                    return
             elif single_exe:
                 _do_replace(single_exe, target)
             else:
@@ -145,6 +164,21 @@ def main():
         print(f"[更新器] 替换失败: {e}")
         input("按回车退出...")
         return
+    
+    # 更新器自升级：检查 zip 中是否有新的 updater.exe
+    if new_dir:
+        for f in os.listdir(new_dir):
+            fp = os.path.join(new_dir, f)
+            if f.lower().startswith("pdd ez updater") and f.endswith(".exe"):
+                my_path = sys.executable if getattr(sys, 'frozen', False) else os.path.join(os.path.dirname(__file__), 'PDD EZ Updater.exe')
+                new_updater = my_path + ".new"
+                shutil.copy2(fp, new_updater)
+                # 尝试替换自身，失败则下次启动会自动换
+                try:
+                    os.replace(new_updater, my_path)
+                except OSError:
+                    pass
+                break
 
 
 def _do_replace(src, target):
