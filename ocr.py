@@ -307,7 +307,7 @@ def ocr_screenshot_crosscheck(image_path: str, model: str = 'glm-4v-flash') -> l
         return items1
     
     def fingerprint(item):
-        name = str(item.get('name', '')).strip()[:20]
+        name = str(item.get('name', '')).strip()
         return f"{name}|{item.get('stock',0)}|{item.get('sales',0)}"
     
     fp1 = {fingerprint(it): it for it in items1}

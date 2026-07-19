@@ -50,7 +50,7 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
         export_dir = _get_default_export_dir()
     path = os.path.join(export_dir, 'PDD补货记录.xlsx')
 
-    ts_date = datetime.now().strftime('%m.%d')
+    ts_date = datetime.now().strftime('%m.%d_%H%M')
     styles = _create_styles()
 
     if os.path.exists(path):
