@@ -6,7 +6,7 @@ import os, sys, json, shutil, time, tempfile
 from urllib.request import urlopen, Request
 
 REPO = "xuyuan985-star/pdd-inventory"
-from utils import VERSION, EXE_NAME
+from utils import EXE_NAME
 
 def _appdata():
     return os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'PDD补货助手')
@@ -119,12 +119,15 @@ def main():
             input("按回车退出...")
             return
     
-    # 替换 — 使用 MoveFileEx 延迟删除释放占用
+    # 替换 — 先改名旧文件，再写入新版，延迟删除旧文件
     try:
         if sys.platform == 'win32' and os.path.exists(target):
+            old = target + ".old"
+            if os.path.exists(old):
+                os.remove(old)
+            os.rename(target, old)  # 重命名不触发占用锁
             import ctypes
-            ctypes.windll.kernel32.MoveFileExW(target, None, 4)  # MOVEFILE_DELAY_UNTIL_REBOOT
-            time.sleep(1)
+            ctypes.windll.kernel32.MoveFileExW(old, None, 4)  # 重启后删 old
         shutil.copy2(new_exe, target)
         print(f"[更新器] 已更新: {target}")
     except PermissionError:
