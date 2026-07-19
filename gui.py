@@ -78,6 +78,16 @@ class App(SettingsUIMixin):
                 self.win.iconbitmap(default=ico)
         except Exception:
             pass
+        # 首次启动清理旧版本 EXE
+        if getattr(sys, 'frozen', False):
+            try:
+                exe_dir = os.path.dirname(sys.executable)
+                for old in ['PDD EZ v2.2.exe', 'PDD EZ v2.1.exe', 'PDD补货助手.exe']:
+                    old_path = os.path.join(exe_dir, old)
+                    if os.path.exists(old_path) and old_path != sys.executable:
+                        os.remove(old_path)
+            except Exception:
+                pass
         # 加载皮肤偏好
         self._theme_name = load_theme_pref()
         self._apply_theme(self._theme_name)
