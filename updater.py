@@ -122,6 +122,7 @@ def main():
                     single_exe = item_path
             if new_dir:
                 print("[更新器] 覆盖程序文件夹...")
+                skipped = 0
                 for root, dirs, files in os.walk(new_dir):
                     rel = os.path.relpath(root, new_dir)
                     dest_root = target_dir if rel == '.' else os.path.join(target_dir, rel)
@@ -130,7 +131,9 @@ def main():
                         try:
                             shutil.copy2(os.path.join(root, f), os.path.join(dest_root, f))
                         except PermissionError:
-                            pass
+                            skipped += 1
+                if skipped:
+                    print(f"[更新器] {skipped} 个文件被占用跳过，重启后生效")
                 print(f"[更新器] 已更新: {target_dir}")
             elif single_exe:
                 _do_replace(single_exe, target)
