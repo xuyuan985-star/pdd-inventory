@@ -1,0 +1,21 @@
+# PDD EZ v2.2 — 补货排期助手
+# 安装: pip install -r requirements.txt
+
+# GUI & 自动化
+pyautogui>=0.9.53
+pygetwindow>=0.0.9
+pyperclip>=1.8.2
+
+# 图像处理
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=9.5.0
+
+# Excel 导出
+openpyxl>=3.1.0
+
+# HTTP 请求
+requests>=2.28.0
+
+# Windows API（打包时自动包含）
+pywin32>=305; platform_system == "Windows"
