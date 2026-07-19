@@ -8,6 +8,38 @@ VERSION = "v1.1"
 EXE_NAME = "PDD EZ v1.1.exe"
 
 
+class Config:
+    """配置单例：唯一读写 settings.json，原子写入。"""
+    @staticmethod
+    def load():
+        try:
+            sf = os.path.join(get_base_dir(), 'settings.json')
+            if os.path.exists(sf):
+                with open(sf, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def save(data: dict):
+        sf = os.path.join(get_base_dir(), 'settings.json')
+        tmp = sf + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, sf)
+
+    @staticmethod
+    def get(key, default=None):
+        return Config.load().get(key, default)
+
+    @staticmethod
+    def set(key, value):
+        data = Config.load()
+        data[key] = value
+        Config.save(data)
+
+
 def get_base_dir() -> str:
     """可写数据目录：打包后 → %APPDATA%/PDD补货助手，源码 → 脚本目录"""
     if getattr(sys, 'frozen', False):
