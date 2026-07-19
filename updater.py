@@ -156,22 +156,9 @@ def _do_replace(src, target):
         shutil.copy2(src, target)
         print(f"[更新器] 已更新: {target}")
     except PermissionError:
-        tmp = target + ".new"
-        shutil.copy2(src, tmp)
-        print(f"[更新器] 文件被占用，已保存为 {tmp}，请手动替换或重启后重试")
-    
-    # 启动主程序
-    if args.restart and os.path.exists(target):
-        print("[更新器] 启动主程序...")
-        os.startfile(target)
-    
-    # 清理临时文件
-    try:
-        if os.path.isdir(tmp):
-            shutil.rmtree(tmp)
-    except:
-        pass
-    print("[更新器] 完成")
+        fallback = target + ".new"
+        shutil.copy2(src, fallback)
+        print(f"[更新器] 文件被占用，已保存为 {fallback}，请手动替换或重启后重试")
 
 if __name__ == "__main__":
     main()
