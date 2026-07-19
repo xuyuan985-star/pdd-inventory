@@ -68,12 +68,19 @@ def main():
     
     print(f"[更新器] 最新版本: {tag}")
     
-    # 找 EXE 附件
+    # 优先增量更新包 → 全量 zip → 单个 EXE
     exe_asset = None
     for a in assets:
-        if a["name"].endswith(".exe") or a["name"].endswith(".zip"):
-            exe_asset = a
-            break
+        if a["name"].endswith("_update.zip"):
+            exe_asset = a; break
+    if not exe_asset:
+        for a in assets:
+            if a["name"].endswith(".zip") and "_update" not in a["name"]:
+                exe_asset = a; break
+    if not exe_asset:
+        for a in assets:
+            if a["name"].endswith(".exe"):
+                exe_asset = a; break
     
     if not exe_asset:
         print(f"[更新器] Release 中未找到 EXE 附件")
