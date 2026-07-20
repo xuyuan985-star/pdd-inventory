@@ -6,7 +6,7 @@ PDD EZ — 补货排期助手
 import os, sys, threading
 from datetime import datetime
 
-from utils import get_base_dir, get_api_config, VERSION
+from utils import get_base_dir, get_api_config, VERSION, version_newer
 from settings_ui import SettingsUIMixin
 
 # ── 抢先设置 DPI 感知，防止 pyautogui 截图后窗口缩放 ──
@@ -80,30 +80,35 @@ class App(SettingsUIMixin):
             pass
         # 首次启动清理旧版本 EXE
         if getattr(sys, 'frozen', False):
-            try:
-                exe_dir = os.path.dirname(sys.executable)
-                # 删旧 EXE
-                for old in ['PDD EZ v2.2.exe', 'PDD EZ v2.1.exe', 'PDD EZ v1.0.exe', 'PDD补货助手.exe']:
-                    old_path = os.path.join(exe_dir, old)
-                    if os.path.exists(old_path) and old_path != sys.executable:
-                        os.remove(old_path)
-                # 删 _internal/ 废弃文件
-                internal = os.path.join(exe_dir, "_internal")
-                if os.path.isdir(internal):
-                    for old in ['api_keys.py', 'dpi_utils.py', 'keys.enc', 'gui_bridge.py']:
-                        old_path = os.path.join(internal, old)
-                        if os.path.exists(old_path):
+            exe_dir = os.path.dirname(sys.executable)
+            import re as _re
+            # 正则匹配 PDD EZ vX.Y[.Z].exe，排除当前运行的
+            pattern = _re.compile(r'^PDD EZ v\d+\.\d+(?:\.\d+)?\.exe$')
+            for f in os.listdir(exe_dir):
+                if not pattern.match(f):
+                    continue
+                old_path = os.path.join(exe_dir, f)
+                if old_path == sys.executable:
+                    continue
+                try:
+                    os.remove(old_path)
+                except PermissionError:
+                    pass  # 被占用，跳过
+            # 删 _internal/ 废弃文件
+            internal = os.path.join(exe_dir, "_internal")
+            if os.path.isdir(internal):
+                for old in ['api_keys.py', 'dpi_utils.py', 'keys.enc', 'gui_bridge.py']:
+                    old_path = os.path.join(internal, old)
+                    if os.path.exists(old_path):
+                        try:
                             os.remove(old_path)
-            except Exception:
-                pass
+                        except PermissionError:
+                            pass
         # 配置文件版本迁移
         self._migrate_config()
         # 加载皮肤偏好
         self._theme_name = load_theme_pref()
         self._apply_theme(self._theme_name)
-        # 记录初始几何，用于结果出来后自动展开
-        self._initial_geometry = "900x620"
-        
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
         self._batch_stop = threading.Event()  # 紧急停止信号
@@ -120,8 +125,8 @@ class App(SettingsUIMixin):
         self._check_update()  # 后台检查更新
         
     def _migrate_config(self):
-        """配置文件版本迁移：旧格式 → 新格式"""
-        import json as _json
+        """配置文件版本迁移：阶梯式按版本号补全，每步立即原子写回"""
+        import json as _json, shutil as _shutil
         sf = os.path.join(get_base_dir(), 'settings.json')
         if not os.path.exists(sf):
             return
@@ -130,28 +135,72 @@ class App(SettingsUIMixin):
                 s = _json.load(f)
         except Exception:
             return
-        if 'config_version' in s:
-            return  # 已是最新
+
+        CURRENT_CONFIG_VERSION = 3
+        ver = s.get('config_version', 0)
+        if ver >= CURRENT_CONFIG_VERSION:
+            return
+
         # 先备份
         try:
-            import shutil as _shutil
             _shutil.copy2(sf, sf + '.bak')
         except Exception:
             pass
-        # v0→v1: 旧格式（mode/builtin_model）→ 新格式（active_provider/providers）
-        old_api = s.get('api', {})
-        if 'active_provider' not in old_api and ('mode' in old_api or 'builtin_model' in old_api):
-            s['api'] = {
-                'active_provider': 'doubao',
-                'providers': {'doubao': {}, 'qwen': {}, 'glm': {}}
-            }
-        s['config_version'] = 1
-        try:
-            with open(sf + '.tmp', 'w', encoding='utf-8') as f:
-                _json.dump(s, f, ensure_ascii=False, indent=2)
-            os.replace(sf + '.tmp', sf)
-        except Exception:
-            pass
+
+        def _write():
+            """原子写回——每步迁移完成后立即调用，防止崩溃导致半迁移状态"""
+            try:
+                with open(sf + '.tmp', 'w', encoding='utf-8') as f:
+                    _json.dump(s, f, ensure_ascii=False, indent=2)
+                os.replace(sf + '.tmp', sf)
+            except Exception:
+                pass
+
+        # v0 → v1: 旧格式（mode/builtin_model）→ 新格式（active_provider/providers）
+        if ver < 1:
+            old_api = s.get('api', {})
+            if 'active_provider' not in old_api and ('mode' in old_api or 'builtin_model' in old_api):
+                s['api'] = {
+                    'active_provider': 'doubao',
+                    'providers': {'doubao': {}, 'qwen': {}, 'glm': {}}
+                }
+            s['config_version'] = 1
+            _write()
+
+        # v1 → v2: 预留（未来数据结构变更在此补充）
+        if ver < 2:
+            s['config_version'] = 2
+            _write()
+
+        # v2 → v3: 校准模块重构 — 相对偏移模式改为 AI 智能定位
+        if ver < 3:
+            cal = s.get('calibrate', {})
+            # 迁移旧 absolute 格式（dropdown/query 直接挂在 calibrate 下）
+            if 'dropdown' in cal and 'query' in cal and 'absolute' not in cal:
+                cal = {
+                    'mode': cal.get('mode', 'absolute'),
+                    'ai': cal.get('ai', {}),
+                    'absolute': {
+                        'dropdown': cal.get('dropdown', {}),
+                        'query': cal.get('query', {})
+                    }
+                }
+                s['calibrate'] = cal
+            # 迁移旧 offset 模式
+            if cal.get('mode') == 'offset':
+                cal = {'mode': 'ai', 'ai': {}, 'absolute': cal.get('absolute', {})}
+                s['calibrate'] = cal
+            # 规范化 calibrate 结构（补充缺失字段）
+            if 'calibrate' in s:
+                cal = s['calibrate']
+                if 'mode' not in cal:
+                    cal['mode'] = 'ai'
+                for key in ('ai', 'absolute'):
+                    if key not in cal:
+                        cal[key] = {}
+                s['calibrate'] = cal
+            s['config_version'] = 3
+            _write()
         
     def _check_update(self):
         """后台检查 GitHub 版本"""
@@ -170,7 +219,7 @@ class App(SettingsUIMixin):
     def _do_check_update(self):
         try:
             latest, body = self._fetch_latest_release()
-            if latest and latest != VERSION:
+            if latest and version_newer(latest, VERSION):
                 self._latest_tag = latest
                 self._latest_body = body
                 msg = f"🔄 有新版本 {latest}，点击「更新」查看详情"
@@ -415,7 +464,6 @@ class App(SettingsUIMixin):
             page._built = True
             self._apply_theme(self._theme_name)  # 仅新构建页面刷新
         self._refresh_model_badge()
-        # (moved to _build_ui)
 
     
     def _show_error(self, msg, popup=False):
@@ -437,7 +485,7 @@ class App(SettingsUIMixin):
             result_top = 400  # 窗口最小化或未完成布局时的默认值
         
         # Treeview 可见行数 + 列头 + 内边距
-        ROW_HEIGHT = 20
+        ROW_HEIGHT = 28
         MIN_VISIBLE = 8
         visible_rows = max(row_count, MIN_VISIBLE)
         tree_needed = 25 + visible_rows * ROW_HEIGHT  # 列头 ~25px
@@ -541,7 +589,7 @@ class App(SettingsUIMixin):
                 messagebox.showerror("检查失败", f"无法连接更新服务器：{e}")
                 return
         
-        if not latest or latest == VERSION:
+        if not latest or not version_newer(latest, VERSION):
             messagebox.showinfo("已是最新", f"当前已是最新版本 {VERSION}")
             return
         
@@ -592,10 +640,10 @@ class App(SettingsUIMixin):
                 return
             
             try:
-                subprocess.Popen([updater, '--target', sys.executable, '--restart'])
+                subprocess.Popen([updater, '--target', sys.executable, '--restart', '--pid', str(os.getpid())])
                 progress.stop()
                 status_lbl.configure(text="更新器已启动，主程序即将关闭...")
-                dlg.after(500, self.win.destroy)
+                self.win.destroy()
             except Exception as e:
                 progress.stop()
                 messagebox.showerror("启动失败", f"无法启动更新器：{e}\n请手动下载最新版本", parent=dlg)
@@ -645,7 +693,7 @@ class App(SettingsUIMixin):
                                 w.configure(**{attr: theme[a_key]})
                                 break
                 except:
-                    pass
+                    pass  # 个别控件不支持该属性，忽略
             for child in w.winfo_children():
                 _walk_color(child)
         
@@ -1084,53 +1132,72 @@ class App(SettingsUIMixin):
         self.win.after(0, self.win.iconify); time.sleep(1.5)
         self._batch_stop.clear()
         total = len(regions); success = 0; total_items = 0
+        import queue
+        result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
         def ss(path):
-            """锁窗口截屏 → 按设置裁剪"""
-            import pyautogui as pg, json
-            # 读裁剪比例
-            crop_cfg = {'left': 0.11, 'top': 0.40}
-            try:
-                sf = os.path.join(get_base_dir(), 'settings.json')
-                if os.path.exists(sf):
-                    with open(sf, 'r', encoding='utf-8') as f:
-                        crop_cfg = json.load(f).get('crop', crop_cfg)
-            except: pass
-            try:
-                import pygetwindow as gw
-                for title in ['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox']:
-                    wins = gw.getWindowsWithTitle(title)
-                    if wins:
-                        win = wins[0]
-                        if win.isMinimized: win.restore()
-                        win.activate(); time.sleep(0.2)
-                        img = pg.screenshot(region=(win.left, win.top, win.width, win.height))
-                        w, h = img.size
-                        sidebar = int(w * crop_cfg['left'])
-                        img = img.crop((sidebar, int(h * crop_cfg['top']), w, h))
-                        if w > 2560:
-                            img = img.resize((2560, int(img.size[1] * 2560 / w)), PILImage.LANCZOS)
-                        img.save(path)
-                        return
-            except Exception: pass
-            img = pg.screenshot()
-            w, h = img.size
-            sidebar = int(w * crop_cfg['left'])
-            img = img.crop((sidebar, int(h * crop_cfg['top']), w, h))
-            if w > 2560:
-                img = img.resize((2560, int(img.size[1] * 2560 / w)), PILImage.LANCZOS)
-            img.save(path)
+            from utils import capture_pdd_screenshot
+            capture_pdd_screenshot(path)
         preset = RESOLUTION_PRESETS.get(load_resolution_pref(), RESOLUTION_PRESETS['1920×1080 (Full HD)'])
         sw, sh = pyautogui.size()
-        # 加载校准坐标（一次性）
-        import json as _json
-        # 加载校准（多路径尝试）
+        # 加载校准配置
         _cal = {}
+        _cal_mode = 'ai'
+        import json as _json
         try:
             with open(os.path.join(get_base_dir(), 'settings.json'), 'r', encoding='utf-8') as _f:
                 _cal = _json.load(_f).get('calibrate', {})
+            _cal_mode = _cal.get('mode', 'ai')
         except Exception: pass
-        if _cal: dlog(f"校准OK: dd({_cal['dropdown']['x']},{_cal['dropdown']['y']}) q({_cal['query']['x']},{_cal['query']['y']})")
-        else: dlog("未校准，请先到设置→校准")
+
+        # AI 自动定位：AI 模式下，批量识别启动时实时定位按钮坐标
+        if _cal_mode == 'ai':
+            ai_data = _cal.get('ai', {})
+            last_time = ai_data.get('last_time', 0)
+            now = time.time()
+            # 5 分钟内有缓存直接复用
+            if not last_time or (now - last_time > 300):
+                dlog("AI 自动定位页面元素...")
+                try:
+                    from vision import ai_locate_elements
+                    result = ai_locate_elements()
+                    if result:
+                        _cal['ai'] = {
+                            'last_time': now,
+                            'dropdown': result['dropdown'],
+                            'query': result['query'],
+                            'confidence': result['confidence'],
+                            'screen_width': result['screen_width'],
+                            'screen_height': result['screen_height'],
+                        }
+                        dlog(f"AI 定位完成 置信度:{result['confidence']:.0%}")
+                except Exception:
+                    pass  # 失败静默回退，用旧坐标继续
+
+        # 获取有效坐标（AI 模式取 ai 子节点，absolute 取 absolute 子节点）
+        def _get_coords():
+            import pyautogui as _pg
+            if _cal_mode == 'ai':
+                ai_data = _cal.get('ai', {})
+                dd = ai_data.get('dropdown', {})
+                qq = ai_data.get('query', {})
+                # 分辨率适配
+                orig_w = ai_data.get('screen_width') or _pg.size()[0]
+                orig_h = ai_data.get('screen_height') or _pg.size()[1]
+                curr_w, curr_h = _pg.size()
+                scale_x = curr_w / orig_w if orig_w and curr_w != orig_w else 1
+                scale_y = curr_h / orig_h if orig_h and curr_h != orig_h else 1
+                if dd and (scale_x != 1 or scale_y != 1):
+                    dd = {'x': int(dd['x'] * scale_x), 'y': int(dd['y'] * scale_y)}
+                if qq and (scale_x != 1 or scale_y != 1):
+                    qq = {'x': int(qq['x'] * scale_x), 'y': int(qq['y'] * scale_y)}
+                return dd, qq
+            return _cal.get('absolute', {}).get('dropdown'), _cal.get('absolute', {}).get('query')
+
+        dd_coord, qq_coord = _get_coords()
+        if dd_coord and qq_coord:
+            dlog(f"校准OK ({_cal_mode}): dd({dd_coord.get('x')},{dd_coord.get('y')}) q({qq_coord.get('x')},{qq_coord.get('y')})")
+        else:
+            dlog(f"未校准（{_cal_mode}模式），请先到设置→校准")
         # 打印当前API配置状态
         try:
             api_cfg = get_api_config()
@@ -1157,9 +1224,9 @@ class App(SettingsUIMixin):
                     tm_x, tm_y = pos[0], pos[1]
                     dx, dy = tm_x + 90, tm_y
                     dlog(f"1.模板匹配({dx},{dy})")
-                elif _cal.get('dropdown'):
-                    dx, dy = _cal['dropdown']['x'], _cal['dropdown']['y']
-                    dlog(f"1.校准兜底({dx},{dy})")
+                elif dd_coord:
+                    dx, dy = dd_coord['x'], dd_coord['y']
+                    dlog(f"1.校准坐标({dx},{dy})")
                 else:
                     dx = int(sw * preset['dropdown_x']); dy = int(sh * preset['dropdown_y'])
                     dlog(f"1.预设({dx},{dy})")
@@ -1176,27 +1243,15 @@ class App(SettingsUIMixin):
                     dlog(f"操作失败(剪贴板/按键): {ex}")
                     continue
                 
-                # 4. 找查询按钮 — 仅依靠校准系统
-                if _cal.get('query') and _cal.get('mode','absolute') == 'absolute':
-                    qx, qy = _cal['query']['x'], _cal['query']['y']
-                    dlog(f"4.绝对坐标({qx},{qy})")
-                elif _cal.get('dropdown') and _cal.get('query') and _cal.get('mode') == 'offset':
-                    offset_x = _cal['query']['x'] - _cal['dropdown']['x']
-                    offset_y = _cal['query']['y'] - _cal['dropdown']['y']
-                    # 偏移模式：用模板匹配到的文本框位置 + 偏差 = 查询位置
-                    if tm_x is not None:
-                        qx = tm_x + offset_x; qy = tm_y + offset_y
-                    else:
-                        qx = dx + offset_x; qy = dy + offset_y
-                    dlog(f"4.偏移推算({qx},{qy}) offset=({offset_x},{offset_y}) {'模板' if tm_x else '兜底'}")
+                # 4. 找查询按钮
+                if qq_coord:
+                    qx, qy = qq_coord['x'], qq_coord['y']
+                    dlog(f"4.{_cal_mode}坐标({qx},{qy})")
                 else:
                     dlog("4.⚠ 未校准查询按钮，跳过"); continue
                 pyautogui.click(qx, qy)
                 # 5. 等待页面刷新（加截图验证：拍两次对比是否变化）
                 time.sleep(4.0)
-                # 快速验证截图看页面是否真的刷新了
-                sp_check = os.path.join(get_base_dir(), 'output', f'_check_{i}.png')
-                ss(sp_check)
                 dlog(f"5.页面刷新完成")
                 
                 # 6. 截图 → OCR识别（阻塞，API返回才继续）
@@ -1218,17 +1273,8 @@ class App(SettingsUIMixin):
                         dlog(f"  OCR异常: {ex}")
                         time.sleep(2)
                 if items:
-                    done = threading.Event()
                     for it in items: it['region'] = reg
-                    def _safe_fill(it, ev):
-                        try:
-                            self._fill_from_ocr(it)
-                        except Exception as ex:
-                            self.win.after(0, lambda m=str(ex): self.status_text.set(f"填充失败: {m}"))
-                        finally:
-                            ev.set()
-                    self.win.after(0, lambda it=items, ev=done: _safe_fill(it, ev))
-                    done.wait(timeout=10)
+                    result_queue.put(items)
                     success += 1; total_items += len(items)
                     dlog(f"6.✓ {len(items)}个商品")
                 else:
@@ -1236,12 +1282,35 @@ class App(SettingsUIMixin):
             except Exception as e:
                 dlog(f"✗ {e}")
         
+        # 发送结束信号
+        result_queue.put(None)
+        
         self.win.after(0, self.win.deiconify)
+        # 启动主线程轮询：每 100ms 从队列取数据，逐批刷新 UI
+        self._poll_batch_queue(result_queue, success, total, total_items)
         if hud: time.sleep(1); self.win.after(0, hud.destroy)
-        # 恢复按钮
-        self.win.after(0, lambda: self.export_btn.configure(state='normal'))
-        self.win.after(0, lambda: self.status_text.set("就绪 — 批量识别完成"))
-        self.win.after(0, lambda: messagebox.showinfo("批量识别完成", f"成功 {success}/{total} 地区\n合计 {total_items} 商品"))
+    
+    def _poll_batch_queue(self, q, success, total, total_items):
+        """主线程每 100ms 轮询队列，逐批刷新 UI（避免一次性创建大量控件导致假死）"""
+        try:
+            while True:
+                items = q.get_nowait()
+                if items is None:
+                    # 后台线程已完成所有地区
+                    self.win.after(100, lambda: self._finish_batch(success, total, total_items))
+                    return
+                self._fill_from_ocr(items)
+        except Exception:
+            pass  # 队列暂时空，继续轮询
+        
+        self.win.after(100, lambda: self._poll_batch_queue(q, success, total, total_items))
+    
+    def _finish_batch(self, success, total, total_items):
+        """批量识别收尾：恢复按钮 + 显示结果"""
+        self.export_btn.configure(state='normal')
+        self.status_text.set("就绪 — 批量识别完成")
+        if success > 0:
+            messagebox.showinfo("批量识别完成", f"成功 {success}/{total} 地区\n合计 {total_items} 商品")
     
     def _live_screenshot(self):
         """即时截图：最小化窗口 → 立刻截全屏 → OCR → 恢复"""
@@ -1259,40 +1328,15 @@ class App(SettingsUIMixin):
                 os.makedirs(os.path.dirname(ss_path), exist_ok=True)
                 
                 # 与批量识别完全一致的截图逻辑
-                import pyautogui as pg
-                from PIL import Image as PILImage
-                found_window = False
-                try:
-                    import pygetwindow as gw
-                    for t in ['拼多多', 'pinduoduo', 'Edge', 'Chrome', 'Firefox']:
-                        wins = gw.getWindowsWithTitle(t)
-                        if wins:
-                            win = wins[0]
-                            found_window = True
-                            if win.isMinimized: win.restore()
-                            win.activate(); time.sleep(0.2)
-                            img = pg.screenshot(region=(win.left, win.top, win.width, win.height))
-                            break
-                except Exception: pass
+                from utils import capture_pdd_screenshot
+                found_window = capture_pdd_screenshot(ss_path)
+                
                 if not found_window:
                     self.win.after(0, self.win.deiconify)
                     self.win.after(0, lambda: (
                         self.status_text.set('❌ 未找到浏览器窗口，请先打开 PDD 后台页面'),
                         messagebox.showwarning('截图失败', '未找到拼多多或浏览器窗口。\n请先打开 PDD 商家后台 -> 订货管理页面。')))
                     return
-                # 裁剪
-                import json
-                crop = {'left':0.11, 'top':0.40}
-                try:
-                    sf = os.path.join(get_base_dir(), 'settings.json')
-                    if os.path.exists(sf):
-                        with open(sf,'r') as f: crop = json.load(f).get('crop', crop)
-                except: pass
-                w, h = img.size
-                img = img.crop((int(w * crop['left']), int(h * crop['top']), w, h))
-                if img.size[0] > 2560:
-                    img = img.resize((2560, int(img.size[1]*2560/img.size[0])), PILImage.LANCZOS)
-                img.save(ss_path)
                 
                 self.win.after(0, self.win.deiconify)
                 self.win.after(0, lambda: self.status_text.set('OCR识别中...'))

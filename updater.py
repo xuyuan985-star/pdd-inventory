@@ -8,9 +8,6 @@ from urllib.request import urlopen, Request
 REPO = "xuyuan985-star/pdd-inventory"
 from utils import EXE_NAME
 
-def _appdata():
-    return os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'PDD补货助手')
-
 def get_latest_release():
     """从 GitHub API 获取最新 release 信息"""
     url = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -24,7 +21,7 @@ def get_latest_release():
         return None, []
 
 def download_asset(asset, dest):
-    """下载 release 附件"""
+    """下载 release 附件，返回 (success, sha256_hex 或 None)"""
     url = asset["browser_download_url"]
     name = asset["name"]
     print(f"[更新器] 下载 {name} ({asset['size']} bytes)...")
@@ -33,10 +30,59 @@ def download_asset(asset, dest):
         with urlopen(req, timeout=120) as resp:
             with open(dest, 'wb') as f:
                 shutil.copyfileobj(resp, f)
-        return True
+        return True, None
     except Exception as e:
         print(f"[更新器] 下载失败: {e}")
+        return False, None
+
+def _wait_pid_exit(pid: int, expected_exe: str = '', timeout: float = 30.0):
+    """通过 Windows API 等待指定 PID 的进程退出。超时返回 False。
+    若 expected_exe 给出，先校验进程路径是否匹配，防止 PID 回收误判。"""
+    import ctypes
+    from ctypes import wintypes
+    SYNCHRONIZE = 0x00100000
+    PROCESS_QUERY_INFORMATION = 0x0400
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.windll.kernel32
+
+    h = kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return True  # 进程已不存在
+
+    try:
+        # 校验路径（如果提供了期望路径）
+        if expected_exe:
+            buf = ctypes.create_unicode_buffer(260)
+            size = wintypes.DWORD(260)
+            # QueryFullProcessImageNameW
+            if hasattr(kernel32, 'QueryFullProcessImageNameW'):
+                ok = kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size))
+                if ok:
+                    actual = buf.value.lower().rstrip('\\')
+                    expected = expected_exe.lower().rstrip('\\')
+                    if actual != expected:
+                        return True  # PID 已被回收，原进程已死
+
+        ret = kernel32.WaitForSingleObject(h, int(timeout * 1000))
+        if ret == 0:  # WAIT_OBJECT_0
+            return True
         return False
+    finally:
+        kernel32.CloseHandle(h)
+
+def _verify_sha256(path: str, expected: str) -> bool:
+    """验证文件 SHA256 哈希，不匹配返回 False"""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    actual = h.hexdigest()
+    return actual.lower() == expected.lower()
+
 
 def main():
     print("=" * 40)
@@ -53,6 +99,7 @@ def main():
     ap.add_argument("--target", default="")
     ap.add_argument("--restart", action="store_true")
     ap.add_argument("--resume-update", action="store_true")
+    ap.add_argument("--pid", type=int, default=0)
     args = ap.parse_args()
     
     if args.resume_update:
@@ -91,27 +138,61 @@ def main():
         input("按回车退出...")
         return
     
-    # 等待主程序退出（轮询文件释放）
+    # 等待主程序退出（通过 PID 确认进程死亡）
     if args.restart:
-        print("[更新器] 等待主程序退出...")
-        for _ in range(15):
-            try:
-                with open(target, 'rb') as _f:
-                    pass
-                time.sleep(0.5)
-            except (PermissionError, OSError):
-                break
-        time.sleep(1)  # 额外缓冲
+        if args.pid:
+            print(f"[更新器] 等待主程序 PID={args.pid} 退出...")
+            if not _wait_pid_exit(args.pid, expected_exe=args.target, timeout=30.0):
+                print("[更新器] 警告: 主程序未在 30 秒内退出，继续执行")
+            else:
+                print("[更新器] 主程序已退出")
+        else:
+            # 兼容旧版调用（无 --pid），回退到文件轮询
+            print("[更新器] 等待主程序退出...")
+            for _ in range(15):
+                try:
+                    with open(target, 'rb') as _f:
+                        pass
+                    time.sleep(0.5)
+                except (PermissionError, OSError):
+                    break
+        time.sleep(1)  # 额外缓冲，确保文件句柄释放
     
     # 下载到临时目录
     tmp = os.path.join(tempfile.gettempdir(), "pdd_update")
     os.makedirs(tmp, exist_ok=True)
     new_exe = os.path.join(tmp, exe_asset["name"])
     
-    if not download_asset(exe_asset, new_exe):
+    if not download_asset(exe_asset, new_exe)[0]:
         print("[更新器] 下载失败")
         input("按回车退出...")
         return
+
+    # SHA256 校验：查找同名 .sha256 文件并验证
+    sha_asset = None
+    for a in assets:
+        if a["name"] == exe_asset["name"] + ".sha256":
+            sha_asset = a; break
+    if sha_asset:
+        sha_path = new_exe + ".sha256"
+        ok, _ = download_asset(sha_asset, sha_path)
+        if ok:
+            with open(sha_path, 'r') as sf:
+                expected = sf.read().strip().split()[0]
+            if not _verify_sha256(new_exe, expected):
+                print("[更新器] SHA256 校验失败！文件可能被篡改，已拒绝安装")
+                os.remove(new_exe)
+                input("按回车退出...")
+                return
+            print("[更新器] SHA256 校验通过")
+            os.remove(sha_path)
+        else:
+            print("[更新器] SHA256 校验文件下载失败，已拒绝安装（安全策略）")
+            os.remove(new_exe)
+            input("按回车退出...")
+            return
+    else:
+        print("[更新器] 未找到 .sha256 校验文件，跳过签名验证")
     
     # 替换
     try:
@@ -121,10 +202,14 @@ def main():
             print("[更新器] 解压更新包...")
             extract_dir = os.path.join(tmp, "extracted")
             os.makedirs(extract_dir, exist_ok=True)
+            extract_dir_real = os.path.realpath(extract_dir) + os.sep
             with zipfile.ZipFile(new_exe, 'r') as zf:
                 for zi in zf.infolist():
-                    # 拒绝路径遍历
-                    if zi.filename.startswith('/') or '..' in zi.filename:
+                    # 路径遍历防护：规范化后校验必须在 extract_dir 内
+                    # 拒绝绝对路径、.. 穿越、Windows 盘符等
+                    member_path = os.path.realpath(os.path.join(extract_dir, zi.filename))
+                    if not member_path.startswith(extract_dir_real):
+                        print(f"[更新器] 拒绝路径遍历: {zi.filename}")
                         continue
                     zf.extract(zi, extract_dir)
             new_dir = None

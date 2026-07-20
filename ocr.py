@@ -4,7 +4,7 @@ PDD 后台截图 OCR 识别
 输出：[{name, stock, sales}, ...]
 """
 
-import base64, json, os, sys, time
+import base64, json, os, sys
 
 import requests
 from utils import get_api_config, get_base_dir
@@ -102,10 +102,16 @@ def _validate_items(items: list) -> list:
     if valid_names == 0 and len(cleaned) > 0:
         return []
     
+    # 硬规则兜底：如果 stock >> sales（超20倍），极可能是读成了"仓库销售库存"列，修正为0
+    for it in cleaned:
+        s, sa = it.get('stock', 0), it.get('sales', 0)
+        if sa > 0 and s > sa * 20:
+            it['stock'] = 0
+    
     return cleaned
 
 
-def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
+def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
     """
     识别 PDD 后台截图。根据 settings 中提供商配置选择 API。
     """
@@ -119,7 +125,7 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
 
     key = provider.get('api_key', '') or os.environ.get(
         {'doubao':'ARK_API_KEY','qwen':'DASHSCOPE_API_KEY','glm':'ZHIPU_API_KEY'}.get(active, ''), '')
-    model_name = provider.get('model', '')
+    model_name = forced_model or provider.get('model', '')
     endpoint = provider.get('endpoint', '')
     use_responses = False
 
@@ -133,7 +139,9 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
         # 根据 endpoint 判断 API 类型，而非模型名
         use_responses = ('responses' in endpoint)
         if use_responses:
-            models = [m for m in ['ep-20260710230432-jccpg', 'glm-4v-flash'] if m]
+            custom_ep = provider.get('custom_endpoint', '')
+            fallback = custom_ep or model_name
+            models = [m for m in [fallback, 'glm-4v-flash'] if m and m.strip()]
             # 图片预处理：1280px JPEG 压缩
             try:
                 from PIL import Image as PILImg
@@ -149,17 +157,15 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
             except Exception:
                 pass
         else:
-            doubao_chat = {'doubao-v1': 'ep-20260621182142-6x4lh'}
-            model_id = doubao_chat.get(model_name, model_name)
-            models = [m for m in [model_id, 'glm-4v-flash'] if m]
+            models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()]
     elif active == 'qwen':
         if not endpoint:
             endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-        models = [m for m in [model_name, 'glm-4v-flash'] if m] if model_name else ['qwen3.5-omni-flash', 'glm-4v-flash']
+        models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()] if model_name else ['qwen3.5-omni-flash', 'glm-4v-flash']
     else:  # glm
         if not endpoint:
             endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-        models = [m for m in [model_name, 'glm-4v-flash'] if m] if model_name else ['glm-4v-flash']
+        models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()] if model_name else ['glm-4v-flash']
 
     # 统一提示词 — 所有模型用同一套详细版
     prompt = """你现在处理的是软件截图内的竖向表格，执行流程：
@@ -167,17 +173,13 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
 2. 第二步：按规则匹配字段，每行商品生成一条对象，输出标准JSON数组：
 字段规则：
 - name：商品名称，无则填null
-- stock：仓库总库存，只取表头为「仓库总库存」的列，只提取纯数字，文本带"份"自动剔除单位，无数值填0
+- stock：仓库总库存。在表格中，该列位于「仓库销售库存」的右侧、「仓库预估总销售数」的左侧。只读取表头文字完全等于「仓库总库存」的那一列。该列数据通常显示为「X份 查看」格式，提取时只取数字，忽略「查看」二字，无数值填0。如果某列的数据后面跟着「查看」链接，确认这是「仓库总库存」列；如果某列是纯数字（如 10000份），不要读取。
 - sales：仓库预估总销售数，只取表头为「仓库预估总销售数」的列，只提取纯数字，文本带"份"自动剔除单位，无数值填0
 - region：省份名称（山东/云南这类），表格无省份列统一填null
-表头冲突规则：
-1. 同时存在「仓库总库存」「仓库销售库存」，只读取「仓库总库存」列；
-2. 同时存在「仓库预估总销售数」「仓库总销售数」，只读取「仓库预估总销售数」列；
 异常兜底：
 1. 单元格文字为"统计中"等非数字内容，stock/sales统一填0；
 2. 当前图片无目标订货表格、无有效商品数据，仅输出[]，禁止额外文字解释；
-3. 仓库总库存为0是绝对真实的业务数据，如实提取0即可，严禁用任何其他列的数值替代；
-4. **最后警告**：严禁用仓库销售库存数据替代仓库总库存数据！仓库总库存列显示多少就是多少，是0就填0！擅自替代别人的数据来充数会导致识别结果完全作废！
+3. 仓库总库存为0是真实业务数据，如实提取0即可
 格式强制要求：
 1. 仅输出纯净JSON，不要任何前置/后置说明、注释、换行描述；
 2. stock、sales字段必须为数字类型，不能是字符串；
@@ -195,7 +197,7 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
             if not cur_key:
                 continue
             cur_responses = False
-        elif 'glm' in mdl and 'ark' in cur_endpoint:
+        elif 'glm' in mdl and ('ark' in cur_endpoint or 'responses' in cur_endpoint):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
             if not cur_key:
@@ -273,69 +275,9 @@ def ocr_screenshot(image_path: str, model: str = 'glm-4v-flash') -> list:
     raise RuntimeError("无法从截图中提取有效数据，请确保截图中包含PDD订货管理表格")
 
 
-def ocr_screenshot_crosscheck(image_path: str, model: str = 'glm-4v-flash') -> list:
-    """
-    交叉验证：同一张图识别两次，只采信两轮一致的商品。
-    Doubao-Seed-2.1-pro 已禁用深度思考，准确度够，跳过交叉验证只调一次。
-    """
-    # 如果使用 Responses API，单次识别即返回（thinking:disabled 已足够准确）
-    api_cfg = get_api_config()
-    active = api_cfg.get('active_provider', '')
-    providers = api_cfg.get('providers', {})
-    provider = (providers.get(active, {}) or {}) if isinstance(providers, dict) else {}
-    endpoint = provider.get('endpoint', '')
-    # Doubao Responses API 和 GLM（thinking:disabled）单次识别即返回
-    if (active == 'doubao' and 'responses' in endpoint) or active == 'glm':
-        items = ocr_screenshot(image_path, model)
-        if not items:
-            items = ocr_screenshot(image_path, model)
-        return items
-    
-    items1 = ocr_screenshot(image_path, model)
-    if not items1:
-        # 第一轮为空，可能是图片有问题，再试一次
-        items1 = ocr_screenshot(image_path, model)
-        if not items1:
-            return []
-    
-    try:
-        items2 = ocr_screenshot(image_path, model)
-    except Exception:
-        return items1
-    
-    if not items2:
-        return items1
-    
-    def fingerprint(item):
-        name = str(item.get('name', '')).strip()
-        return f"{name}|{item.get('stock',0)}|{item.get('sales',0)}"
-    
-    fp1 = {fingerprint(it): it for it in items1}
-    fp2 = {fingerprint(it): it for it in items2}
-    
-    common = set(fp1.keys()) & set(fp2.keys())
-    if len(common) >= max(len(fp1), len(fp2)) * 0.5:
-        return [fp1[k] for k in common]
-    
-    # 交集太少，可能是模型状态异常，再试一轮（等待更久）
-    try:
-        time.sleep(2)  # 冷却
-        items3 = ocr_screenshot(image_path, model)
-        if not items3:
-            time.sleep(2)
-            items3 = ocr_screenshot(image_path, model)
-        if items3:
-            fp3 = {fingerprint(it): it for it in items3}
-            common3 = (set(fp1.keys()) & set(fp3.keys())) | (set(fp2.keys()) & set(fp3.keys()))
-            if common3:
-                result = {}
-                for k in common3:
-                    result[k] = fp1.get(k) or fp2.get(k) or fp3.get(k)
-                return list(result.values())
-    except (RuntimeError, json.JSONDecodeError, requests.RequestException):
-        pass
-    
-    return items1 if len(items1) >= len(items2) else items2
+def ocr_screenshot_crosscheck(image_path: str, forced_model: str = None) -> list:
+    """单次 OCR 识别，底层 ocr_screenshot 内部已有 fallback 模型重试。"""
+    return ocr_screenshot(image_path, forced_model)
 
 
 if __name__ == '__main__':
@@ -357,5 +299,5 @@ if __name__ == '__main__':
 
     plans = calculate_replenishment(inventory, sales)
     schedule = generate_schedule(plans)
-    path = export_results(plans, schedule, os.path.join(get_base_dir(), 'output'))
+    path = export_results(plans, os.path.join(get_base_dir(), 'output'))
     print(f'\n导出: {path}')

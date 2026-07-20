@@ -26,7 +26,7 @@ class SettingsUIMixin:
         scroll.pack(side='right', fill='y')
         def _mw(e): canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
         canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _mw))
-        canvas.bind('<Leave>', lambda e: canvas.unbind('<MouseWheel>'))
+        canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
 
         tk.Label(content, text='导出路径', font=self.FONT_HEADING).pack(pady=(15,5))
         pf = tk.Frame(content); pf.pack(pady=8, padx=20, fill='x')
@@ -48,11 +48,15 @@ class SettingsUIMixin:
         def save_crop():
             import json
             sf = os.path.join(get_base_dir(), 'settings.json')
-            try: s = json.load(open(sf, 'r', encoding='utf-8'))
+            try: 
+                with open(sf, 'r', encoding='utf-8') as f:
+                    s = json.load(f)
             except: s = {}
             try: s['crop'] = {'left': float(left_var.get()), 'top': float(top_var.get())}
             except: s['crop'] = {'left': 0.11, 'top': 0.40}
-            json.dump(s, open(sf, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+            
+            with open(sf, 'w', encoding='utf-8') as f:
+                json.dump(s, f, ensure_ascii=False, indent=2)
         tk.Button(cf, text='保存', command=save_crop, font=(self.FONT[0], 7)).pack(side='left', padx=10)
 
     def _pick_export_path(self, parent):
@@ -223,7 +227,7 @@ class SettingsUIMixin:
         tk.Button(btn_frame, text="保存时效设置", command=save_all,
                   bg="#4CAF50", fg="#FFFFFF", font=self.FONT_BOLD).pack(side="left", padx=5)
 
-    def _build_skin_tab(self, parent, dlg=None):
+    def _build_skin_tab(self, parent):
         """主题选择：四套主题 2×2 网格，点击预览卡即切换"""
         tk.Label(parent, text="选择界面主题", font=self.FONT_HEADING).pack(pady=(15,2))
         tk.Label(parent, text="点击卡片即时切换，自动保存偏好", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
@@ -322,61 +326,116 @@ class SettingsUIMixin:
                     pass
 
     def _build_calibrate_tab(self, parent, dlg=None):
-        """点击校准：记录用户手动点击的销售区域和查询按钮位置"""
-        import json
-        tk.Label(parent, text="点击位置校准", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="打开PDD后台，依次点击两个位置，软件自动记录坐标",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
+        """校准页：AI 智能视觉定位 / 绝对坐标手动校准"""
+        import json, time as _time
+        from datetime import datetime
+
+        tk.Label(parent, text="定位校准", font=self.FONT_HEADING).pack(pady=(15,2))
 
         settings_file = os.path.join(get_base_dir(), 'settings.json')
         try:
             with open(settings_file, 'r', encoding='utf-8') as f: s = json.load(f)
         except: s = {}
         cal = s.get('calibrate', {})
+        if not cal: cal = {'mode': 'ai', 'ai': {}, 'absolute': {}}
+
+        # ── 模式选择 ──
+        mode_var = tk.StringVar(dlg, value=cal.get('mode', 'ai'))
+        mode_frame = tk.Frame(parent)
+        mode_frame.pack(pady=10)
+        tk.Label(mode_frame, text="定位模式:", font=self.FONT, fg=self.C_TEXT).pack(side='left')
+        tk.Radiobutton(mode_frame, text="AI 智能视觉定位（自动识别，自适应分辨率）", variable=mode_var,
+                       value='ai', font=(self.FONT[0], 8), fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(anchor='w')
+        tk.Radiobutton(mode_frame, text="绝对坐标（手动校准，固定不变）", variable=mode_var,
+                       value='absolute', font=(self.FONT[0], 8), fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(anchor='w')
+
+        def save_mode():
+            cal['mode'] = mode_var.get()
+            s['calibrate'] = cal
+            with open(settings_file + '.tmp', 'w', encoding='utf-8') as f:
+                json.dump(s, f, ensure_ascii=False, indent=2)
+            os.replace(settings_file + '.tmp', settings_file)
+            self.status_text.set(f"定位模式已设为: {'AI 智能定位' if mode_var.get()=='ai' else '绝对坐标'}")
+            _refresh_cards()
+
+        tk.Button(mode_frame, text="保存模式", command=save_mode,
+                  font=(self.FONT[0], 8)).pack(pady=5)
+
+        # ── AI 模式卡片 ──
+        ai_card = tk.Frame(parent, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+
+        ai_status_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_SURFACE)
+        ai_status_lbl.pack(pady=5)
+        ai_coords_lbl = tk.Label(ai_card, text="", font=self.FONT, fg=self.C_PRIMARY, bg=self.C_SURFACE)
+        ai_coords_lbl.pack(pady=2)
+        ai_conf_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
+        ai_conf_lbl.pack(pady=2)
+        ai_res_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
+        ai_res_lbl.pack(pady=2)
+
+        ai_btn_frame = tk.Frame(ai_card, bg=self.C_SURFACE)
+        ai_btn_frame.pack(pady=8)
+
+        def do_ai_locate():
+            ai_status_lbl.configure(text="正在智能识别页面元素...")
+            self.win.update()
+            try:
+                import pyautogui as pg
+                from vision import ai_locate_elements
+                result = ai_locate_elements()
+                if not result:
+                    ai_status_lbl.configure(text="定位失败：API 返回空或校验不通过")
+                    _refresh_cards()
+                    return
+
+                screen_w, screen_h = pg.size()
+                cal['ai'] = {
+                    'last_time': _time.time(),
+                    'dropdown': result['dropdown'],
+                    'query': result['query'],
+                    'confidence': result['confidence'],
+                    'screen_width': result['screen_width'],
+                    'screen_height': result['screen_height'],
+                }
+                cal['mode'] = 'ai'
+                s['calibrate'] = cal
+                with open(settings_file + '.tmp', 'w', encoding='utf-8') as f:
+                    json.dump(s, f, ensure_ascii=False, indent=2)
+                os.replace(settings_file + '.tmp', settings_file)
+                ai_status_lbl.configure(text="✅ 定位完成")
+                self.status_text.set("AI 智能定位完成")
+            except Exception as e:
+                ai_status_lbl.configure(text=f"定位失败: {str(e)[:50]}")
+            _refresh_cards()
+
+        tk.Button(ai_btn_frame, text="立即定位", command=do_ai_locate,
+                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=12).pack(side='left', padx=5)
+        tk.Button(ai_btn_frame, text="测试点击", command=lambda: _test_click(cal),
+                  font=(self.FONT[0], 8)).pack(side='left', padx=5)
+
+        # ── 绝对坐标模式卡片 ──
+        abs_card = tk.Frame(parent)
 
         def show_val(key, label):
-            v = cal.get(key, {})
+            v = cal.get('absolute', {}).get(key, {})
             txt = f"{label}: X={v.get('x','?')} Y={v.get('y','?')}" if v else f"{label}: 未校准"
-            return tk.Label(parent, text=txt, font=self.FONT, fg=self.C_TEXT)
+            return tk.Label(abs_card, text=txt, font=self.FONT, fg=self.C_TEXT)
 
         lbl_dd = show_val('dropdown', '销售区域文本框')
         lbl_dd.pack(pady=(15,3))
         lbl_qq = show_val('query', '查询按钮')
         lbl_qq.pack(pady=3)
 
-        offset_x = cal.get('query',{}).get('x',0) - cal.get('dropdown',{}).get('x',0)
-        offset_y = cal.get('query',{}).get('y',0) - cal.get('dropdown',{}).get('y',0)
-        tk.Label(parent, text=f"查询相对偏移: ΔX={offset_x} ΔY={offset_y}" if cal else "查询相对偏移: 未校准",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=3)
-
-        mode_var = tk.StringVar(dlg, value=cal.get('mode', 'absolute'))
-        mode_frame = tk.Frame(parent)
-        mode_frame.pack(pady=10)
-        tk.Label(mode_frame, text="定位模式:", font=self.FONT, fg=self.C_TEXT).pack(side='left')
-        tk.Radiobutton(mode_frame, text="绝对坐标（直接使用校准位置）", variable=mode_var,
-                       value='absolute', font=(self.FONT[0], 8), fg=self.C_TEXT,
-                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(anchor='w')
-        tk.Radiobutton(mode_frame, text="相对偏移（文本框模板匹配 + 校准偏移推算查询按钮）", variable=mode_var,
-                       value='offset', font=(self.FONT[0], 8), fg=self.C_TEXT,
-                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(anchor='w')
-
-        def save_mode():
-            cal['mode'] = mode_var.get()
-            s['calibrate'] = cal
-            with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(s, f, ensure_ascii=False, indent=2)
-            self.status_text.set(f"定位模式已设为: {'绝对坐标' if mode_var.get()=='absolute' else '相对偏移'}")
-
-        tk.Button(mode_frame, text="保存模式", command=save_mode,
-                  font=(self.FONT[0], 8)).pack(pady=5)
-
-        status_lbl = tk.Label(parent, text="", font=(self.FONT[0], 8), fg=self.C_ACCENT)
-        status_lbl.pack(pady=5)
+        abs_status_lbl = tk.Label(abs_card, text="", font=(self.FONT[0], 8), fg=self.C_ACCENT)
+        abs_status_lbl.pack(pady=5)
 
         def start_calibrate():
-            import pyautogui, json
+            import pyautogui
             sf = os.path.join(get_base_dir(), 'settings.json')
-            try: s2 = json.load(open(sf, 'r', encoding='utf-8'))
+            try:
+                with open(sf, 'r', encoding='utf-8') as f: s2 = json.load(f)
             except: s2 = {}
             cal2 = s2.get('calibrate', {})
             pos = {}
@@ -389,7 +448,6 @@ class SettingsUIMixin:
                 cdlbl = tk.Label(pw, text="", font=('Consolas', 36, 'bold'), fg=self.C_PRIMARY)
                 cdlbl.pack(pady=10)
                 tk.Label(pw, text="倒计时结束后自动记录鼠标位置", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-
                 recorded = [False]
                 def countdown(n=3):
                     if recorded[0]: return
@@ -403,20 +461,55 @@ class SettingsUIMixin:
                         pw.after(500, pw.destroy)
                 pw.after(500, countdown)
                 pw.grab_set(); pw.wait_window()
-                if step not in pos: status_lbl.configure(text="已取消"); return
-            cal2['dropdown'] = {'x': pos[0][0], 'y': pos[0][1]}
-            cal2['query'] = {'x': pos[1][0], 'y': pos[1][1]}
-            if 'mode' not in cal2: cal2['mode'] = 'absolute'
+                if step not in pos: abs_status_lbl.configure(text="已取消"); return
+            cal2['absolute'] = {'dropdown': {'x': pos[0][0], 'y': pos[0][1]}, 'query': {'x': pos[1][0], 'y': pos[1][1]}}
+            cal2['mode'] = 'absolute'
             s2['calibrate'] = cal2
-            with open(sf, 'w', encoding='utf-8') as f:
+            with open(sf + '.tmp', 'w', encoding='utf-8') as f:
                 json.dump(s2, f, ensure_ascii=False, indent=2)
+            os.replace(sf + '.tmp', sf)
             lbl_dd.configure(text=f"销售区域文本框: X={pos[0][0]} Y={pos[0][1]}")
             lbl_qq.configure(text=f"查询按钮: X={pos[1][0]} Y={pos[1][1]}")
-            status_lbl.configure(text="✅ 校准完成！")
+            abs_status_lbl.configure(text="✅ 校准完成！")
+            _refresh_cards()
 
-        tk.Button(parent, text="开始校准", command=start_calibrate,
+        tk.Button(abs_card, text="开始校准", command=start_calibrate,
                   font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=15, height=2).pack(pady=15)
-        tk.Label(parent, text="移好鼠标→点记录按钮→重复两次", font=(self.FONT[0], 7), fg=self.C_MUTED).pack()
+        tk.Label(abs_card, text="移好鼠标→点记录按钮→重复两次", font=(self.FONT[0], 7), fg=self.C_MUTED).pack()
+
+        # ── 刷新显示 ──
+        def _refresh_cards():
+            is_ai = mode_var.get() == 'ai'
+            if is_ai:
+                abs_card.pack_forget()
+                ai_card.pack(fill='x', padx=20, pady=10)
+                ai_data = cal.get('ai', {})
+                if ai_data.get('last_time'):
+                    t = datetime.fromtimestamp(ai_data['last_time']).strftime('%Y-%m-%d %H:%M:%S')
+                    dd = ai_data.get('dropdown', {})
+                    qq = ai_data.get('query', {})
+                    ai_status_lbl.configure(text=f"上次定位: {t}")
+                    ai_coords_lbl.configure(text=f"下拉框 ({dd.get('x','?')}, {dd.get('y','?')})  查询 ({qq.get('x','?')}, {qq.get('y','?')})")
+                    ai_conf_lbl.configure(text=f"置信度: {ai_data.get('confidence', 0):.0%}")
+                    ai_res_lbl.configure(text=f"定位分辨率: {ai_data.get('screen_width',0)}×{ai_data.get('screen_height',0)}")
+                else:
+                    ai_status_lbl.configure(text="尚未进行 AI 定位")
+                    ai_coords_lbl.configure(text="")
+                    ai_conf_lbl.configure(text="")
+                    ai_res_lbl.configure(text="")
+            else:
+                ai_card.pack_forget()
+                abs_card.pack(fill='x', padx=20, pady=10)
+
+        def _test_click(cal_data):
+            mode = cal_data.get('mode', 'ai')
+            dd = (cal_data.get('ai', {}) if mode == 'ai' else cal_data.get('absolute', {})).get('dropdown', {})
+            if dd and 'x' in dd and dd['x'] is not None:
+                import pyautogui as pg
+                pg.click(dd['x'], dd['y'])
+                self.status_text.set(f"已点击下拉框 ({dd['x']}, {dd['y']})，请确认是否展开")
+
+        _refresh_cards()
 
     def _build_resolution_tab(self, parent, dlg):
         """分辨率预设：选择屏幕分辨率，批量识别自动适配点击坐标"""
@@ -558,9 +651,19 @@ class SettingsUIMixin:
                           selectcolor=self.C_BG, activebackground=self.C_BG,
                           command=lambda: self._refresh_model_badge()).pack(side="left", padx=10)
 
-        # 三张提供商卡片
-        cards_frame = tk.Frame(parent, bg=self.C_BG)
-        cards_frame.pack(fill="both", expand=True, padx=15, pady=10)
+        # 三张提供商卡片（带滚轮）
+        canvas = tk.Canvas(parent, highlightthickness=0, bg=self.C_BG)
+        scroll = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+        cards_frame = tk.Frame(canvas, bg=self.C_BG)
+        cards_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        wid = canvas.create_window((0, 0), window=cards_frame, anchor='nw')
+        canvas.bind('<Configure>', lambda e: canvas.itemconfig(wid, width=e.width))
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='right', fill='y')
+        def _api_mw(e): canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
+        canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _api_mw))
+        canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
 
         key_vars = {}
         model_vars = {}
@@ -620,6 +723,19 @@ class SettingsUIMixin:
                     bg=self.C_SURFACE, fg=self.C_TEXT, insertbackground=self.C_TEXT).pack(side="left", padx=5)
             setattr(self, f'_api_ep_{key}', ev)
 
+            # 豆包专属：自定义推理接入点（可选）
+            if key == 'doubao':
+                cef = tk.Frame(card, bg=self.C_BG)
+                cef.pack(fill="x", pady=3)
+                tk.Label(cef, text="推理接入点:", font=self.FONT, width=9, anchor="e",
+                         bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
+                cev = tk.StringVar(self.win, value=cfg.get('custom_endpoint', ''))
+                tk.Entry(cef, textvariable=cev, font=(self.FONT[0], 8), width=50,
+                        bg=self.C_SURFACE, fg=self.C_TEXT, insertbackground=self.C_TEXT).pack(side="left", padx=5)
+                setattr(self, f'_api_ce_{key}', cev)
+                tk.Label(cef, text="如 ep-xxx，留空则用默认", font=(self.FONT[0], 7),
+                         fg=self.C_MUTED, bg=self.C_BG).pack(side="left")
+
         def save_all():
             import json
             new_providers = {}
@@ -635,20 +751,27 @@ class SettingsUIMixin:
                     'model_history': history,
                     'endpoint': getattr(self, f'_api_ep_{key}').get().strip(),
                 }
+                # 豆包自定义推理接入点
+                if key == 'doubao':
+                    new_providers[key]['custom_endpoint'] = getattr(self, '_api_ce_doubao').get().strip()
                 # 刷新下拉列表
                 combo = getattr(self, f'_api_combo_{key}', None)
                 if combo:
                     combo['values'] = history
             sf = os.path.join(get_base_dir(), 'settings.json')
-            try: s = json.load(open(sf, 'r', encoding='utf-8'))
+            try: 
+                with open(sf, 'r', encoding='utf-8') as f:
+                    s = json.load(f)
             except: s = {}
             s['api'] = {
                 'active_provider': active_var.get(),
                 'providers': new_providers,
             }
-            json.dump(s, open(sf, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+            
+            with open(sf, 'w', encoding='utf-8') as f:
+                json.dump(s, f, ensure_ascii=False, indent=2)
             self._refresh_model_badge()
             self.status_text.set(f"API 配置已保存 — 当前: {PRESET_PROVIDERS[active_var.get()]['name']}")
 
-        tk.Button(parent, text="保存全部 API 配置", command=save_all,
+        tk.Button(parent, text="保存", command=save_all,
                   font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=18).pack(pady=12)
