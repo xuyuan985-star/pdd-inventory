@@ -90,7 +90,10 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    wb.save(path)
+    try:
+        wb.save(path)
+    except PermissionError:
+        raise PermissionError(f"无法保存 Excel 文件，请关闭已打开的 PDD补货记录.xlsx 后重试。\n文件路径: {path}")
     return path
 
 
@@ -142,11 +145,14 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    wb.save(path)
+    try:
+        wb.save(path)
+    except PermissionError:
+        raise PermissionError(f"无法保存 Excel 文件，请关闭已打开的 PDD补货记录.xlsx 后重试。\n文件路径: {path}")
     return path
 
 
-def export_plans_to_csv(plans: list, schedule: list, export_dir: str = None) -> str:
+def export_plans_to_csv(plans: list, export_dir: str = None) -> str:
     """CSV 降级导出（无 openpyxl 时使用）"""
     import csv
     if not export_dir:

@@ -56,7 +56,7 @@ def generate_schedule(plans: list) -> list:
     return schedule
 
 
-def export_results(plans: list, schedule: list, output_dir: str = None) -> str:
+def export_results(plans: list, output_dir: str = None) -> str:
     """导出到 PDD补货记录.xlsx，每次追加新sheet（时间戳命名）"""
     from export_xlsx import export_plans_to_xlsx
     return export_plans_to_xlsx(plans, output_dir)
@@ -70,7 +70,7 @@ def run_pipeline(order_csv: str, inv_csv: str, output_dir: str = None):
     schedule = generate_schedule(plans)
     if not output_dir:
         output_dir = os.path.join(get_base_dir(), 'output')
-    path = export_results(plans, schedule, output_dir)
+    path = export_results(plans, output_dir)
     print(f"\n[DONE] {path}")
     return path
 
