@@ -166,7 +166,18 @@ def ai_locate_elements(screenshot_path: str = None) -> dict:
     """
     AI 智能视觉定位：截图 → Vision API → 返回下拉框和查询按钮坐标。
     返回 {'dropdown': {x,y}, 'query': {x,y}, 'confidence': float, 'screen_width': int, 'screen_height': int}
-    失败返回 None。
+    失败返回 None（任何异常都不外抛，避免批量识别线程崩溃）。
+    """
+    try:
+        return _ai_locate_elements_impl(screenshot_path)
+    except Exception:
+        # 全部异常统一吞掉：API 结构异常、JSON 解析失败、网络错误等
+        return None
+
+
+def _ai_locate_elements_impl(screenshot_path: str = None) -> dict:
+    """
+    实际定位逻辑。所有异常由 ai_locate_elements() 包装层兜底。
     """
     import json as _json, base64 as _b64, io as _io, time as _time
     try:

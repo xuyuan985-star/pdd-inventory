@@ -245,11 +245,22 @@ def main():
                     print(f"[更新器] 已更新: {target_dir}")
                     shutil.rmtree(backup_dir, ignore_errors=True)
                 except Exception:
-                    # 回滚：逐文件从备份恢复
+                    # 回滚：先确保目标目录不存在（改名让位，避免 rmtree 失败残留导致恢复失败）
                     print("[更新器] 更新失败，正在回滚...")
                     if os.path.exists(target_dir):
-                        shutil.rmtree(target_dir, ignore_errors=True)
+                        try:
+                            shutil.rmtree(target_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+                        if os.path.exists(target_dir):
+                            # rmtree 失败（文件被占用）→ 改名让位，保证恢复路径干净
+                            stale = target_dir + "_stale_" + str(int(time.time()))
+                            try:
+                                os.rename(target_dir, stale)
+                            except Exception:
+                                print(f"[更新器] 警告: 无法清理残留目录 {target_dir}，回滚可能不完整")
                     if os.path.exists(backup_dir):
+                        rollback_skipped = 0
                         for root, dirs, files in os.walk(backup_dir):
                             rel = os.path.relpath(root, backup_dir)
                             dest = target_dir if rel == '.' else os.path.join(target_dir, rel)
@@ -258,7 +269,9 @@ def main():
                                 try:
                                     shutil.copy2(os.path.join(root, f), os.path.join(dest, f))
                                 except OSError:
-                                    pass
+                                    rollback_skipped += 1
+                        if rollback_skipped:
+                            print(f"[更新器] 回滚不完整：{rollback_skipped} 个文件被占用，请关闭占用程序后重试")
                         shutil.rmtree(backup_dir, ignore_errors=True)
                     print("[更新器] 已回滚至旧版本")
                     input("按回车退出...")

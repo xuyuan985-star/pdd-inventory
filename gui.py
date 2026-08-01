@@ -462,7 +462,8 @@ class App(SettingsUIMixin):
             self._build_api_page(page)
         if not hasattr(page, '_built'):
             page._built = True
-            self._apply_theme(self._theme_name)  # 仅新构建页面刷新
+        # 每次切页都重涂，保证主题切换后已访问页面颜色同步刷新
+        self._apply_theme(self._theme_name)
         self._refresh_model_badge()
 
     
@@ -1008,11 +1009,12 @@ class App(SettingsUIMixin):
             except ValueError:
                 stock = 0
             try:
-                sales = int(sales_s) if sales_s else 1
+                sales = int(sales_s) if sales_s else 0
             except ValueError:
-                sales = 1
+                sales = 0
             if stock > 0 or sales > 0:
-                items.append({'name': name, 'stock': stock, 'sales': max(sales, 1),
+                # 计算统一走 max(sales,1)，与 main.py 口径一致；空销量显示 0 而非 1
+                items.append({'name': name, 'stock': stock, 'sales': sales,
                              'region': self.region_var.get()})
         if not items:
             messagebox.showwarning("无数据", "请至少输入一个商品")
@@ -1169,6 +1171,15 @@ class App(SettingsUIMixin):
                             'screen_width': result['screen_width'],
                             'screen_height': result['screen_height'],
                         }
+                        _cal['mode'] = 'ai'
+                        # 原子写回 settings.json，持久化 AI 定位结果（下次启动直接复用缓存）
+                        try:
+                            from utils import Config as _Cfg
+                            _full = _Cfg.load() or {}
+                            _full['calibrate'] = _cal
+                            _Cfg.save(_full)
+                        except Exception:
+                            pass
                         dlog(f"AI 定位完成 置信度:{result['confidence']:.0%}")
                 except Exception:
                     pass  # 失败静默回退，用旧坐标继续
@@ -1282,7 +1293,7 @@ class App(SettingsUIMixin):
             except Exception as e:
                 dlog(f"✗ {e}")
         
-        # 发送结束信号
+        # 发送结束信号（for 内每地区已有 try-except 兜底；主线程另有 30 秒空闲超时收尾）
         result_queue.put(None)
         
         self.win.after(0, self.win.deiconify)
@@ -1290,8 +1301,11 @@ class App(SettingsUIMixin):
         self._poll_batch_queue(result_queue, success, total, total_items)
         if hud: time.sleep(1); self.win.after(0, hud.destroy)
     
-    def _poll_batch_queue(self, q, success, total, total_items):
-        """主线程每 100ms 轮询队列，逐批刷新 UI（避免一次性创建大量控件导致假死）"""
+    def _poll_batch_queue(self, q, success, total, total_items, idle=0):
+        """主线程每 100ms 轮询队列，逐批刷新 UI（避免一次性创建大量控件导致假死）。
+        idle 为『连续空闲』计数：收到新数据立即清零，连续 300 次空闲（=30 秒）
+        视为后台线程已异常终止，强制收尾——不会截断仍在正常产出的批量任务。"""
+        got_data = False
         try:
             while True:
                 items = q.get_nowait()
@@ -1300,10 +1314,16 @@ class App(SettingsUIMixin):
                     self.win.after(100, lambda: self._finish_batch(success, total, total_items))
                     return
                 self._fill_from_ocr(items)
+                got_data = True
         except Exception:
             pass  # 队列暂时空，继续轮询
         
-        self.win.after(100, lambda: self._poll_batch_queue(q, success, total, total_items))
+        idle = 0 if got_data else idle + 1
+        if idle >= 300:
+            # 后台线程可能已崩溃：强制收尾，避免死循环
+            self.win.after(100, lambda: self._finish_batch(success, total, total_items))
+            return
+        self.win.after(100, lambda: self._poll_batch_queue(q, success, total, total_items, idle))
     
     def _finish_batch(self, success, total, total_items):
         """批量识别收尾：恢复按钮 + 显示结果"""

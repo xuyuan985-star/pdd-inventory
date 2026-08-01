@@ -138,7 +138,11 @@ def capture_pdd_screenshot(output_path: str) -> bool:
 
     w, h = img.size
     sidebar = int(w * crop_cfg['left'])
-    img = img.crop((sidebar, int(h * crop_cfg['top']), w, h))
+    # 裁剪参数合法性校验：防止 left 过大导致宽度为 0，进而 resize 除零崩溃
+    sidebar = max(0, min(sidebar, w - 1))
+    top = int(h * crop_cfg['top'])
+    top = max(0, min(top, h - 1))
+    img = img.crop((sidebar, top, w, h))
     cw, ch = img.size  # 裁剪后尺寸
     if cw > 2560:
         img = img.resize((2560, int(ch * 2560 / cw)), PILImage.LANCZOS)
