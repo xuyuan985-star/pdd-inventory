@@ -156,12 +156,13 @@ def _validate_items(items: list) -> list:
     # 检查2 已移除：同名复读由 seen_names 去重拦截；
     # 「不同名但 stock/sales 全同」是同一系列 SKU 的真实场景，不再误杀。
     
-    # 检查3：商品名过短（<3字）或全是数字/符号 → 幻觉
+    # 检查3：商品名过短（<2字）或全是数字/符号 → 幻觉
+    # （2 字商品名如"苹果""大米"是合法业务数据，不误杀）
     valid_names = 0
     for it in cleaned:
         name = it['name']
         chinese_chars = sum(1 for c in name if '\u4e00' <= c <= '\u9fff')
-        if chinese_chars >= 2 and len(name) >= 3:
+        if chinese_chars >= 1 and len(name) >= 2:
             valid_names += 1
     if valid_names == 0 and len(cleaned) > 0:
         return []
