@@ -36,12 +36,16 @@ def _run(cmd: list) -> str:
         return ''
 
 
-def get_last_release_tag() -> str:
-    """获取最近一次 Release 对应的 tag（按版本号排序）"""
+def get_last_release_tag(exclude: str = '') -> str:
+    """获取最近一次 Release 对应的 tag（按版本号排序），排除当前构建版本"""
     tags = _run(['git', 'tag', '--sort=-version:refname'])
     if not tags:
         return ''
-    return tags.split('\n')[0]
+    for t in tags.split('\n'):
+        t = t.strip()
+        if t and t != exclude:
+            return t
+    return ''
 
 
 def get_changed_files_since(tag: str) -> set:
@@ -55,7 +59,7 @@ def get_changed_files_since(tag: str) -> set:
     return set(out.split('\n'))
 
 
-def get_changed_packages(changed_files: set) -> set:
+def get_changed_packages(changed_files: set, exclude_tag: str = '') -> set:
     """
     从变更文件列表中反推哪些 pip 包可能变了。
     规则：requirements.txt 变更 → 解析 diff 找出被改动的包名。
@@ -64,7 +68,7 @@ def get_changed_packages(changed_files: set) -> set:
         return set()
 
     # 获取 requirements.txt 从上次 tag 到现在的 diff
-    tag = get_last_release_tag()
+    tag = get_last_release_tag(exclude=exclude_tag)
     if not tag:
         return set(PIP_TO_INTERNAL.keys())  # 首次发布，全量
 
@@ -120,7 +124,9 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
     internal = os.path.join(onedir, '_internal')
 
     # ── 1. 确定变更范围 ──
-    tag = get_last_release_tag()
+    # 基准 = 最近一个『不是当前版本』的 tag（刚打 v1.2 tag 时不能拿自己当基准）
+    current_version = name.replace('PDD EZ ', '').strip()
+    tag = get_last_release_tag(exclude=current_version)
     changed_files = get_changed_files_since(tag)
 
     if force or not tag:
@@ -128,7 +134,7 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
         include_all = True
         changed_packages = set(PIP_TO_INTERNAL.keys())
     else:
-        changed_packages = get_changed_packages(changed_files)
+        changed_packages = get_changed_packages(changed_files, exclude_tag=current_version)
         include_all = False
         print(f"[增量打包] 基准 tag: {tag}")
         print(f"[增量打包] 变更文件: {len(changed_files)} 个")
