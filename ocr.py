@@ -319,6 +319,18 @@ def _validate_items(items: list) -> list:
             if '查看' not in t and it.get('stock', 0) > 0:
                 it['stock'] = 0
     
+    # x 坐标左偏检测（不依赖模型是否抄「查看」链接）：
+    # PDD 表格列固定——仓库销售库存 | 仓库总库存 相邻，仓库销售库存在左。
+    # 若模型把 0 库存行读成左列（仓库销售库存），其 stock_x 会明显偏左于列中位数。
+    _sx_vals = [it.get('stock_x') for it in cleaned if it.get('stock_x') is not None]
+    if len(_sx_vals) >= 3:
+        _med_sx = sorted(_sx_vals)[len(_sx_vals) // 2]
+        for it in cleaned:
+            sx = it.get('stock_x')
+            # 左偏超过列间距的一半（约 0.06 比例）且该行 stock 非 0 → 读成左列，修正 0
+            if sx is not None and it.get('stock', 0) > 0 and sx < _med_sx - 0.06:
+                it['stock'] = 0
+    
     # 清理内部字段，保持下游接口 {name, stock, sales, region}
     for it in cleaned:
         it.pop('index', None)
