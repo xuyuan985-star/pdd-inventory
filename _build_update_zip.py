@@ -143,8 +143,10 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
     templates_changed = include_all or any(
         f.startswith('templates/') for f in changed_files
     )
+    # 注意：settings.json 是用户本机配置（含 API key/账号密码），
+    # 绝不进更新包——更新会覆盖用户配置并泄露开发机凭据
     resources_changed = include_all or any(
-        f in changed_files for f in ('icon.ico', 'settings.json', 'regions.json')
+        f in changed_files for f in ('icon.ico', 'regions.json')
     )
 
     # ── 2. 确定需要打包的 _internal 目录 ──
@@ -175,10 +177,10 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
             added += 1
             print(f"  + {os.path.basename(exe)}")
 
-        # 更新器 EXE（仅源码变更时）
+        # 更新器 EXE（仅源码变更时）— 放入 name/ 目录，与 updater.py 自升级查找逻辑一致
         updater_exe = os.path.join(dist_parent, 'PDD EZ Updater.exe')
         if os.path.exists(updater_exe) and updater_changed:
-            zf.write(updater_exe, os.path.basename(updater_exe))
+            zf.write(updater_exe, os.path.join(name, os.path.basename(updater_exe)))
             added += 1
             print(f"  + {os.path.basename(updater_exe)}")
 

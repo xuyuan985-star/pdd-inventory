@@ -161,7 +161,9 @@ def main():
     # 下载到临时目录
     tmp = os.path.join(tempfile.gettempdir(), "pdd_update")
     os.makedirs(tmp, exist_ok=True)
-    new_exe = os.path.join(tmp, exe_asset["name"])
+    # 文件名消毒：仅取 basename，防 GitHub asset 名含 ..\ 路径遍历写文件
+    asset_name = os.path.basename(exe_asset["name"].replace('\\', '/'))
+    new_exe = os.path.join(tmp, asset_name)
     
     if not download_asset(exe_asset, new_exe)[0]:
         print("[更新器] 下载失败")
@@ -229,7 +231,7 @@ def main():
                 item_path = os.path.join(extract_dir, item)
                 if os.path.isdir(item_path) and item.startswith("PDD EZ"):
                     new_dir = item_path; break
-                elif item.endswith(".exe") and "PDD" in item:
+                elif item.endswith(".exe") and "PDD" in item and "updater" not in item.lower():
                     single_exe = item_path
             if new_dir:
                 print("[更新器] 覆盖程序文件夹...")
@@ -295,7 +297,10 @@ def main():
                         if rollback_skipped:
                             print(f"[更新器] 回滚不完整：{rollback_skipped} 个文件被占用，请关闭占用程序后重试")
                         shutil.rmtree(backup_dir, ignore_errors=True)
-                    print("[更新器] 已回滚至旧版本")
+                    if os.path.exists(backup_dir) and not os.path.exists(target_dir):
+                        print("[更新器] 已回滚至旧版本")
+                    else:
+                        print("[更新器] 回滚未完成：目标目录仍残留或备份不存在，请手动检查")
                     input("按回车退出...")
                     return
             elif single_exe:
@@ -319,7 +324,9 @@ def main():
                 shutil.copy2(fp, new_updater)
                 # 写 bat 脚本等待当前进程退出后替换
                 # bat 路径转义：路径中的 " 用 "" 转义，% 用 %% 转义，防命令注入/语法错误
-                bat = os.path.join(tempfile.gettempdir(), "update_updater.bat")
+                # 用 mkstemp 随机文件名，防固定路径 TOCTOU（低权限进程替换 bat 提权）
+                _fd, bat = tempfile.mkstemp(prefix="pdd_upd_", suffix=".bat", dir=tempfile.gettempdir())
+                os.close(_fd)
                 _nu_esc = new_updater.replace('"', '""').replace('%', '%%')
                 _mp_esc = my_path.replace('"', '""').replace('%', '%%')
                 with open(bat, 'w') as bf:
