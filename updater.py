@@ -318,7 +318,10 @@ def main():
                 new_updater = os.path.join(os.path.dirname(my_path), "updater.exe.new")
                 shutil.copy2(fp, new_updater)
                 # 写 bat 脚本等待当前进程退出后替换
+                # bat 路径转义：路径中的 " 用 "" 转义，% 用 %% 转义，防命令注入/语法错误
                 bat = os.path.join(tempfile.gettempdir(), "update_updater.bat")
+                _nu_esc = new_updater.replace('"', '""').replace('%', '%%')
+                _mp_esc = my_path.replace('"', '""').replace('%', '%%')
                 with open(bat, 'w') as bf:
                     bf.write(f'''@echo off
 set cnt=0
@@ -326,10 +329,10 @@ set cnt=0
 timeout /t 1 /nobreak >nul
 set /a cnt+=1
 if %cnt% geq 30 goto :done
-if exist "{new_updater}" (
-    move /y "{new_updater}" "{my_path}"
-    if not exist "{new_updater}" (
-        start "" "{my_path}" --resume-update
+if exist "{_nu_esc}" (
+    move /y "{_nu_esc}" "{_mp_esc}"
+    if not exist "{_nu_esc}" (
+        start "" "{_mp_esc}" --resume-update
         goto :done
     )
 )
@@ -349,13 +352,17 @@ def _do_replace(src, target):
                 os.remove(old)
             except PermissionError:
                 import ctypes
-                ctypes.windll.kernel32.MoveFileExW(old, None, 4)
+                ok = ctypes.windll.kernel32.MoveFileExW(old, None, 4)
+                if not ok:
+                    print(f"[更新器] 警告: 无法删除旧文件 {old}，请手动清理（或重启后自动清理）")
         os.rename(target, old)
         try:
             os.remove(old)  # 主程序已退出，句柄应释放
         except PermissionError:
             import ctypes
-            ctypes.windll.kernel32.MoveFileExW(old, None, 4)
+            ok = ctypes.windll.kernel32.MoveFileExW(old, None, 4)
+            if not ok:
+                print(f"[更新器] 警告: 无法删除旧文件 {old}，请手动清理（或重启后自动清理）")
     try:
         shutil.copy2(src, target)
         print(f"[更新器] 已更新: {target}")

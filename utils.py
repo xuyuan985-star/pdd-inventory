@@ -11,11 +11,17 @@ EXE_NAME = f"PDD EZ {VERSION}.exe"
 def version_newer(remote: str, local: str) -> bool:
     """比较两个 vX.Y[.Z] 格式的版本号，返回 remote > local"""
     def _parse(v):
-        # 去掉前缀 v/V，按 . 拆分转整数元组
+        # 去掉前缀 v/V，按 . 拆分转整数列表
         v = v.lstrip('vV')
-        return tuple(int(x) for x in v.split('.') if x.isdigit())
+        return [int(x) for x in v.split('.') if x.isdigit()]
     try:
-        return _parse(remote) > _parse(local)
+        r = _parse(remote)
+        l = _parse(local)
+        # 补齐到相同长度：v1.1 vs v1.1.0 → [1,1,0] vs [1,1,0]，避免元组长度比较误判
+        n = max(len(r), len(l))
+        r += [0] * (n - len(r))
+        l += [0] * (n - len(l))
+        return tuple(r) > tuple(l)
     except Exception:
         return remote != local  # fallback: 不相等即视为更新
 
