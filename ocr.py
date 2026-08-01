@@ -54,6 +54,10 @@ def _clean_json(text: str) -> str:
     return text
 
 
+# 全角→半角映射常量（模块级缓存，避免 _parse_num_text 每次调用重建）
+_FULLWIDTH_TRANS = str.maketrans('０１２３４５６７８９．', '0123456789.')
+
+
 def _parse_num_text(v) -> int:
     """
     从单元格原始文字解析整数。
@@ -65,7 +69,7 @@ def _parse_num_text(v) -> int:
     if not s or s.lower() in ('none', 'null', 'nan', '-', '--', '/', '统计中', '查看', '暂无', '无'):
         return 0
     # 全角数字 → 半角
-    s = s.translate(str.maketrans('０１２３４５６７８９．', '0123456789.'))
+    s = s.translate(_FULLWIDTH_TRANS)
     # 去千分位
     s = s.replace(',', '').replace('，', '')
     m = re.search(r'-?\d+(?:\.\d+)?', s)
@@ -201,7 +205,7 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
         if not endpoint:
             endpoint = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
         # 根据 endpoint 判断 API 类型，而非模型名
-        use_responses = ('responses' in endpoint)
+        use_responses = ('responses' in endpoint.lower())
         if use_responses:
             # 模型名优先；custom_endpoint（ep-xxx 推理接入点）仅当未填模型名时兜底，
             # 避免过期的接入点 ID 顶掉用户配置的模型名
@@ -241,16 +245,19 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
 
     for attempt, mdl in enumerate(models):
         # 如果fallback是智谱模型但当前走的是阿里/豆包端点，切换endpoint + 格式
+        # 模型名/端点判断统一小写化，避免用户配 "GLM-4V-Flash"/"Responses" 时匹配失败
         cur_endpoint = endpoint
         cur_key = key
         cur_responses = use_responses
-        if 'glm' in mdl and 'dashscope' in cur_endpoint:
+        mdl_l = mdl.lower()
+        ep_l = cur_endpoint.lower()
+        if 'glm' in mdl_l and 'dashscope' in ep_l:
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
             if not cur_key:
                 continue
             cur_responses = False
-        elif 'glm' in mdl and ('ark' in cur_endpoint or 'responses' in cur_endpoint):
+        elif 'glm' in mdl_l and ('ark' in ep_l or 'responses' in ep_l):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
             if not cur_key:

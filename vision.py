@@ -170,8 +170,12 @@ def ai_locate_elements(screenshot_path: str = None) -> dict:
     """
     try:
         return _ai_locate_elements_impl(screenshot_path)
-    except Exception:
-        # 全部异常统一吞掉：API 结构异常、JSON 解析失败、网络错误等
+    except Exception as e:
+        # 全部异常统一吞掉：API 结构异常、JSON 解析失败、网络错误等。
+        # 打印调试信息，便于区分网络 / Key / 返回格式问题
+        import traceback
+        traceback.print_exc()
+        print(f"[AI定位] 失败: {e}")
         return None
 
 

@@ -996,13 +996,15 @@ class App(SettingsUIMixin):
         self.tree.delete(*self.tree.get_children())
     
     def _recalc_from_rows(self):
-        """从当前输入行读取数据，重新计算"""
+        """从当前输入行读取数据，重新计算（name 非空即保留，包括售罄/零数据商品）"""
         items = []
+        skipped = 0
         for r in self.rows:
             name = r['name'].get().strip()
             stock_s = r['stock'].get().strip()
             sales_s = r['sales'].get().strip()
             if not name:
+                skipped += 1
                 continue
             try:
                 stock = int(stock_s) if stock_s else 0
@@ -1012,15 +1014,16 @@ class App(SettingsUIMixin):
                 sales = int(sales_s) if sales_s else 0
             except ValueError:
                 sales = 0
-            if stock > 0 or sales > 0:
-                # 计算统一走 max(sales,1)，与 main.py 口径一致；空销量显示 0 而非 1
-                items.append({'name': name, 'stock': stock, 'sales': sales,
-                             'region': self.region_var.get()})
+            items.append({'name': name, 'stock': stock, 'sales': sales,
+                         'region': self.region_var.get()})
         if not items:
             messagebox.showwarning("无数据", "请至少输入一个商品")
             return
         self._calc_from_items(items)
-        self.status_text.set(f"已刷新 — {len(items)} 个商品")
+        msg = f"已刷新 — {len(items)} 个商品"
+        if skipped:
+            msg += f"（已跳过 {skipped} 个空行）"
+        self.status_text.set(msg)
     
     def _emergency_stop(self):
         """F9 紧急停止批量识别"""
@@ -1331,6 +1334,9 @@ class App(SettingsUIMixin):
         self.status_text.set("就绪 — 批量识别完成")
         if success > 0:
             messagebox.showinfo("批量识别完成", f"成功 {success}/{total} 地区\n合计 {total_items} 商品")
+        else:
+            messagebox.showwarning("批量识别失败",
+                                   "未成功识别任何地区\n\n请检查：\n1. 网络是否正常\n2. API Key / 模型配置\n3. PDD 页面是否在前台显示")
     
     def _live_screenshot(self):
         """即时截图：最小化窗口 → 立刻截全屏 → OCR → 恢复"""
