@@ -10,6 +10,30 @@ import requests
 from utils import get_api_config, get_base_dir
 
 
+def _prep_image_b64(image_path: str, max_side: int = 1600, quality: int = 85) -> str:
+    """
+    统一图片预处理：长边缩放 + JPEG 压缩 → base64。
+    所有提供商/模型共用，避免 doubao 压 1280 而 qwen/glm 直传原图的不一致。
+    """
+    try:
+        from PIL import Image as PILImg
+        import io as _io
+        _img = PILImg.open(image_path)
+        if _img.mode != 'RGB':
+            _img = _img.convert('RGB')
+        _w, _h = _img.size
+        _r = max_side / max(_w, _h)
+        if _r < 1:
+            _img = _img.resize((int(_w * _r), int(_h * _r)), PILImg.LANCZOS)
+        _buf = _io.BytesIO()
+        _img.save(_buf, format='JPEG', quality=quality)
+        return base64.b64encode(_buf.getvalue()).decode()
+    except Exception:
+        # 预处理失败则回退原图
+        with open(image_path, 'rb') as f:
+            return base64.b64encode(f.read()).decode()
+
+
 def _clean_json(text: str) -> str:
     """从OCR回复中提取纯JSON"""
     text = text.strip()
@@ -30,8 +54,39 @@ def _clean_json(text: str) -> str:
     return text
 
 
+def _parse_num_text(v) -> int:
+    """
+    从单元格原始文字解析整数。
+    "100份 查看"→100, "1,234"→1234, "1.5万"→15000, "统计中"→0
+    返回 int；解析失败返回 0。
+    """
+    import re
+    s = str(v).strip()
+    if not s or s.lower() in ('none', 'null', 'nan', '-', '--', '/', '统计中', '查看', '暂无', '无'):
+        return 0
+    # 全角数字 → 半角
+    s = s.translate(str.maketrans('０１２３４５６７８９．', '0123456789.'))
+    # 去千分位
+    s = s.replace(',', '').replace('，', '')
+    m = re.search(r'-?\d+(?:\.\d+)?', s)
+    if not m:
+        return 0
+    num = float(m.group())
+    # 单位换算
+    if '万' in s:
+        num *= 10000
+    elif '千' in s:
+        num *= 1000
+    elif '亿' in s:
+        num *= 100000000
+    return int(round(num))
+
+
 def _validate_items(items: list) -> list:
-    """验证并修正OCR结果"""
+    """验证并修正OCR结果。兼容两种格式：
+    新格式 {"name","stock_text","sales_text","region","index"}
+    旧格式 {"name","stock","sales","region"}
+    """
     # 防御：API 偶尔返回 {"items":[...]} 之类的 dict 结构
     if isinstance(items, dict):
         for k in ('items', 'data', 'results', 'list'):
@@ -43,28 +98,41 @@ def _validate_items(items: list) -> list:
     if not isinstance(items, list):
         return []
     cleaned = []
+    seen_names = set()  # 去重：同名商品只保留第一条
     for item in items:
         # 防御：模型返回 null 时 Python 解析为 None，转 str 会变成 "None"
         name = item.get('name')
         name = '' if name is None or str(name).strip().lower() in ('none', 'null', '') else str(name).strip()
         if not name:
             continue
-        # 数字清洗：去单位（份、件、个等）
-        def _clean_num(v):
-            import re
-            s = str(v).strip()
-            m = re.search(r'[\d.]+', s)
-            return float(m.group()) if m else 0.0
-        try: stock = int(_clean_num(item.get('stock', 0)))
-        except (ValueError, TypeError): stock = 0
-        try: sales = int(_clean_num(item.get('sales', 0)))
-        except (ValueError, TypeError): sales = 0
+        # 数字：优先解析原始文字（新格式），回退旧格式数字字段
+        stock = _parse_num_text(item.get('stock_text', item.get('stock', 0)))
+        sales = _parse_num_text(item.get('sales_text', item.get('sales', 0)))
         region = item.get('region')
         region = '' if region is None or str(region).strip().lower() in ('none', 'null', '') else str(region).strip()
-        cleaned.append({'name': name, 'stock': stock, 'sales': sales, 'region': region})
+        # 去重：完全同名
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        # 数值合理性：超过 99999999 视为读错位数，置 0
+        if stock > 99999999 or stock < 0:
+            stock = 0
+        if sales > 99999999 or sales < 0:
+            sales = 0
+        cleaned.append({'name': name, 'stock': stock, 'sales': sales, 'region': region,
+                        'index': item.get('index')})
     
     if not cleaned:
         return []
+    
+    # 按模型给的 index 恢复表格顺序（防御模型乱序输出；兼容字符串行号）
+    def _index_key(it):
+        try:
+            return int(it.get('index'))
+        except (TypeError, ValueError):
+            return 99999
+    if any(_index_key(it) != 99999 for it in cleaned):
+        cleaned.sort(key=_index_key)
     
     # ── 幻觉数据过滤器 ──
     KNOWN_REGIONS = {'云南','广东','浙江','北京','上海','江苏','山东','四川','湖北','湖南','河南','河北',
@@ -108,6 +176,10 @@ def _validate_items(items: list) -> list:
         if sa > 0 and s > sa * 20:
             it['stock'] = 0
     
+    # 清理内部字段，保持下游接口 {name, stock, sales, region}
+    for it in cleaned:
+        it.pop('index', None)
+    
     return cleaned
 
 
@@ -115,8 +187,7 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
     """
     识别 PDD 后台截图。根据 settings 中提供商配置选择 API。
     """
-    with open(image_path, 'rb') as f:
-        img_b64 = base64.b64encode(f.read()).decode()
+    img_b64 = _prep_image_b64(image_path)
 
     api_cfg = get_api_config()
     active = api_cfg.get('active_provider', 'doubao')
@@ -142,20 +213,6 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
             custom_ep = provider.get('custom_endpoint', '')
             fallback = custom_ep or model_name
             models = [m for m in [fallback, 'glm-4v-flash'] if m and m.strip()]
-            # 图片预处理：1280px JPEG 压缩
-            try:
-                from PIL import Image as PILImg
-                import io as _io
-                _img = PILImg.open(image_path)
-                _w, _h = _img.size
-                _r = 1280 / max(_w, _h)
-                if _r < 1:
-                    _img = _img.resize((int(_w*_r), int(_h*_r)), PILImg.LANCZOS)
-                _buf = _io.BytesIO()
-                _img.save(_buf, format='JPEG', quality=75)
-                img_b64 = base64.b64encode(_buf.getvalue()).decode()
-            except Exception:
-                pass
         else:
             models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()]
     elif active == 'qwen':
@@ -167,23 +224,24 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
             endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
         models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()] if model_name else ['glm-4v-flash']
 
-    # 统一提示词 — 所有模型用同一套详细版
-    prompt = """你现在处理的是软件截图内的竖向表格，执行流程：
-1. 第一步：版面分析，识别表格表头、独立商品行、单元格边界；自动过滤侧边菜单、按钮文字、时间、价格、"查看""统计中""更新记录"等所有无关干扰文字。
-2. 第二步：按规则匹配字段，每行商品生成一条对象，输出标准JSON数组：
-字段规则：
-- name：商品名称，无则填null
-- stock：仓库总库存。在表格中，该列位于「仓库销售库存」的右侧、「仓库预估总销售数」的左侧。只读取表头文字完全等于「仓库总库存」的那一列。该列数据通常显示为「X份 查看」格式，提取时只取数字，忽略「查看」二字，无数值填0。如果某列的数据后面跟着「查看」链接，确认这是「仓库总库存」列；如果某列是纯数字（如 10000份），不要读取。
-- sales：仓库预估总销售数，只取表头为「仓库预估总销售数」的列，只提取纯数字，文本带"份"自动剔除单位，无数值填0
-- region：省份名称（山东/云南这类），表格无省份列统一填null
-异常兜底：
-1. 单元格文字为"统计中"等非数字内容，stock/sales统一填0；
-2. 当前图片无目标订货表格、无有效商品数据，仅输出[]，禁止额外文字解释；
-3. 仓库总库存为0是真实业务数据，如实提取0即可
-格式强制要求：
-1. 仅输出纯净JSON，不要任何前置/后置说明、注释、换行描述；
-2. stock、sales字段必须为数字类型，不能是字符串；
-3. 严格按行匹配：同一行商品的库存、预估销量必须绑定本行，禁止跨行列错位匹配；"""
+    # 统一提示词 — 抄写原文，不做语义转换；index 锚定行顺序
+    prompt = """你是数据录入员，识别图中 PDD 后台订货表格。表格为竖向列表，每行一个商品。
+
+版面说明：
+- 表头行包含：商品名称、仓库总库存、仓库预估总销售数、省份（部分截图无省份列）
+- 商品名称：文字较长的一列，原样抄写
+- 仓库总库存：单元格文字形如「100份 查看」，数字后带「份」和「查看」链接
+- 仓库预估总销售数：纯数字列，可能带单位「份」或千分位，如 1234 或 1,234
+- 省份：有省份列则抄写省份名（如 山东），无省份列填 null
+
+输出要求：
+1. 严格按表格从上到下的顺序，逐行输出，一行不漏、不重复、不合并
+2. 每行输出一个 JSON 对象：
+   {"index": 行号从1开始, "name": "商品名", "stock_text": "库存单元格原始文字", "sales_text": "销量单元格原始文字", "region": "省份名或null"}
+3. stock_text / sales_text 必须原样抄写单元格里的全部文字（如 "100份 查看"、"1,234"），不要自己转换数字、不要去掉单位
+4. 无法识别的单元格填 null，不要编造
+5. 整张截图没有订货表格、无有效商品数据时只输出 []
+6. 只输出 JSON 数组，不要任何解释文字"""
     max_tok = 1024
 
     for attempt, mdl in enumerate(models):
@@ -246,15 +304,17 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
             clean = _clean_json(content)
             items = json.loads(clean)
             validated = _validate_items(items)
-            # qwen3.5-omni-flash 返回字段名兼容
+            # qwen3.5-omni-flash 等模型字段名兼容：映射到统一字段后重新校验
             if not validated and isinstance(items, list):
                 for it in items:
-                    if 'goods_name' in it:
-                        it['name'] = it.get('goods_name', it.get('name', ''))
-                    if 'sales_volume' in it:
-                        it['sales'] = it.get('sales_volume', it.get('sales', 0))
-                    if 'area' in it:
-                        it['region'] = it.get('area', it.get('region', ''))
+                    if 'goods_name' in it and 'name' not in it:
+                        it['name'] = it.get('goods_name', '')
+                    if 'sales_volume' in it and 'sales_text' not in it:
+                        it['sales_text'] = it.get('sales_volume', '')
+                    if 'stock' in it and 'stock_text' not in it:
+                        it['stock_text'] = it.get('stock', '')
+                    if 'area' in it and 'region' not in it:
+                        it['region'] = it.get('area', '')
                 validated = _validate_items(items)
             
             if validated:
