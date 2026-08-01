@@ -18,7 +18,9 @@ def _prep_image_b64(image_path: str, max_side: int = 1600, quality: int = 85) ->
     try:
         from PIL import Image as PILImg
         import io as _io
-        _img = PILImg.open(image_path)
+        # 自适应表格裁剪：检测到表格区域则用裁剪图（更纯净、数字更大），失败回退原图
+        cropped = auto_crop_table(image_path)
+        _img = cropped if cropped is not None else PILImg.open(image_path)
         if _img.mode != 'RGB':
             _img = _img.convert('RGB')
         _w, _h = _img.size
@@ -58,6 +60,75 @@ def _clean_json(text: str) -> str:
 _FULLWIDTH_TRANS = str.maketrans('０１２３４５６７８９．', '0123456789.')
 
 
+def auto_crop_table(image_path: str):
+    """
+    自适应表格检测：用 OpenCV 检测 PDD 订货表格区域。
+    返回裁剪后的 PIL Image；检测失败或无 cv2 时返回 None（调用方回退原图）。
+    原理：表格行分隔线是横向贯穿线，二值化+形态学后行投影最密集的连续区域即表格主体。
+    """
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image as PILImg
+    except ImportError:
+        return None
+
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return None
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+
+        # 二值化：反色让表格线变白
+        _, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+
+        # 横向贯穿线检测（表格行分隔线）
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(40, w // 25), 1))
+        h_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
+
+        # 行投影：统计每行的横线像素数
+        h_proj = np.sum(h_lines > 0, axis=1)
+        line_threshold = max(10, w // 8)  # 横线至少覆盖 1/8 宽度才算分隔线
+        line_rows = np.where(h_proj > line_threshold)[0]
+        if len(line_rows) < 3:
+            return None  # 横线太少，不是表格
+
+        # 聚类：相邻分隔线差距 <= 60px 视为同一表格
+        groups = []
+        cur = [line_rows[0]]
+        for r in line_rows[1:]:
+            if r - cur[-1] <= 60:
+                cur.append(r)
+            else:
+                groups.append(cur)
+                cur = [r]
+        groups.append(cur)
+        # 取最长的连续分隔线组（表格主体通常分隔线最多）
+        best = max(groups, key=len)
+        if len(best) < 3:
+            return None
+        y_top = max(0, int(best[0]) - 10)
+        y_bottom = min(h, int(best[-1]) + 10)
+
+        # x 范围：取该区域内横线的水平覆盖范围（贯穿线的端点即表格左右边界）
+        region = h_lines[y_top:y_bottom, :]
+        cols = np.where(np.sum(region > 0, axis=0) > 0)[0]
+        if len(cols) < w // 4:
+            return None
+        x_left = max(0, int(cols[0]) - 20)
+        x_right = min(w, int(cols[-1]) + 20)
+
+        # 区域过小（< 原图 1/4 高度）视为误检
+        if (y_bottom - y_top) < h // 4 or (x_right - x_left) < w // 4:
+            return None
+
+        pil = PILImg.open(image_path)
+        return pil.crop((x_left, y_top, x_right, y_bottom))
+    except Exception:
+        return None
+
+
 def _parse_num_text(v) -> int:
     """
     从单元格原始文字解析整数。
@@ -88,6 +159,44 @@ def _parse_num_text(v) -> int:
         num *= 1000
     # '+' 后缀（如 "100+"）和 约/近/共 前缀不需要额外处理，数字已提取
     return int(round(num))
+
+
+def align_columns(items: list) -> list:
+    """
+    列对齐后处理：用模型返回的 stock_x/sales_x（相对整图宽度比例）校验列错位。
+    同一列（如 stock 列）所有行的 x 比例应接近（方差小）；若某行 x 明显偏离
+    该列中位数，且与另一列更接近，则判定为列错位并交换该行的 stock/sales。
+    模型未返回 x 坐标（全部为 None）时原样返回。
+    """
+    if not items:
+        return items
+    stock_xs = [it.get('stock_x') for it in items]
+    sales_xs = [it.get('sales_x') for it in items]
+    if not any(x is not None for x in stock_xs + sales_xs):
+        return items  # 无坐标信息，跳过
+
+    def _median(vals):
+        vs = sorted(v for v in vals if v is not None)
+        if not vs:
+            return None
+        n = len(vs)
+        return vs[n // 2] if n % 2 else (vs[n // 2 - 1] + vs[n // 2]) / 2
+
+    med_stock = _median(stock_xs)
+    med_sales = _median(sales_xs)
+    if med_stock is None or med_sales is None:
+        return items
+
+    for it in items:
+        sx = it.get('stock_x')
+        lx = it.get('sales_x')
+        if sx is None or lx is None:
+            continue
+        # 若该行 stock_x 更接近 sales 列中位数、且 sales_x 更接近 stock 列中位数 → 列错位，交换
+        if (abs(sx - med_sales) < abs(sx - med_stock)
+                and abs(lx - med_stock) < abs(lx - med_sales)):
+            it['stock'], it['sales'] = it['sales'], it['stock']
+    return items
 
 
 def _validate_items(items: list) -> list:
@@ -128,7 +237,8 @@ def _validate_items(items: list) -> list:
         if sales > 99999999 or sales < 0:
             sales = 0
         cleaned.append({'name': name, 'stock': stock, 'sales': sales, 'region': region,
-                        'index': item.get('index')})
+                        'index': item.get('index'),
+                        'stock_x': item.get('stock_x'), 'sales_x': item.get('sales_x')})
     
     if not cleaned:
         return []
@@ -181,6 +291,14 @@ def _validate_items(items: list) -> list:
     # 清理内部字段，保持下游接口 {name, stock, sales, region}
     for it in cleaned:
         it.pop('index', None)
+    
+    # 列对齐校验：用 stock_x/sales_x 检测并修正列错位（模型未返回坐标时原样返回）
+    cleaned = align_columns(cleaned)
+    
+    # 清理 x 坐标字段，保持下游接口纯净
+    for it in cleaned:
+        it.pop('stock_x', None)
+        it.pop('sales_x', None)
     
     return cleaned
 
@@ -241,15 +359,16 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
 输出要求：
 1. 严格按表格从上到下的顺序，逐行输出，一行不漏、不重复、不合并
 2. 每行输出一个 JSON 对象：
-   {"index": 行号从1开始, "name": "商品名", "stock_text": "库存单元格原始文字", "sales_text": "销量单元格原始文字", "region": "省份名或null"}
+   {"index": 行号从1开始, "name": "商品名", "stock_text": "库存单元格原始文字", "sales_text": "销量单元格原始文字", "region": "省份名或null", "stock_x": 库存数字中心相对整图宽度的比例, "sales_x": 销量数字中心相对整图宽度的比例}
 3. stock_text / sales_text 必须原样抄写单元格里的全部文字（如 "100份 查看"、"1,234"），不要自己转换数字、不要去掉单位
-4. 无法识别的单元格填 null，不要编造
-5. 整张截图没有订货表格、无有效商品数据时只输出 []
-6. 只输出 JSON 数组，不要任何解释文字
+4. stock_x / sales_x 是 0~1 之间的小数（如 0.62），表示该数字水平位置；无法确定时填 null
+5. 无法识别的单元格填 null，不要编造
+6. 整张截图没有订货表格、无有效商品数据时只输出 []
+7. 只输出 JSON 数组，不要任何解释文字
 
 示例（仅示意格式，不是真实数据）：
-[{"index": 1, "name": "新疆灰枣500g", "stock_text": "128份 查看", "sales_text": "1,234", "region": "新疆"},
- {"index": 2, "name": "云南普洱饼茶357g", "stock_text": "0份 查看", "sales_text": "0", "region": "云南"}]"""
+[{"index": 1, "name": "新疆灰枣500g", "stock_text": "128份 查看", "sales_text": "1,234", "region": "新疆", "stock_x": 0.62, "sales_x": 0.78},
+ {"index": 2, "name": "云南普洱饼茶357g", "stock_text": "0份 查看", "sales_text": "0", "region": "云南", "stock_x": 0.62, "sales_x": 0.78}]"""
     max_tok = 1024
 
     for attempt, mdl in enumerate(models):
@@ -379,3 +498,46 @@ if __name__ == '__main__':
     schedule = generate_schedule(plans)
     path = export_results(plans, os.path.join(get_base_dir(), 'output'))
     print(f'\n导出: {path}')
+
+
+def ocr_dual_verify(image_path: str, secondary_model: str = 'glm-4v-flash') -> list:
+    """
+    双模型交叉验证：主模型 + 副模型双路 OCR，按 name 匹配比较 stock/sales。
+    对差异 >30% 的字段标记 _low_confidence=True（供 UI 标红提示），
+    stock 保守取两模型较大值（库存宁可多看，避免漏补）。
+    返回主模型结果（带 _low_confidence 标记），副模型失败时回退主模型结果。
+    """
+    primary = ocr_screenshot(image_path)
+    if not primary:
+        return primary
+
+    try:
+        secondary = ocr_screenshot(image_path, forced_model=secondary_model)
+    except Exception:
+        return primary  # 副模型失败（无 Key/网络），回退单模型结果
+
+    if not secondary:
+        return primary
+
+    # 按 name 建立副模型索引（去空白归一化）
+    def _norm(n):
+        return str(n).replace(' ', '').lower()
+    sec_by_name = {}
+    for it in secondary:
+        key = _norm(it.get('name'))
+        if key and key not in sec_by_name:
+            sec_by_name[key] = it
+
+    for item in primary:
+        match = sec_by_name.get(_norm(item.get('name')))
+        if not match:
+            continue
+        # 字段差异 >30% → 标记待复核；stock 保守取大
+        for field in ('stock', 'sales'):
+            a, b = item.get(field, 0), match.get(field, 0)
+            denom = max(b, 1)
+            if abs(a - b) / denom > 0.3:
+                item['_low_confidence'] = True
+                if field == 'stock':
+                    item['stock'] = max(a, b)
+    return primary
