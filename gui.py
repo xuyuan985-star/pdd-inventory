@@ -1092,6 +1092,8 @@ class App(SettingsUIMixin):
                                font=(self.FONT[0], 8), bg=self.C_SURFACE, fg=self.C_TEXT,
                                selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE)
             cb.pack(anchor="w", padx=8, pady=1)
+            # 复选框也绑定滚轮，鼠标悬停在选项上时也能滚动列表
+            cb.bind("<MouseWheel>", _on_mousewheel)
         
         def start_batch():
             selected = [r for r, v in vars_map.items() if v.get()]
@@ -1130,10 +1132,20 @@ class App(SettingsUIMixin):
     
     def _run_batch_sequence(self, regions, hud=None, hud_text=None):
         """批量识别：1.点文本框 2.粘贴省份 3.回车 4.点查询 5.等4秒 6.截图识别"""
-        import time, pyautogui, pyperclip, threading
-        from vision import locate_element
-        from ocr import ocr_screenshot_crosscheck as ocr_screenshot
-        from PIL import Image as PILImage
+        import time, threading, queue
+        result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
+        try:
+            import pyautogui, pyperclip
+            from vision import locate_element
+            from ocr import ocr_screenshot_crosscheck as ocr_screenshot
+            from PIL import Image as PILImage
+        except ImportError as e:
+            # 顶层依赖缺失：立即通知主线程收尾，避免用户白等 30 秒超时
+            self.win.after(0, lambda: self.status_text.set(f"❌ 依赖缺失: {e}"))
+            self.win.after(0, self.win.deiconify)
+            result_queue.put(None)
+            self.win.after(0, lambda: self._finish_batch(0, len(regions), 0))
+            return
         
         def dlog(msg):
             if hud_text:
@@ -1143,8 +1155,6 @@ class App(SettingsUIMixin):
         self.win.after(0, self.win.iconify); time.sleep(1.5)
         self._batch_stop.clear()
         total = len(regions); success = 0; total_items = 0
-        import queue
-        result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
         def ss(path):
             from utils import capture_pdd_screenshot
             capture_pdd_screenshot(path)
@@ -1252,7 +1262,10 @@ class App(SettingsUIMixin):
                     dlog(f"1.预设({dx},{dy})")
                 try:
                     pyautogui.click(dx, dy); time.sleep(0.3); pyautogui.click(dx, dy); time.sleep(0.2)
-                    full = reg if reg in ('内蒙古','广西','西藏','宁夏','新疆','北京','上海','天津','重庆') else reg + '省'
+                    # 不加「省」后缀的地区（直辖市/自治区/特别行政区）
+                    NO_SUFFIX = {'内蒙古','广西','西藏','宁夏','新疆',
+                                 '北京','上海','天津','重庆','香港','澳门','台湾'}
+                    full = reg if reg in NO_SUFFIX else reg + '省'
                     pyperclip.copy(full)
                     pyautogui.tripleClick(dx, dy); time.sleep(0.15)
                     pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
@@ -1329,7 +1342,15 @@ class App(SettingsUIMixin):
         self.win.after(0, self.win.deiconify)
         # 启动主线程轮询：切回主线程再调用，避免子线程直接操作 Tkinter 控件
         self.win.after(0, lambda: self._poll_batch_queue(result_queue, success, total, total_items))
-        if hud: time.sleep(1); self.win.after(0, hud.destroy)
+        if hud:
+            time.sleep(1)
+            def _safe_destroy():
+                try:
+                    if hud.winfo_exists():
+                        hud.destroy()
+                except Exception:
+                    pass  # 窗口已被用户手动关闭
+            self.win.after(0, _safe_destroy)
     
     def _poll_batch_queue(self, q, success, total, total_items, idle=0):
         """主线程每 100ms 轮询队列，逐批刷新 UI（避免一次性创建大量控件导致假死）。

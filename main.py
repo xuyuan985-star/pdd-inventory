@@ -21,8 +21,8 @@ def calculate_replenishment(inventory: list, sales: dict,
         stock = item['stock']
         sd = sales.get(sku, {})
         daily = sd.get('sales', 0) if sd else 0
-        daily = max(daily, 1)
-        ratio = stock / daily
+        calc_daily = max(daily, 1)  # 仅用于除法保护，不覆盖真实值
+        ratio = stock / calc_daily
         reorder_days = ratio - lead_time
         if reorder_days <= 0:
             status = '现在下单'; color = 'red'
