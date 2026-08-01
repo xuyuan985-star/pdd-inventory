@@ -1252,7 +1252,9 @@ class App(SettingsUIMixin):
                 pos = locate_element(sp, 'region_dropdown', method='template', threshold=0.80)
                 if pos:
                     tm_x, tm_y = pos[0], pos[1]
-                    dx, dy = tm_x + 90, tm_y
+                    # 点击偏移比例制：90px 相对 1920 参考宽度，按当前分辨率缩放
+                    dx = tm_x + int(90 * sw / 1920)
+                    dy = tm_y
                     dlog(f"1.模板匹配({dx},{dy})")
                 elif dd_coord:
                     dx, dy = dd_coord['x'], dd_coord['y']
