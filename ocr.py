@@ -166,11 +166,11 @@ def _validate_items(items: list) -> list:
     if valid_names == 0 and len(cleaned) > 0:
         return []
     
-    # 硬规则兜底：stock 异常大于 sales（100倍+且库存≥1000）才怀疑读错列，置0。
-    # 阈值放宽避免误杀滞销品/预售品（库存确实远大于销量）。
+    # 读错列兜底：仅当库存大到不可能是真实业务数据（≥10万且超销量1000倍）才置0。
+    # 滞销品/预售品/季节性囤货的库存远大于销量是真实场景，不再静默清零。
     for it in cleaned:
         s, sa = it.get('stock', 0), it.get('sales', 0)
-        if sa > 0 and s > sa * 100 and s >= 1000:
+        if sa > 0 and s > sa * 1000 and s >= 100000:
             it['stock'] = 0
     
     # 清理内部字段，保持下游接口 {name, stock, sales, region}
@@ -251,13 +251,15 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
         cur_responses = use_responses
         mdl_l = mdl.lower()
         ep_l = cur_endpoint.lower()
-        if 'glm' in mdl_l and 'dashscope' in ep_l:
+        # 精确/前缀匹配智谱模型名，避免自定义模型名含 "glm" 子串被误判
+        is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
+        if is_glm and 'dashscope' in ep_l:
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
             if not cur_key:
                 continue
             cur_responses = False
-        elif 'glm' in mdl_l and ('ark' in ep_l or 'responses' in ep_l):
+        elif is_glm and ('ark' in ep_l or 'responses' in ep_l):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
             if not cur_key:
@@ -276,6 +278,8 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
                             {'type': 'input_text', 'text': prompt}
                         ]}],
                         'temperature': 0.0,
+                        # Responses API 规范的输出长度限制参数（区别于 Chat Completions 的 max_tokens）
+                        'max_output_tokens': max_tok,
                         'stream': False
                     }, timeout=60)
                 data = resp.json()

@@ -273,10 +273,12 @@ def _ai_locate_elements_impl(screenshot_path: str = None) -> dict:
     qq_x = int(float(qq.get('x', 0)) * screen_w)
     qq_y = int(float(qq.get('y', 0)) * screen_h)
 
-    # 合理性校验
+    # 合理性校验（含 Y 轴越界，防止点击到屏幕外）
     if dd_x <= 0 or dd_y <= 0 or qq_x <= 0 or qq_y <= 0:
         return None
     if dd_x >= screen_w or qq_x >= screen_w:
+        return None
+    if dd_y >= screen_h or qq_y >= screen_h:
         return None
 
     return {

@@ -203,8 +203,19 @@ def main():
             extract_dir = os.path.join(tmp, "extracted")
             os.makedirs(extract_dir, exist_ok=True)
             extract_dir_real = os.path.realpath(extract_dir) + os.sep
+            _total_size = 0
+            _MAX_EXTRACT = 2 * 1024**3  # 解压总量上限 2GB，防 zip-bomb
             with zipfile.ZipFile(new_exe, 'r') as zf:
                 for zi in zf.infolist():
+                    # 拒绝 symlink/链接成员，防符号链接逃逸
+                    if (zi.external_attr >> 16) & 0o170000 == 0o120000:
+                        print(f"[更新器] 拒绝 symlink 成员: {zi.filename}")
+                        continue
+                    # 解压总量上限，防 zip-bomb
+                    _total_size += zi.file_size
+                    if _total_size > _MAX_EXTRACT:
+                        print(f"[更新器] 解压总量超过上限，拒绝安装")
+                        raise RuntimeError("update package too large")
                     # 路径遍历防护：规范化后校验必须在 extract_dir 内
                     # 拒绝绝对路径、.. 穿越、Windows 盘符等
                     member_path = os.path.realpath(os.path.join(extract_dir, zi.filename))
@@ -265,7 +276,11 @@ def main():
                             try:
                                 os.rename(target_dir, stale)
                             except Exception:
-                                print(f"[更新器] 警告: 无法清理残留目录 {target_dir}，回滚可能不完整")
+                                # Windows 下 rename 非空目录可能失败 → shutil.move 兜底
+                                try:
+                                    shutil.move(target_dir, stale)
+                                except Exception:
+                                    print(f"[更新器] 警告: 无法清理残留目录 {target_dir}，回滚可能不完整")
                     if os.path.exists(backup_dir):
                         rollback_skipped = 0
                         for root, dirs, files in os.walk(backup_dir):
