@@ -490,12 +490,6 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
                         continue
                     raise RuntimeError(f"OCR失败: {data}")
                 content = data['choices'][0]['message']['content']
-            # 调试：写入 ocr_debug.log 便于定位字段格式问题（排查后删除）
-            try:
-                with open(os.path.join(get_base_dir(), 'ocr_debug.log'), 'a', encoding='utf-8') as _df:
-                    _df.write(f"[{mdl}] {content[:800]}\n")
-            except Exception:
-                pass
             clean = _clean_json(content)
             items = json.loads(clean)
             validated = _validate_items(items)
