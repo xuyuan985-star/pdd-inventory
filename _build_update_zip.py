@@ -88,10 +88,27 @@ def get_changed_packages(changed_files: set) -> set:
     return changed
 
 
+# _internal 目录名 → dist-info 前缀映射
+# （目录名如 cv2/PIL/win32，但 dist-info 用 pip 包名如 opencv_python/Pillow/pywin32）
+DIR_TO_DIST_PREFIX = {
+    'cv2': 'opencv_python',
+    'PIL': 'Pillow',
+    'win32': 'pywin32',
+    'yaml': 'PyYAML',
+    'charset_normalizer': 'charset_normalizer',
+    'numpy': 'numpy',
+    'cryptography': 'cryptography',
+    'lxml': 'lxml',
+    'certifi': 'certifi',
+    'numpy.libs': 'numpy',
+}
+
+
 def _match_dist_info(name: str, pkg_dirs: set) -> bool:
-    """判断 dist-info 目录是否属于变更的包"""
+    """判断 dist-info 目录是否属于变更的包（目录名 → pip 包名前缀映射）"""
     for pkg in pkg_dirs:
-        if name.startswith(pkg + '-') and '.dist-info' in name:
+        prefix = DIR_TO_DIST_PREFIX.get(pkg, pkg)
+        if name.startswith(prefix + '-') and '.dist-info' in name:
             return True
     return False
 

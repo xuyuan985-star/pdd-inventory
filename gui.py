@@ -878,8 +878,14 @@ class App(SettingsUIMixin):
         
         for item in items:
             name = item.get('name', '')
-            stock = int(item.get('stock', 0))
-            daily = max(int(item.get('sales', 0)), 0)
+            # 防御性转换：兼容字符串/None/含单位文本，避免 ValueError/TypeError
+            def _to_int(v, default=0):
+                try:
+                    return int(v)
+                except (ValueError, TypeError):
+                    return default
+            stock = _to_int(item.get('stock', 0))
+            daily = max(_to_int(item.get('sales', 0)), 0)
             calc_daily = daily if daily > 0 else 1  # 除法保护，显示保留原始值
             shipping = self._get_shipping(region, name)  # 逐商品查运输时效
             
@@ -1337,10 +1343,17 @@ class App(SettingsUIMixin):
                     # 后台线程已完成所有地区
                     self.win.after(100, lambda: self._finish_batch(success, total, total_items))
                     return
-                self._fill_from_ocr(items)
+                try:
+                    self._fill_from_ocr(items)
+                except Exception as e:
+                    # 单批数据处理失败：提示但不中断轮询
+                    self.status_text.set(f"❌ 批量数据处理失败: {str(e)[:50]}")
                 got_data = True
-        except Exception:
-            pass  # 队列暂时空，继续轮询
+        except Exception as _e:
+            # 仅队列空继续轮询；其他异常（如队列对象异常）提示后继续
+            import queue as _queue
+            if not isinstance(_e, _queue.Empty):
+                self.status_text.set(f"❌ 批量轮询异常: {str(_e)[:50]}")
         
         idle = 0 if got_data else idle + 1
         if idle >= 300:
@@ -1427,8 +1440,8 @@ class App(SettingsUIMixin):
     
     def _fill_from_ocr(self, items):
         """用OCR结果填充表格"""
+        self._clear_error()  # 先重置状态，再设置识别进度提示（避免被覆盖）
         self.status_text.set(f"OCR识别到 {len(items)} 项，计算中...")
-        self._clear_error()
         self.win.update()
         
         if not items:
@@ -1540,8 +1553,8 @@ class App(SettingsUIMixin):
             messagebox.showerror("缺少依赖", "请安装 openpyxl: pip install openpyxl")
             return
         try:
-            from export_xlsx import export_cache_to_xlsx
-            export_dir = self._get_export_path()
+            from export_xlsx import export_cache_to_xlsx, _get_default_export_dir
+            export_dir = _get_default_export_dir()
             path = export_cache_to_xlsx(self.cache, export_dir)
             self.status_text.set(f"已导出 {len(self.cache)} 个地区 → PDD补货记录.xlsx")
             try:
