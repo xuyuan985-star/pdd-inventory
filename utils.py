@@ -103,13 +103,15 @@ def capture_pdd_screenshot(output_path: str) -> bool:
     import os as _os, json as _json, time as _time
     _os.makedirs(_os.path.dirname(output_path) or '.', exist_ok=True)
 
-    # 读裁剪比例
+    # 读裁剪比例（与默认值合并，缺字段时用默认，避免 KeyError）
     crop_cfg = {'left': 0.11, 'top': 0.40}
     try:
         sf = _os.path.join(get_base_dir(), 'settings.json')
         if _os.path.exists(sf):
             with open(sf, 'r', encoding='utf-8') as f:
-                crop_cfg = _json.load(f).get('crop', crop_cfg)
+                saved = _json.load(f).get('crop') or {}
+                if isinstance(saved, dict):
+                    crop_cfg = {**crop_cfg, **saved}
     except Exception:
         pass
 

@@ -226,6 +226,13 @@ def main():
                 backup_dir = target_dir + "_backup"
                 if os.path.exists(backup_dir):
                     shutil.rmtree(backup_dir, ignore_errors=True)
+                    if os.path.exists(backup_dir):
+                        # rmtree 清不干净（文件被占用）→ 改名让位，避免 os.rename 失败误入回滚
+                        stale_backup = backup_dir + "_stale_" + str(int(time.time()))
+                        try:
+                            os.rename(backup_dir, stale_backup)
+                        except Exception:
+                            print(f"[更新器] 警告: 旧备份目录被占用，无法清理 {backup_dir}")
                 try:
                     if os.path.exists(target_dir):
                         os.rename(target_dir, backup_dir)
