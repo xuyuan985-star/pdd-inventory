@@ -1070,6 +1070,11 @@ class App(SettingsUIMixin):
                       variable=test_var, font=(self.FONT[0], 8),
                       bg=self.C_BG, fg=self.C_MUTED,
                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(pady=(5,0))
+        dual_var = tk.BooleanVar(dlg, value=False)
+        tk.Checkbutton(bottom_frame, text="🛡 双模型验证（慢一倍，更准）",
+                      variable=dual_var, font=(self.FONT[0], 8),
+                      bg=self.C_BG, fg=self.C_MUTED,
+                      selectcolor=self.C_BG, activebackground=self.C_BG).pack(pady=(2,0))
         
         # 地区勾选列表（可滚动，占剩余空间）
         canvas = tk.Canvas(dlg, bg=self.C_SURFACE, highlightthickness=0)
@@ -1121,7 +1126,8 @@ class App(SettingsUIMixin):
             for btn in [self.export_btn]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
-            threading.Thread(target=self._run_batch_sequence, args=(selected, hud, hud_text), daemon=True).start()
+            threading.Thread(target=self._run_batch_sequence,
+                             args=(selected, hud, hud_text, dual_var.get()), daemon=True).start()
         
         tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
                   font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF",
@@ -1130,7 +1136,7 @@ class App(SettingsUIMixin):
         dlg.transient(self.win)
         dlg.grab_set()
     
-    def _run_batch_sequence(self, regions, hud=None, hud_text=None):
+    def _run_batch_sequence(self, regions, hud=None, hud_text=None, dual_verify=False):
         """批量识别：1.点文本框 2.粘贴省份 3.回车 4.点查询 5.等4秒 6.截图识别"""
         import time, threading, queue
         result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
@@ -1317,11 +1323,15 @@ class App(SettingsUIMixin):
                     im = PILImage.open(sp2); w, h = im.size
                     if w > 2560: im = im.resize((2560, int(h*2560/w)), PILImage.LANCZOS); im.save(sp2)
                 except: pass
-                dlog("6.OCR识别中(约6s)...")
+                dlog(f"6.OCR识别中({'双模型' if dual_verify else '单模型'}，约{'12' if dual_verify else '6'}s)...")
                 items = None
                 for retry in range(3):
                     try:
-                        items = ocr_screenshot(sp2)
+                        if dual_verify:
+                            from ocr import ocr_dual_verify
+                            items = ocr_dual_verify(sp2)
+                        else:
+                            items = ocr_screenshot(sp2)
                         if items: break
                         dlog(f"  重试{retry+1}...")
                         time.sleep(2)
@@ -1480,9 +1490,16 @@ class App(SettingsUIMixin):
             self._add_row()
         # 填入数据
         detected_regions = set()
+        low_conf_count = 0
         for i, item in enumerate(items):
             r = self.rows[i]
-            r['name'].set(item.get('name', ''))
+            # 双模型验证标记的低置信度商品：名称加 ⚠ 提示复核
+            low_conf = item.get('_low_confidence', False)
+            name_disp = item.get('name', '')
+            if low_conf:
+                low_conf_count += 1
+                name_disp = f"⚠{name_disp}"
+            r['name'].set(name_disp)
             r['stock'].set(str(item.get('stock', '')))
             r['sales'].set(str(item.get('sales', '')))
             region = item.get('region', '')
@@ -1493,6 +1510,8 @@ class App(SettingsUIMixin):
                         region = region[:-len(suffix)]
                         break
                 detected_regions.add(region)
+        if low_conf_count:
+            self.status_text.set(f"⚠ {low_conf_count} 个商品双模型结果不一致，已取保守值，请重点核对")
         # 自动匹配地区
         msg = f"识别完成 — {len(items)} 个商品，请核对后点计算"
         if detected_regions:
