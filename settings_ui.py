@@ -130,7 +130,7 @@ class SettingsUIMixin:
         region_names = sorted(self.cache.keys()) if self.cache else sorted(self.regions.keys())
         if not region_names:
             region_names = ['（暂无识别数据）']
-        self._settings_region_var = tk.StringVar(dlg, value=region_names[0] if region_names else '')
+        self._settings_region_var = tk.StringVar(self.win, value=region_names[0] if region_names else '')
         region_combo = ttk.Combobox(sel_frame, textvariable=self._settings_region_var,
             values=region_names, width=18, font=self.FONT, state="readonly")
         region_combo.pack(side="left", padx=8)
@@ -360,7 +360,7 @@ class SettingsUIMixin:
         if not cal: cal = {'mode': 'ai', 'ai': {}, 'absolute': {}}
 
         # ── 模式选择 ──
-        mode_var = tk.StringVar(dlg, value=cal.get('mode', 'ai'))
+        mode_var = tk.StringVar(self.win, value=cal.get('mode', 'ai'))
         mode_frame = tk.Frame(parent)
         mode_frame.pack(pady=10)
         tk.Label(mode_frame, text="定位模式:", font=self.FONT, fg=self.C_TEXT).pack(side='left')
@@ -545,13 +545,13 @@ class SettingsUIMixin:
         url_frame = tk.Frame(parent)
         url_frame.pack(fill="x", padx=20, pady=(15,5))
         tk.Label(url_frame, text="后台地址:", font=self.FONT, width=10, anchor="e").pack(side="left")
-        url_var = tk.StringVar(dlg, value=config.get('url', 'https://mms.pinduoduo.com/'))
+        url_var = tk.StringVar(self.win, value=config.get('url', 'https://mms.pinduoduo.com/'))
         tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40).pack(side="left", padx=5)
 
         acc_frame = tk.Frame(parent)
         acc_frame.pack(fill="x", padx=20, pady=5)
         tk.Label(acc_frame, text="登录账号:", font=self.FONT, width=10, anchor="e").pack(side="left")
-        acc_var = tk.StringVar(dlg, value=config.get('account', ''))
+        acc_var = tk.StringVar(self.win, value=config.get('account', ''))
         acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED)
         acc_entry.pack(side="left", padx=5)
         def _ph_entry(entry, placeholder, var):
@@ -572,7 +572,7 @@ class SettingsUIMixin:
         pwd_frame = tk.Frame(parent)
         pwd_frame.pack(fill="x", padx=20, pady=5)
         tk.Label(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
-        pwd_var = tk.StringVar(dlg, value=config.get('password', ''))
+        pwd_var = tk.StringVar(self.win, value=config.get('password', ''))
         pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*" if config.get('password') else "")
         pwd_entry.pack(side="left", padx=5)
         if not config.get('password'):

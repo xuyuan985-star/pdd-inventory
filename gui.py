@@ -1563,7 +1563,8 @@ class App(SettingsUIMixin):
                 msg += "\n请点击「商品时效设置」按商品调整运输天数"
                 self.win.after(500, lambda: messagebox.showinfo(
                     "发现新地区",
-                    f"识别到新地区：{'、'.join(newly_added)}\n\n已自动添加到地区列表，各商品运输时间暂设为3天。\n请点击「商品时效设置」根据实际情况调整。"))
+                    f"识别到新地区：{'、'.join(newly_added)}\n\n已自动添加到地区列表，各商品运输时间暂设为3天。\n请点击「商品时效设置」根据实际情况调整。",
+                    parent=self.win))
         self.status_text.set(msg)
         # 直接用OCR结果计算，不依赖行数据
         try:

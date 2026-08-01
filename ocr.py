@@ -38,7 +38,7 @@ def _prep_image_b64(image_path: str, max_side: int = 1600, quality: int = 85) ->
 
 
 def _clean_json(text: str) -> str:
-    """从OCR回复中提取纯JSON"""
+    """从OCR回复中提取纯JSON（数组或对象）"""
     text = text.strip()
     # 去掉 markdown 代码块
     if '```' in text:
@@ -47,11 +47,16 @@ def _clean_json(text: str) -> str:
             p = p.strip()
             if p.startswith('json'):
                 p = p[4:].strip()
-            if p.startswith('['):
+            if p.startswith('[') or p.startswith('{'):
                 return p
-    # 找第一个 [ 到最后一个 ]
+    # 找第一个 [ 到最后一个 ]（数组）
     start = text.find('[')
     end = text.rfind(']')
+    if start >= 0 and end > start:
+        return text[start:end+1]
+    # 兜底：找第一个 { 到最后一个 }（对象，如 {"items":[...]}）
+    start = text.find('{')
+    end = text.rfind('}')
     if start >= 0 and end > start:
         return text[start:end+1]
     return text
@@ -272,12 +277,13 @@ def _validate_items(items: list) -> list:
     # 「不同名但 stock/sales 全同」是同一系列 SKU 的真实场景，不再误杀。
     
     # 检查3：商品名过短（<2字）或全是数字/符号 → 幻觉
-    # （2 字商品名如"苹果""大米"是合法业务数据，不误杀）
+    # （2 字中文商品名、纯英文 SKU 如 "iPhone 15 Pro" 都是合法业务数据）
     valid_names = 0
     for it in cleaned:
         name = it['name']
         chinese_chars = sum(1 for c in name if '\u4e00' <= c <= '\u9fff')
-        if chinese_chars >= 1 and len(name) >= 2:
+        has_alpha = any(c.isalpha() for c in name)
+        if len(name) >= 2 and (chinese_chars >= 1 or has_alpha):
             valid_names += 1
     if valid_names == 0 and len(cleaned) > 0:
         return []
