@@ -7,10 +7,16 @@ from datetime import datetime
 from utils import get_base_dir
 
 
+_STYLES_CACHE = None
+
+
 def _create_styles():
-    """返回统一的 Excel 样式对象"""
+    """返回统一的 Excel 样式对象（模块级缓存，避免高频导出重复创建）"""
+    global _STYLES_CACHE
+    if _STYLES_CACHE is not None:
+        return _STYLES_CACHE
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    return {
+    _STYLES_CACHE = {
         'fills': {
             'red': PatternFill('solid', fgColor='FFC7CE'),
             'yellow': PatternFill('solid', fgColor='FFEB9C'),
@@ -22,6 +28,7 @@ def _create_styles():
         'thin': Border(left=Side('thin'), right=Side('thin'), top=Side('thin'), bottom=Side('thin')),
         'center': Alignment(horizontal='center', vertical='center'),
     }
+    return _STYLES_CACHE
 
 
 def _get_default_export_dir() -> str:
@@ -105,8 +112,10 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
 
     try:
         wb.save(path)
-    except PermissionError:
-        raise PermissionError(f"无法保存 Excel 文件，请关闭已打开的 PDD补货记录.xlsx 后重试。\n文件路径: {path}")
+    except OSError as e:
+        # 覆盖磁盘满、路径非法、文件被锁定等常见 IO 错误
+        raise OSError(f"无法保存 Excel 文件（{type(e).__name__}）：{e}\n"
+                      f"请检查磁盘空间或关闭已打开的 PDD补货记录.xlsx 后重试。\n文件路径: {path}")
     return path
 
 
@@ -163,8 +172,10 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
 
     try:
         wb.save(path)
-    except PermissionError:
-        raise PermissionError(f"无法保存 Excel 文件，请关闭已打开的 PDD补货记录.xlsx 后重试。\n文件路径: {path}")
+    except OSError as e:
+        # 覆盖磁盘满、路径非法、文件被锁定等常见 IO 错误
+        raise OSError(f"无法保存 Excel 文件（{type(e).__name__}）：{e}\n"
+                      f"请检查磁盘空间或关闭已打开的 PDD补货记录.xlsx 后重试。\n文件路径: {path}")
     return path
 
 
