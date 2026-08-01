@@ -149,16 +149,8 @@ def _validate_items(items: list) -> list:
     if regions_found and not regions_found & KNOWN_REGIONS:
         return []
     
-    # 检查2：>4个商品 stock+sales 都相同且名称也相似 → 幻觉
-    stocks = {it['stock'] for it in cleaned}
-    sales_set = {it['sales'] for it in cleaned}
-    if len(stocks) == 1 and len(sales_set) == 1 and len(cleaned) >= 5:
-        # 检查商品名是否也高度相似
-        names = [it['name'] for it in cleaned]
-        sample = names[0]
-        similar = sum(1 for n in names if n[:4] == sample[:4])
-        if similar == len(names):
-            return []
+    # 检查2 已移除：同名复读由 seen_names 去重拦截；
+    # 「不同名但 stock/sales 全同」是同一系列 SKU 的真实场景，不再误杀。
     
     # 检查3：商品名过短（<3字）或全是数字/符号 → 幻觉
     valid_names = 0
@@ -170,10 +162,11 @@ def _validate_items(items: list) -> list:
     if valid_names == 0 and len(cleaned) > 0:
         return []
     
-    # 硬规则兜底：如果 stock >> sales（超20倍），极可能是读成了"仓库销售库存"列，修正为0
+    # 硬规则兜底：stock 异常大于 sales（100倍+且库存≥1000）才怀疑读错列，置0。
+    # 阈值放宽避免误杀滞销品/预售品（库存确实远大于销量）。
     for it in cleaned:
         s, sa = it.get('stock', 0), it.get('sales', 0)
-        if sa > 0 and s > sa * 20:
+        if sa > 0 and s > sa * 100 and s >= 1000:
             it['stock'] = 0
     
     # 清理内部字段，保持下游接口 {name, stock, sales, region}
@@ -210,8 +203,10 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
         # 根据 endpoint 判断 API 类型，而非模型名
         use_responses = ('responses' in endpoint)
         if use_responses:
+            # 模型名优先；custom_endpoint（ep-xxx 推理接入点）仅当未填模型名时兜底，
+            # 避免过期的接入点 ID 顶掉用户配置的模型名
             custom_ep = provider.get('custom_endpoint', '')
-            fallback = custom_ep or model_name
+            fallback = model_name or custom_ep
             models = [m for m in [fallback, 'glm-4v-flash'] if m and m.strip()]
         else:
             models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()]

@@ -38,6 +38,17 @@ def _get_default_export_dir() -> str:
     return os.path.join(os.path.expanduser('~'), 'Desktop')
 
 
+def _unique_sheet_name(wb, base: str) -> str:
+    """Sheet 重名保护：base 已被占用时追加 _2、_3…"""
+    existing = {ws.title for ws in wb.worksheets}
+    if base not in existing:
+        return base
+    i = 2
+    while f"{base}_{i}" in existing:
+        i += 1
+    return f"{base}_{i}"
+
+
 def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
     """
     GUI 路径：按地区分组的 cache → 追加 Sheet 到 PDD补货记录.xlsx
@@ -50,11 +61,12 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
         export_dir = _get_default_export_dir()
     path = os.path.join(export_dir, 'PDD补货记录.xlsx')
 
-    ts_date = datetime.now().strftime('%m.%d_%H%M')
+    ts_date = datetime.now().strftime('%m.%d_%H%M%S')
     styles = _create_styles()
 
     if os.path.exists(path):
         wb = openpyxl.load_workbook(path)
+        ts_date = _unique_sheet_name(wb, ts_date)
         ws = wb.create_sheet(ts_date)
     else:
         wb = openpyxl.Workbook()
@@ -109,12 +121,14 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
         export_dir = os.path.join(get_base_dir(), 'output')
 
     path = os.path.join(export_dir, 'PDD补货记录.xlsx')
-    ts = datetime.now().strftime('%m-%d %H.%M')
+    ts = datetime.now().strftime('%m-%d %H.%M.%S')
 
     styles = _create_styles()
 
     if os.path.exists(path):
         wb = openpyxl.load_workbook(path)
+        # 同秒重复导出时追加序号，避免 Sheet 重名崩溃
+        ts = _unique_sheet_name(wb, ts)
         ws = wb.create_sheet(ts)
     else:
         wb = openpyxl.Workbook()

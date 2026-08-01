@@ -32,6 +32,33 @@ def _find_col(headers, *aliases):
     return -1
 
 
+def _normalize_date(s) -> str:
+    """
+    把多种日期格式归一化为 YYYY-MM-DD。
+    支持: 2026-08-01 / 2026/08/01 / 2026.08.01 / 08/01/2026 /
+          2026年08月01日 / 2026-08-01 12:30:45 / 2026年8月1日
+    解析失败返回原字符串（比较时自然不相等，按非当日处理）。
+    """
+    import re
+    s = str(s).strip()
+    if not s:
+        return ''
+    # 中文格式：2026年08月01日（或 2026年8月1日，可能带时间）
+    m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日', s)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    # 西文格式：YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD / MM/DD/YYYY / MM-DD-YYYY
+    # 优先 YYYY 开头的四段年格式
+    m = re.search(r'(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})', s)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    # MM/DD/YYYY 或 MM-DD-YYYY（美式）
+    m = re.search(r'(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})', s)
+    if m:
+        return f"{int(m.group(3)):04d}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    return s
+
+
 def import_orders(order_csv: str) -> dict:
     """
     解析PDD订单导出 → 每个SKU的当日销量
@@ -66,10 +93,10 @@ def import_orders(order_csv: str) -> dict:
         except (ValueError, IndexError):
             continue
         
-        # 只统计当天订单
+        # 只统计当天订单（多格式日期归一化后比较）
         is_today = True
         if date_idx >= 0 and date_idx < len(row):
-            d = row[date_idx].strip()[:10]
+            d = _normalize_date(row[date_idx])
             if d != today and d:
                 is_today = False
         

@@ -460,7 +460,11 @@ class SettingsUIMixin:
                         cdlbl.configure(text="✓ 已记录")
                         pw.after(500, pw.destroy)
                 pw.after(500, countdown)
-                pw.grab_set(); pw.wait_window()
+                try:
+                    pw.grab_set(); pw.wait_window()
+                except Exception:
+                    # 主窗口在校准期间被关闭 → wait_window 抛 TclError，安全退出
+                    return
                 if step not in pos: abs_status_lbl.configure(text="已取消"); return
             cal2['absolute'] = {'dropdown': {'x': pos[0][0], 'y': pos[0][1]}, 'query': {'x': pos[1][0], 'y': pos[1][1]}}
             cal2['mode'] = 'absolute'
