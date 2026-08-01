@@ -61,28 +61,32 @@ _FULLWIDTH_TRANS = str.maketrans('０１２３４５６７８９．', '012345678
 def _parse_num_text(v) -> int:
     """
     从单元格原始文字解析整数。
-    "100份 查看"→100, "1,234"→1234, "1.5万"→15000, "统计中"→0
+    "100份 查看"→100, "1,234"→1234, "1.5万"→15000, "统计中"→0,
+    "1.2w"→12000, "5k"→5000, "约100+"→100, "共 ３００"→300
     返回 int；解析失败返回 0。
     """
     import re
     s = str(v).strip()
     if not s or s.lower() in ('none', 'null', 'nan', '-', '--', '/', '统计中', '查看', '暂无', '无'):
         return 0
-    # 全角数字 → 半角
+    # 全角数字/空格 → 半角
     s = s.translate(_FULLWIDTH_TRANS)
+    s = s.replace('\u3000', ' ').replace('　', ' ')
     # 去千分位
     s = s.replace(',', '').replace('，', '')
     m = re.search(r'-?\d+(?:\.\d+)?', s)
     if not m:
         return 0
     num = float(m.group())
-    # 单位换算
-    if '万' in s:
-        num *= 10000
-    elif '千' in s:
-        num *= 1000
-    elif '亿' in s:
+    # 单位换算（支持中英文单位：亿/万/千 与 w/k，w=万）
+    lower_s = s.lower()
+    if '亿' in s:
         num *= 100000000
+    elif '万' in s or re.search(r'[\d.]+\s*w\b', lower_s):
+        num *= 10000
+    elif '千' in s or re.search(r'[\d.]+\s*k\b', lower_s):
+        num *= 1000
+    # '+' 后缀（如 "100+"）和 约/近/共 前缀不需要额外处理，数字已提取
     return int(round(num))
 
 
@@ -241,7 +245,11 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
 3. stock_text / sales_text 必须原样抄写单元格里的全部文字（如 "100份 查看"、"1,234"），不要自己转换数字、不要去掉单位
 4. 无法识别的单元格填 null，不要编造
 5. 整张截图没有订货表格、无有效商品数据时只输出 []
-6. 只输出 JSON 数组，不要任何解释文字"""
+6. 只输出 JSON 数组，不要任何解释文字
+
+示例（仅示意格式，不是真实数据）：
+[{"index": 1, "name": "新疆灰枣500g", "stock_text": "128份 查看", "sales_text": "1,234", "region": "新疆"},
+ {"index": 2, "name": "云南普洱饼茶357g", "stock_text": "0份 查看", "sales_text": "0", "region": "云南"}]"""
     max_tok = 1024
 
     for attempt, mdl in enumerate(models):

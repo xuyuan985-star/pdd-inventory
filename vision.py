@@ -51,10 +51,11 @@ def template_match(screenshot, template_name, threshold=0.75):
     
     screen_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
     best_val, best_loc, best_scale, best_tw, best_th = -1, None, 1.0, 0, 0
-    
+
     for template in templates:
         template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-        for scale in [0.8, 0.9, 1.0, 1.1, 1.2]:
+        # 多尺度档位：覆盖 4K/ultrawide 下 UI 元素缩放差异（0.5x~1.5x）
+        for scale in [0.5, 0.7, 0.9, 1.0, 1.1, 1.3, 1.5]:
             try:
                 scaled = cv2.resize(template_gray, None, fx=scale, fy=scale,
                                    interpolation=cv2.INTER_LINEAR)
@@ -66,16 +67,17 @@ def template_match(screenshot, template_name, threshold=0.75):
                     best_val = max_val
                     best_loc = max_loc
                     best_scale = scale
-                    best_tw = template_gray.shape[1]
-                    best_th = template_gray.shape[0]
+                    # 记录缩放后的实际模板尺寸，避免浮点乘法舍入误差
+                    best_tw = scaled.shape[1]
+                    best_th = scaled.shape[0]
             except (cv2.error if cv2 else Exception):
                 continue
     
     if best_val < threshold or best_loc is None:
         return None
     
-    tw = int(best_tw * best_scale)
-    th = int(best_th * best_scale)
+    tw = best_tw
+    th = best_th
     cx = best_loc[0] + tw // 2
     cy = best_loc[1] + th // 2
     return (cx, cy, best_val)
