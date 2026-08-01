@@ -290,17 +290,20 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
                 # output[-1] = 最后一条消息（跳过 reasoning）
                 content = data['output'][-1]['content'][0]['text']
             else:
+                # Chat Completions 分支：GLM API 不识别 thinking 参数，仅非智谱模型发送
+                cc_payload = {
+                    'model': mdl,
+                    'messages': [{'role': 'user', 'content': [
+                        {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
+                        {'type': 'text', 'text': prompt}
+                    ]}],
+                    'temperature': 0.0, 'max_tokens': max_tok,
+                }
+                if not is_glm:
+                    cc_payload['thinking'] = {'type': 'disabled'}
                 resp = requests.post(cur_endpoint,
                         headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
-                    json={
-                        'model': mdl,
-                        'messages': [{'role': 'user', 'content': [
-                            {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
-                            {'type': 'text', 'text': prompt}
-                        ]}],
-                        'temperature': 0.0, 'max_tokens': max_tok,
-                        'thinking': {'type': 'disabled'}
-                    }, timeout=60)
+                    json=cc_payload, timeout=60)
                 data = resp.json()
                 if 'choices' not in data:
                     if attempt == 0:

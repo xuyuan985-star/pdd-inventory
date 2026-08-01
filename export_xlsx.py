@@ -177,7 +177,8 @@ def export_plans_to_csv(plans: list, export_dir: str = None) -> str:
         w = csv.writer(f)
         w.writerow(['商品', '规格', '库存', '销量', '库存÷销量', '状态', '补货量', '下单日', '到货日'])
         for p in plans:
+            # GUI 路径 plans 无 order_date/arrive_date，用 .get 防御
             w.writerow([p['name'], p.get('sku', p['name']), p['stock'], p['daily'],
                         p.get('ratio', p.get('days_left', '')), p['status'], p['qty'],
-                        p['order_date'], p['arrive_date']])
+                        p.get('order_date', '-'), p.get('arrive_date', '-')])
     return path
