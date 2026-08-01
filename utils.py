@@ -119,6 +119,7 @@ def capture_pdd_screenshot(output_path: str) -> bool:
     from PIL import Image as PILImage
 
     found_window = False
+    img = None
     try:
         import pygetwindow as gw
         for title in ['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox']:
@@ -135,7 +136,8 @@ def capture_pdd_screenshot(output_path: str) -> bool:
     except Exception:
         pass
 
-    if not found_window:
+    if img is None:
+        # 未找到窗口，或找到窗口但截图失败（句柄无效等）→ fallback 全屏
         img = pg.screenshot()
 
     w, h = img.size

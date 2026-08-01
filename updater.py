@@ -328,7 +328,10 @@ set /a cnt+=1
 if %cnt% geq 30 goto :done
 if exist "{new_updater}" (
     move /y "{new_updater}" "{my_path}"
-    start "" "{my_path}" --resume-update
+    if not exist "{new_updater}" (
+        start "" "{my_path}" --resume-update
+        goto :done
+    )
 )
 goto :loop
 :done

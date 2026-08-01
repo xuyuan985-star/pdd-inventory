@@ -59,6 +59,26 @@ class SettingsUIMixin:
             Config.save(s)  # 原子写入，防止崩溃截断配置
         tk.Button(cf, text='保存', command=save_crop, font=(self.FONT[0], 7)).pack(side='left', padx=10)
 
+        # ── 屏幕分辨率预设（原 _build_resolution_tab，并入通用页恢复入口）──
+        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
+        tk.Label(content, text='屏幕分辨率设置', font=self.FONT_HEADING).pack(pady=(5,2))
+        tk.Label(content, text="选择与您电脑匹配的分辨率，批量识别将使用预设坐标",
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
+        res_var = tk.StringVar(self.win, value=load_resolution_pref())
+        res_frame = tk.Frame(content); res_frame.pack(pady=8)
+        for name, preset in RESOLUTION_PRESETS.items():
+            tk.Radiobutton(res_frame, text=f"{name}  —  下拉({preset['dropdown_x']:.0%},{preset['dropdown_y']:.0%})  查询({preset['query_x']:.0%},{preset['query_y']:.0%})",
+                           variable=res_var, value=name, font=self.FONT,
+                           bg=self.C_SURFACE, fg=self.C_TEXT,
+                           selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE,
+                           anchor="w").pack(fill="x", pady=2)
+        def save_res():
+            save_resolution_pref(res_var.get())
+            self.status_text.set(f"分辨率已设为 {res_var.get()}")
+            messagebox.showinfo("已保存", f"分辨率预设已保存\n批量识别将使用对应坐标")
+        tk.Button(content, text='保存分辨率', command=save_res,
+                  font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
+
     def _pick_export_path(self, parent):
         from tkinter import filedialog
         path = filedialog.askdirectory(title="选择导出文件夹")
@@ -514,33 +534,6 @@ class SettingsUIMixin:
                 self.status_text.set(f"已点击下拉框 ({dd['x']}, {dd['y']})，请确认是否展开")
 
         _refresh_cards()
-
-    def _build_resolution_tab(self, parent, dlg):
-        """分辨率预设：选择屏幕分辨率，批量识别自动适配点击坐标"""
-        tk.Label(parent, text="屏幕分辨率设置", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="选择与您电脑匹配的分辨率，批量识别将使用预设坐标",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-
-        current = load_resolution_pref()
-        res_var = tk.StringVar(dlg, value=current)
-
-        list_frame = tk.Frame(parent)
-        list_frame.pack(fill="both", expand=True, padx=30, pady=15)
-
-        for name, preset in RESOLUTION_PRESETS.items():
-            tk.Radiobutton(list_frame, text=f"{name}  —  下拉({preset['dropdown_x']:.0%},{preset['dropdown_y']:.0%})  查询({preset['query_x']:.0%},{preset['query_y']:.0%})",
-                           variable=res_var, value=name, font=self.FONT,
-                           bg=self.C_SURFACE, fg=self.C_TEXT,
-                           selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE,
-                           anchor="w").pack(fill="x", pady=3)
-
-        def save_res():
-            save_resolution_pref(res_var.get())
-            self.status_text.set(f"分辨率已设为 {res_var.get()}")
-            messagebox.showinfo("已保存", f"分辨率预设已保存\n批量识别将使用对应坐标", parent=dlg)
-
-        tk.Button(parent, text="保存", command=save_res,
-                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=15).pack(pady=15)
 
     def _build_backend_tab(self, parent, dlg=None):
         """配置拼多多商家后台链接和登录凭据"""
