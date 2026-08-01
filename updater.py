@@ -298,7 +298,7 @@ def main():
                             print(f"[更新器] 回滚不完整：{rollback_skipped} 个文件被占用，请关闭占用程序后重试")
                         shutil.rmtree(backup_dir, ignore_errors=True)
                     if os.path.exists(backup_dir) and not os.path.exists(target_dir):
-                        print("[更新器] 回滚未完成：目标目录被清理但备份不存在，请手动检查")
+                        print("[更新器] 回滚未完成：目标目录已清理但备份未恢复（备份仍在 _backup），请手动检查")
                     elif not os.path.exists(backup_dir) and os.path.exists(target_dir):
                         print("[更新器] 已回滚至旧版本")
                     else:
