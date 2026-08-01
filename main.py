@@ -9,11 +9,29 @@ from datetime import datetime, timedelta
 from utils import get_base_dir
 
 
+def _load_offset() -> int:
+    """读取 settings.replenishment_offset（补货时间偏移量），默认 1"""
+    try:
+        import json as _json
+        sf = os.path.join(get_base_dir(), 'settings.json')
+        if os.path.exists(sf):
+            with open(sf, 'r', encoding='utf-8') as _f:
+                off = _json.load(_f).get('replenishment_offset', 1)
+            return int(off) if off is not None else 1
+    except Exception:
+        pass
+    return 1
+
+
 def calculate_replenishment(inventory: list, sales: dict,
                             shipping_days: int = 3,
-                            min_order: int = 100) -> list:
+                            min_order: int = 100,
+                            replenishment_offset: int = None) -> list:
     today = datetime.now()
-    lead_time = shipping_days + 1  # 补货时间 = 运输天数 + 1
+    # 补货时间偏移量：默认运输天数+1，可由 settings.replenishment_offset 覆盖
+    if replenishment_offset is None:
+        replenishment_offset = _load_offset()
+    lead_time = shipping_days + replenishment_offset
     plans = []
     for item in inventory:
         sku = item['sku']

@@ -890,7 +890,13 @@ class App(SettingsUIMixin):
             shipping = self._get_shipping(region, name)  # 逐商品查运输时效
             
             ratio = stock / calc_daily
-            lead_time = shipping + 1  # 补货时间 = 运输天数 + 1
+            # 补货时间偏移量：默认 1，可由 settings.replenishment_offset 覆盖（与 main.py 一致）
+            try:
+                from utils import Config as _Cfg
+                _off = int(_Cfg.load().get('replenishment_offset', 1))
+            except Exception:
+                _off = 1
+            lead_time = shipping + _off
             reorder = ratio - lead_time
             
             if reorder <= 0:
@@ -1034,7 +1040,7 @@ class App(SettingsUIMixin):
     def _emergency_stop(self):
         """F9 紧急停止批量识别"""
         self._batch_stop.set()
-        self.status_text.set("⏹ 紧急停止 — 正在终止批量识别...")
+        self.status_text.set("⏹ 紧急停止 — 等待当前识别结束（API 请求最长 60s），随后自动收尾")
     
     def _batch_scan(self):
         """批量识别：对已知地区逐个引导截图识别"""
@@ -1268,20 +1274,30 @@ class App(SettingsUIMixin):
                 else:
                     dx = int(sw * preset['dropdown_x']); dy = int(sh * preset['dropdown_y'])
                     dlog(f"1.预设({dx},{dy})")
-                try:
-                    pyautogui.click(dx, dy); time.sleep(0.3); pyautogui.click(dx, dy); time.sleep(0.2)
-                    # 不加「省」后缀的地区（直辖市/自治区/特别行政区）
-                    NO_SUFFIX = {'内蒙古','广西','西藏','宁夏','新疆',
-                                 '北京','上海','天津','重庆','香港','澳门','台湾'}
-                    full = reg if reg in NO_SUFFIX else reg + '省'
-                    pyperclip.copy(full)
-                    pyautogui.tripleClick(dx, dy); time.sleep(0.15)
-                    pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
-                    dlog(f"2.粘贴'{full}'")
-                    pyautogui.press('enter'); time.sleep(1.0)
-                    dlog("3.回车确认")
-                except Exception as ex:
-                    dlog(f"操作失败(剪贴板/按键): {ex}")
+                # 点击+粘贴+回车，最多重试 3 次（PyAutoGUI 偶发失败）
+                op_ok = False
+                for _attempt in range(3):
+                    try:
+                        pyautogui.click(dx, dy); time.sleep(0.3); pyautogui.click(dx, dy); time.sleep(0.2)
+                        # 不加「省」后缀的地区（直辖市/自治区/特别行政区）
+                        NO_SUFFIX = {'内蒙古','广西','西藏','宁夏','新疆',
+                                     '北京','上海','天津','重庆','香港','澳门','台湾'}
+                        full = reg if reg in NO_SUFFIX else reg + '省'
+                        pyperclip.copy(full)
+                        pyautogui.tripleClick(dx, dy); time.sleep(0.15)
+                        pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
+                        dlog(f"2.粘贴'{full}'")
+                        pyautogui.press('enter'); time.sleep(1.0)
+                        dlog("3.回车确认")
+                        op_ok = True
+                        break
+                    except Exception as ex:
+                        if _attempt < 2:
+                            dlog(f"  操作重试{_attempt+1}/3: {ex}")
+                            time.sleep(0.5)
+                        else:
+                            dlog(f"操作失败(剪贴板/按键): {ex}")
+                if not op_ok:
                     continue
                 
                 # 4. 找查询按钮
@@ -1350,6 +1366,18 @@ class App(SettingsUIMixin):
         
         # 发送结束信号（for 内每地区已有 try-except 兜底；主线程另有 30 秒空闲超时收尾）
         result_queue.put(None)
+        
+        # 集中清理本次批量识别产生的临时截图（_vis_/_wait_/_result_ 前缀）
+        try:
+            _out_dir = os.path.join(get_base_dir(), 'output')
+            for _f in os.listdir(_out_dir):
+                if _f.startswith(('_vis_', '_wait_', '_result_')) and _f.endswith('.png'):
+                    try:
+                        os.remove(os.path.join(_out_dir, _f))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         
         self.win.after(0, self.win.deiconify)
         # 启动主线程轮询：切回主线程再调用，避免子线程直接操作 Tkinter 控件

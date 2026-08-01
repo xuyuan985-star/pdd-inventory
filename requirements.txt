@@ -7,6 +7,7 @@ pygetwindow>=0.0.9
 pyperclip>=1.8.2
 
 # 图像处理
+# 注：opencv-python 4.8.0.x 与 numpy 1.24.0 曾有已知兼容问题，故放宽为范围约束让 pip 选最新稳定组合
 opencv-python>=4.8.0
 numpy>=1.24.0
 Pillow>=9.5.0

@@ -30,8 +30,9 @@ def _prep_image_b64(image_path: str, max_side: int = 1600, quality: int = 85) ->
         _buf = _io.BytesIO()
         _img.save(_buf, format='JPEG', quality=quality)
         return base64.b64encode(_buf.getvalue()).decode()
-    except Exception:
-        # 预处理失败则回退原图
+    except Exception as e:
+        # 预处理失败则回退原图（记录警告便于排查识别率下降）
+        print(f"[OCR] 图片预处理失败，回退原图: {e} ({image_path})")
         with open(image_path, 'rb') as f:
             return base64.b64encode(f.read()).decode()
 
@@ -532,12 +533,12 @@ def ocr_dual_verify(image_path: str, secondary_model: str = 'glm-4v-flash') -> l
         match = sec_by_name.get(_norm(item.get('name')))
         if not match:
             continue
-        # 字段差异 >30% → 标记待复核；stock 保守取大
+        # 字段差异 >30% → 标记待复核；stock/sales 均取保守较大值
+        # （销量高估比低估更安全：宁可多补货，避免断货）
         for field in ('stock', 'sales'):
             a, b = item.get(field, 0), match.get(field, 0)
             denom = max(b, 1)
             if abs(a - b) / denom > 0.3:
                 item['_low_confidence'] = True
-                if field == 'stock':
-                    item['stock'] = max(a, b)
+                item[field] = max(a, b)
     return primary
