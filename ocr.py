@@ -229,7 +229,19 @@ def _validate_items(items: list) -> list:
         if not name:
             continue
         # 数字：优先解析原始文字（新格式），回退旧格式数字字段
-        stock = _parse_num_text(item.get('stock_text', item.get('stock', 0)))
+        # 双列选值：模型同时抄写 仓库总库存(stock_text) 与 仓库销售库存(sales_stock_text)，
+        # 带「查看」链接的才是仓库总库存（PDD 后台该列必带查看）；另一个弃用。
+        _stock_txt = str(item.get('stock_text', '') or '')
+        _sales_stock_txt = str(item.get('sales_stock_text', '') or '')
+        if '查看' in _stock_txt:
+            stock = _parse_num_text(_stock_txt)
+        elif '查看' in _sales_stock_txt:
+            stock = _parse_num_text(_sales_stock_txt)  # 模型把查看链接抄进了 sales_stock_text
+        elif _sales_stock_txt and _stock_txt and '查看' not in _stock_txt and '查看' not in _sales_stock_txt:
+            # 两列都没查看（模型都抄成纯数字）：无法区分，取 stock_text（默认仓库总库存）
+            stock = _parse_num_text(_stock_txt)
+        else:
+            stock = _parse_num_text(_stock_txt if _stock_txt else item.get('stock', 0))
         sales = _parse_num_text(item.get('sales_text', item.get('sales', 0)))
         region = item.get('region')
         region = '' if region is None or str(region).strip().lower() in ('none', 'null', '') else str(region).strip()
@@ -245,7 +257,7 @@ def _validate_items(items: list) -> list:
         cleaned.append({'name': name, 'stock': stock, 'sales': sales, 'region': region,
                         'index': item.get('index'),
                         'stock_x': item.get('stock_x'), 'sales_x': item.get('sales_x'),
-                        '_stock_text': str(item.get('stock_text', '') or '')})
+                        '_stock_text': _stock_txt})
     
     if not cleaned:
         return []
@@ -366,22 +378,22 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
             endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
         models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()] if model_name else ['glm-4v-flash']
 
-    # 统一提示词 — 抄写原文，不做语义转换；index 锚定行顺序
+    # 统一提示词 — 两列都抄（仓库总库存+仓库销售库存），代码层按「查看」链接选对列
     prompt = """你是数据录入员，识别图中 PDD 后台订货表格。表格为竖向列表，每行一个商品。
 
 版面说明：
 - 表头行包含：商品名称、仓库销售库存、仓库总库存、仓库预估总销售数、省份（部分截图无省份列）
 - 商品名称：文字较长的一列，原样抄写（如「盐渍海带苗500g/袋脆嫩爽口火锅三秒菜」）
 - 仓库总库存：**该列单元格一定带「查看」链接**，文字形如「1860份 查看」或「0份 查看」；库存为 0 时显示「0份 查看」或「0」，这是真实业务数据，必须如实输出该行
-- 仓库销售库存：**紧挨在仓库总库存左边的另一列**，是纯数字（如「1000份」），不带「查看」链接。**不要把它当成仓库总库存**——只有带「查看」链接的那列才是仓库总库存
+- 仓库销售库存：**紧挨在仓库总库存左边的另一列**，是纯数字（如「1000份」），不带「查看」链接
 - 仓库预估总销售数：单元格可能显示「258份 08-02 02:54」这样的数字+日期时间，只抄写数字和单位部分（如 "258份"），忽略日期时间；无数值填 0
 - 省份：有省份列则抄写省份名（如 云南），无省份列填 null
 
 输出要求：
 1. 严格按表格从上到下的顺序，逐行输出，一行不漏、不重复、不合并
 2. 每行输出一个 JSON 对象：
-   {"index": 行号从1开始, "name": "商品名", "stock_text": "库存单元格原始文字", "sales_text": "销量单元格原始文字", "region": "省份名或null", "stock_x": 库存数字中心相对整图宽度的比例, "sales_x": 销量数字中心相对整图宽度的比例}
-3. stock_text / sales_text 必须原样抄写单元格里的文字（如 "100份 查看"、"258份"），不要自己转换数字、不要去掉单位；日期时间不抄
+   {"index": 行号从1开始, "name": "商品名", "stock_text": "仓库总库存单元格原文（必填，带查看链接）", "sales_stock_text": "仓库销售库存单元格原文（必填，纯数字）", "sales_text": "仓库预估总销售数单元格原文", "region": "省份名或null", "stock_x": 库存数字中心相对整图宽度的比例, "sales_x": 销量数字中心相对整图宽度的比例}
+3. stock_text / sales_stock_text / sales_text 必须原样抄写，不要自己转换数字、不要去掉单位；日期时间不抄
 4. stock_x / sales_x 是 0~1 之间的小数（如 0.62），表示该数字水平位置；无法确定时填 null
 5. 无法识别的单元格填 null，不要编造
 6. 仓库总库存为 0 是真实业务数据（售罄），该行必须保留并输出 stock_text "0份 查看"、stock_x 照常，绝不能跳过该行或返回空
@@ -389,8 +401,8 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
 8. 只输出 JSON 数组，不要任何解释文字
 
 示例（仅示意格式，不是真实数据）：
-[{"index": 1, "name": "盐渍海带苗500g", "stock_text": "128份 查看", "sales_text": "258份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78},
- {"index": 2, "name": "盐渍海带结500g", "stock_text": "0份 查看", "sales_text": "318份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78}]"""
+[{"index": 1, "name": "盐渍海带苗500g", "stock_text": "128份 查看", "sales_stock_text": "1000份", "sales_text": "258份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78},
+ {"index": 2, "name": "盐渍海带结500g", "stock_text": "0份 查看", "sales_stock_text": "500份", "sales_text": "318份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78}]"""
     max_tok = 1024
 
     for attempt, mdl in enumerate(models):
