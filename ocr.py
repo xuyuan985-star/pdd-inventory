@@ -229,20 +229,25 @@ def _validate_items(items: list) -> list:
         if not name:
             continue
         # 数字：优先解析原始文字（新格式），回退旧格式数字字段
-        # 双列选值：模型同时抄写 仓库总库存(stock_text) 与 仓库销售库存(sales_stock_text)，
-        # 带「查看」链接的才是仓库总库存（PDD 后台该列必带查看）；另一个弃用。
+        # 三值解析：stock_text(仓库总库存)、sales_stock_text(仓库销售库存)、sales_text(仓库预估销售)
         _stock_txt = str(item.get('stock_text', '') or '')
         _sales_stock_txt = str(item.get('sales_stock_text', '') or '')
-        if '查看' in _stock_txt:
-            stock = _parse_num_text(_stock_txt)
-        elif '查看' in _sales_stock_txt:
-            stock = _parse_num_text(_sales_stock_txt)  # 模型把查看链接抄进了 sales_stock_text
-        elif _sales_stock_txt and _stock_txt and '查看' not in _stock_txt and '查看' not in _sales_stock_txt:
-            # 两列都没查看（模型都抄成纯数字）：无法区分，取 stock_text（默认仓库总库存）
-            stock = _parse_num_text(_stock_txt)
+        _sales_txt = str(item.get('sales_text', '') or '')
+        # 旧格式兼容：无 stock_text 时回退 stock/sales 字段
+        _stock_raw = _parse_num_text(_stock_txt if _stock_txt else item.get('stock', 0))
+        _sales_stock_raw = _parse_num_text(_sales_stock_txt)
+        _sales_raw = _parse_num_text(_sales_txt if _sales_txt else item.get('sales', 0))
+        # 0 库存修正（规则A）：sales_stock_text 带「查看」且值为 0 → 0 就在仓库总库存列（查看链接定位），直接取 0
+        if _sales_stock_raw == 0 and '查看' in _sales_stock_txt:
+            stock = 0
+        # 0 库存修正（规则B，带保险丝）：stock 异常大（> sales_stock×10）且 0 在 sales/sales_stock → 列错位
+        elif (_stock_raw > 0 and _sales_stock_raw > 0
+                and _stock_raw > _sales_stock_raw * 10
+                and (_sales_raw == 0 or _sales_stock_raw == 0)):
+            stock = 0
         else:
-            stock = _parse_num_text(_stock_txt if _stock_txt else item.get('stock', 0))
-        sales = _parse_num_text(item.get('sales_text', item.get('sales', 0)))
+            stock = _stock_raw
+        sales = _sales_raw
         region = item.get('region')
         region = '' if region is None or str(region).strip().lower() in ('none', 'null', '') else str(region).strip()
         # 去重：完全同名
@@ -394,27 +399,28 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
     prompt = """你是数据录入员，识别图中 PDD 后台订货表格。表格为竖向列表，每行一个商品。
 
 版面说明：
-- 表头行包含：商品名称、仓库销售库存、仓库总库存、仓库预估总销售数、省份（部分截图无省份列）
-- 商品名称：文字较长的一列，原样抄写（如「盐渍海带苗500g/袋脆嫩爽口火锅三秒菜」）
-- 仓库总库存：**该列单元格一定带「查看」链接**，文字形如「1860份 查看」或「0份 查看」；库存为 0 时显示「0份 查看」或「0」，这是真实业务数据，必须如实输出该行
-- 仓库销售库存：**紧挨在仓库总库存左边的另一列**，是纯数字（如「1000份」），不带「查看」链接
-- 仓库预估总销售数：单元格可能显示「258份 08-02 02:54」这样的数字+日期时间，只抄写数字和单位部分（如 "258份"），忽略日期时间；无数值填 0
+- 表格从左到右的列顺序是：仓库销售库存、仓库总库存、仓库预估总销售数
+- 商品名称：最左侧文字较长的一列，原样抄写（如「盐渍海带苗500g/袋脆嫩爽口火锅三秒菜」）
+- 仓库销售库存：**第一列**（左边），是数字（如「10000份」）
+- 仓库总库存：**第二列**（中间），是数字（如「1860份」或「0份」）；库存为 0 时显示「0份」或「0」，这是真实业务数据（售罄），必须如实输出该行
+- 仓库预估总销售数：**第三列**（右边），可能显示「258份 08-02 02:54」这样的数字+日期时间，只抄写数字和单位部分（如 "258份"），忽略日期时间；无数值填 0
 - 省份：有省份列则抄写省份名（如 云南），无省份列填 null
+- 注意：按列位置识别，不要被「查看」链接或其他文字干扰——只抄数字和单位
 
 输出要求：
 1. 严格按表格从上到下的顺序，逐行输出，一行不漏、不重复、不合并
 2. 每行输出一个 JSON 对象：
-   {"index": 行号从1开始, "name": "商品名", "stock_text": "仓库总库存单元格原文（必填，带查看链接）", "sales_stock_text": "仓库销售库存单元格原文（必填，纯数字）", "sales_text": "仓库预估总销售数单元格原文", "region": "省份名或null", "stock_x": 库存数字中心相对整图宽度的比例, "sales_x": 销量数字中心相对整图宽度的比例}
+   {"index": 行号从1开始, "name": "商品名", "stock_text": "仓库总库存（第二列）单元格原文", "sales_stock_text": "仓库销售库存（第一列）单元格原文", "sales_text": "仓库预估总销售数（第三列）单元格原文", "region": "省份名或null", "stock_x": 库存数字中心相对整图宽度的比例, "sales_x": 销量数字中心相对整图宽度的比例}
 3. stock_text / sales_stock_text / sales_text 必须原样抄写，不要自己转换数字、不要去掉单位；日期时间不抄
 4. stock_x / sales_x 是 0~1 之间的小数（如 0.62），表示该数字水平位置；无法确定时填 null
 5. 无法识别的单元格填 null，不要编造
-6. 仓库总库存为 0 是真实业务数据（售罄），该行必须保留并输出 stock_text "0份 查看"、stock_x 照常，绝不能跳过该行或返回空
+6. 仓库总库存为 0 是真实业务数据（售罄），该行必须保留并输出 stock_text "0份" 或 "0"、stock_x 照常，绝不能跳过该行或返回空
 7. 整张截图没有订货表格、无有效商品数据时只输出 []
 8. 只输出 JSON 数组，不要任何解释文字
 
 示例（仅示意格式，不是真实数据）：
-[{"index": 1, "name": "盐渍海带苗500g", "stock_text": "128份 查看", "sales_stock_text": "1000份", "sales_text": "258份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78},
- {"index": 2, "name": "盐渍海带结500g", "stock_text": "0份 查看", "sales_stock_text": "500份", "sales_text": "318份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78}]"""
+[{"index": 1, "name": "盐渍海带苗500g", "stock_text": "128份", "sales_stock_text": "1000份", "sales_text": "258份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78},
+ {"index": 2, "name": "盐渍海带结500g", "stock_text": "0份", "sales_stock_text": "500份", "sales_text": "318份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78}]"""
     max_tok = 1024
 
     for attempt, mdl in enumerate(models):
