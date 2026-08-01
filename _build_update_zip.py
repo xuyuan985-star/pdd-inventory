@@ -184,9 +184,9 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
             added += 1
             print(f"  + {os.path.basename(updater_exe)}")
 
-        # 资源文件（仅当变更时）
+        # 资源文件（仅当变更时）— settings.json 是用户本机配置，绝不进包
         if resources_changed:
-            for res in ['icon.ico', 'settings.json', 'regions.json']:
+            for res in ['icon.ico', 'regions.json']:
                 for src in [os.path.join(onedir, res), os.path.join(internal, res)]:
                     if os.path.exists(src):
                         zf.write(src, os.path.join(name, res))
