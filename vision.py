@@ -224,7 +224,9 @@ def _ai_locate_elements_impl(screenshot_path: str = None) -> dict:
 2. "查询"按钮的中心点
 输出严格JSON: {"dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY},"confidence":0.XX}"""
 
-    use_responses = 'responses' in endpoint
+    use_responses = 'responses' in endpoint.lower()  # 大小写不敏感，与 ocr.py 一致
+    mdl_l = (provider.get('model', '') or '').lower()
+    is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
     if use_responses:
         resp = _req.post(endpoint,
             headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
@@ -242,17 +244,20 @@ def _ai_locate_elements_impl(screenshot_path: str = None) -> dict:
             return None
         content = data['output'][-1]['content'][0]['text']
     else:
+        # GLM API 不识别 thinking 参数，仅非智谱模型发送（与 ocr.py 一致）
+        payload = {
+            'model': provider.get('model', 'Doubao-Seed-2.1-pro'),
+            'messages': [{'role': 'user', 'content': [
+                {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
+                {'type': 'text', 'text': prompt}
+            ]}],
+            'temperature': 0.0, 'max_tokens': 256,
+        }
+        if not is_glm:
+            payload['thinking'] = {'type': 'disabled'}
         resp = _req.post(endpoint,
             headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
-            json={
-                'model': provider.get('model', 'Doubao-Seed-2.1-pro'),
-                'messages': [{'role': 'user', 'content': [
-                    {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
-                    {'type': 'text', 'text': prompt}
-                ]}],
-                'temperature': 0.0, 'max_tokens': 256,
-                'thinking': {'type': 'disabled'}
-            }, timeout=30)
+            json=payload, timeout=30)
         data = resp.json()
         if 'choices' not in data:
             return None

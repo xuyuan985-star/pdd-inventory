@@ -56,6 +56,16 @@ def _unique_sheet_name(wb, base: str) -> str:
     return f"{base}_{i}"
 
 
+def _sanitize_cell(v):
+    """Excel/CSV 公式注入防护：以 = + - @ 开头的字符串加 ' 前缀，
+    避免用户可控文本（商品名）被 Excel 当作公式执行（=WEBSERVICE 外泄等）"""
+    if isinstance(v, str):
+        s = v.strip()
+        if s.startswith(('=', '+', '-', '@')):
+            return "'" + s
+    return v
+
+
 def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
     """
     GUI 路径：按地区分组的 cache → 追加 Sheet 到 PDD补货记录.xlsx
@@ -95,8 +105,8 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
         if not plans:
             continue
         for p in plans:
-            vals = [region, p['name'], p['stock'], p['daily'],
-                    p.get('ratio', p.get('days_left', '')), p['status'], p['qty']]
+            vals = [_sanitize_cell(region), _sanitize_cell(p['name']), p['stock'], p['daily'],
+                    p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(row=row, column=ci, value=v)
                 c.font = styles['cell_font']
@@ -156,8 +166,8 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
         c.border = styles['thin']
 
     for ri, p in enumerate(plans, 2):
-        vals = [p['name'], p['stock'], p['daily'],
-                p.get('ratio', p.get('days_left', '')), p['status'], p['qty']]
+        vals = [_sanitize_cell(p['name']), p['stock'], p['daily'],
+                p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
         for ci, v in enumerate(vals, 1):
             c = ws.cell(row=ri, column=ci, value=v)
             c.font = styles['cell_font']
@@ -190,8 +200,8 @@ def export_plans_to_csv(plans: list, export_dir: str = None) -> str:
         w = csv.writer(f)
         w.writerow(['商品', '规格', '库存', '销量', '库存÷销量', '状态', '补货量', '下单日', '到货日'])
         for p in plans:
-            # GUI 路径 plans 无 order_date/arrive_date，用 .get 防御
-            w.writerow([p['name'], p.get('sku', p['name']), p['stock'], p['daily'],
-                        p.get('ratio', p.get('days_left', '')), p['status'], p['qty'],
+            # GUI 路径 plans 无 order_date/arrive_date，用 .get 防御；单元格消毒防公式注入
+            w.writerow([_sanitize_cell(p['name']), _sanitize_cell(p.get('sku', p['name'])), p['stock'], p['daily'],
+                        p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty'],
                         p.get('order_date', '-'), p.get('arrive_date', '-')])
     return path
