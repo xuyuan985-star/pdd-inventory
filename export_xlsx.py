@@ -59,6 +59,7 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
 
     if not export_dir:
         export_dir = _get_default_export_dir()
+    os.makedirs(export_dir, exist_ok=True)  # 目录不存在时创建，避免保存崩溃
     path = os.path.join(export_dir, 'PDD补货记录.xlsx')
 
     ts_date = datetime.now().strftime('%m.%d_%H%M%S')
@@ -119,6 +120,7 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
 
     if not export_dir:
         export_dir = os.path.join(get_base_dir(), 'output')
+    os.makedirs(export_dir, exist_ok=True)  # 目录不存在时创建，避免保存崩溃
 
     path = os.path.join(export_dir, 'PDD补货记录.xlsx')
     ts = datetime.now().strftime('%m-%d %H.%M.%S')
