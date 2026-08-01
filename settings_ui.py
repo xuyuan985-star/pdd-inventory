@@ -55,8 +55,8 @@ class SettingsUIMixin:
             try: s['crop'] = {'left': float(left_var.get()), 'top': float(top_var.get())}
             except: s['crop'] = {'left': 0.11, 'top': 0.40}
             
-            with open(sf, 'w', encoding='utf-8') as f:
-                json.dump(s, f, ensure_ascii=False, indent=2)
+            from utils import Config
+            Config.save(s)  # 原子写入，防止崩溃截断配置
         tk.Button(cf, text='保存', command=save_crop, font=(self.FONT[0], 7)).pack(side='left', padx=10)
 
     def _pick_export_path(self, parent):
@@ -89,8 +89,8 @@ class SettingsUIMixin:
             s = {}
         s['export_path'] = path
         try:
-            with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(s, f, ensure_ascii=False, indent=2)
+            from utils import Config
+            Config.save(s)  # 原子写入
         except Exception as e:
             messagebox.showerror("保存失败", f"无法写入配置文件：\n{settings_file}\n\n{str(e)}", parent=dlg)
             return
@@ -616,8 +616,8 @@ class SettingsUIMixin:
                 'password': '' if pwd_var.get() == '输入密码' else pwd_var.get()
             }
             try:
-                with open(settings_file, 'w', encoding='utf-8') as f:
-                    json.dump(s, f, ensure_ascii=False, indent=2)
+                from utils import Config
+                Config.save(s)  # 原子写入
             except Exception as e:
                 messagebox.showerror("保存失败", str(e), parent=dlg)
                 return
@@ -742,6 +742,7 @@ class SettingsUIMixin:
 
         def save_all():
             import json
+            from utils import Config
             new_providers = {}
             for key in PRESET_PROVIDERS:
                 model = model_vars[key].get().strip()
@@ -762,18 +763,15 @@ class SettingsUIMixin:
                 combo = getattr(self, f'_api_combo_{key}', None)
                 if combo:
                     combo['values'] = history
-            sf = os.path.join(get_base_dir(), 'settings.json')
-            try: 
-                with open(sf, 'r', encoding='utf-8') as f:
-                    s = json.load(f)
-            except: s = {}
+            # 原子写入（Config.save 先写 .tmp 再 os.replace，防止崩溃截断配置）
+            s = Config.load()
+            if not isinstance(s, dict):
+                s = {}
             s['api'] = {
                 'active_provider': active_var.get(),
                 'providers': new_providers,
             }
-            
-            with open(sf, 'w', encoding='utf-8') as f:
-                json.dump(s, f, ensure_ascii=False, indent=2)
+            Config.save(s)
             self._refresh_model_badge()
             self.status_text.set(f"API 配置已保存 — 当前: {PRESET_PROVIDERS[active_var.get()]['name']}")
 

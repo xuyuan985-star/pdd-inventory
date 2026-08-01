@@ -1264,9 +1264,30 @@ class App(SettingsUIMixin):
                 else:
                     dlog("4.⚠ 未校准查询按钮，跳过"); continue
                 pyautogui.click(qx, qy)
-                # 5. 等待页面刷新（加截图验证：拍两次对比是否变化）
-                time.sleep(4.0)
-                dlog(f"5.页面刷新完成")
+                # 5. 等待页面刷新：截图变化检测（最多 10 秒，检测到页面变化即提前继续）
+                _w0 = os.path.join(get_base_dir(), 'output', f'_wait_{i}_0.png')
+                _w1 = os.path.join(get_base_dir(), 'output', f'_wait_{i}_1.png')
+                try:
+                    ss(_w0)
+                    changed = False
+                    for _t in range(10):
+                        time.sleep(1.0)
+                        ss(_w1)
+                        try:
+                            im0 = PILImage.open(_w0).convert('L').resize((160, 90))
+                            im1 = PILImage.open(_w1).convert('L').resize((160, 90))
+                            diff = sum(1 for a, b in zip(im0.getdata(), im1.getdata()) if abs(a - b) > 12)
+                            if diff > 40:  # 超过 40 个像素点差异视为页面已刷新
+                                changed = True
+                                break
+                            _w0, _w1 = _w1, _w0  # 滚动基准
+                        except Exception:
+                            pass
+                    dlog(f"5.页面刷新完成{'（变化检测）' if changed else '（超时兜底）'}")
+                finally:
+                    for _p in (_w0, _w1):
+                        try: os.remove(_p)
+                        except Exception: pass
                 
                 # 6. 截图 → OCR识别（阻塞，API返回才继续）
                 sp2 = os.path.join(get_base_dir(), 'output', f'_result_{i}.png')
@@ -1300,8 +1321,8 @@ class App(SettingsUIMixin):
         result_queue.put(None)
         
         self.win.after(0, self.win.deiconify)
-        # 启动主线程轮询：每 100ms 从队列取数据，逐批刷新 UI
-        self._poll_batch_queue(result_queue, success, total, total_items)
+        # 启动主线程轮询：切回主线程再调用，避免子线程直接操作 Tkinter 控件
+        self.win.after(0, lambda: self._poll_batch_queue(result_queue, success, total, total_items))
         if hud: time.sleep(1); self.win.after(0, hud.destroy)
     
     def _poll_batch_queue(self, q, success, total, total_items, idle=0):
@@ -1523,7 +1544,11 @@ class App(SettingsUIMixin):
             export_dir = self._get_export_path()
             path = export_cache_to_xlsx(self.cache, export_dir)
             self.status_text.set(f"已导出 {len(self.cache)} 个地区 → PDD补货记录.xlsx")
-            os.startfile(export_dir)
+            try:
+                os.startfile(export_dir)
+            except OSError as e:
+                messagebox.showwarning("无法打开目录", f"导出成功，但打开目录失败：{e}\n文件位置: {path}")
+                return
             messagebox.showinfo("导出成功", f"已导出 {len(self.cache)} 个地区\n文件: {path}")
         except Exception as e:
             messagebox.showerror("导出失败", str(e))

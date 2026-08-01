@@ -197,14 +197,15 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
                         continue
 
                 for f in files:
-                    # 跳过临时/编译/元数据文件
+                    # 跳过临时/编译文件
                     if any(f.endswith(ext) for ext in SKIP_EXTENSIONS):
                         continue
                     src = os.path.join(root, f)
                     rel = os.path.relpath(src, internal)
 
-                    # 跳过 pip 的 .dist-info 元数据目录
-                    if '.dist-info' in rel:
+                    # 跳过未变更包的 .dist-info 元数据；
+                    # 变更包的 dist-info 保留（certifi 运行时要读元数据定位证书路径）
+                    if '.dist-info' in rel and not _match_dist_info(rel.split(os.sep)[0], include_dirs):
                         continue
 
                     arcname = os.path.join(name, '_internal', rel)
