@@ -114,7 +114,7 @@ def auto_crop_table(image_path: str):
         best = max(groups, key=len)
         if len(best) < 3:
             return None
-        y_top = max(0, int(best[0]) - 10)
+        y_top = max(0, int(best[0]) - 60)  # 往上多留空间，确保表头行不被裁掉（表头在第一条分隔线上方）
         y_bottom = min(h, int(best[-1]) + 10)
 
         # x 范围：取该区域内横线的水平覆盖范围（贯穿线的端点即表格左右边界）
@@ -244,7 +244,8 @@ def _validate_items(items: list) -> list:
             sales = 0
         cleaned.append({'name': name, 'stock': stock, 'sales': sales, 'region': region,
                         'index': item.get('index'),
-                        'stock_x': item.get('stock_x'), 'sales_x': item.get('sales_x')})
+                        'stock_x': item.get('stock_x'), 'sales_x': item.get('sales_x'),
+                        '_stock_text': str(item.get('stock_text', '') or '')})
     
     if not cleaned:
         return []
@@ -295,9 +296,21 @@ def _validate_items(items: list) -> list:
         if sa > 0 and s > sa * 1000 and s >= 100000:
             it['stock'] = 0
     
+    # 仓库销售库存列误读检测：仓库总库存列一定带「查看」链接。
+    # 若多数行的 stock_text 含「查看」而个别行不含（且 stock 明显非 0），
+    # 判定该行读成了紧邻的「仓库销售库存」列（纯数字），修正为 0。
+    _txts = [it.get('_stock_text', '') for it in cleaned]
+    _with_link = sum(1 for t in _txts if '查看' in t)
+    if cleaned and _with_link >= max(2, len(cleaned) // 2):
+        for it in cleaned:
+            t = it.get('_stock_text', '')
+            if '查看' not in t and it.get('stock', 0) > 0:
+                it['stock'] = 0
+    
     # 清理内部字段，保持下游接口 {name, stock, sales, region}
     for it in cleaned:
         it.pop('index', None)
+        it.pop('_stock_text', None)
     
     # 列对齐校验：用 stock_x/sales_x 检测并修正列错位（模型未返回坐标时原样返回）
     cleaned = align_columns(cleaned)
@@ -357,9 +370,10 @@ def ocr_screenshot(image_path: str, forced_model: str = None) -> list:
     prompt = """你是数据录入员，识别图中 PDD 后台订货表格。表格为竖向列表，每行一个商品。
 
 版面说明：
-- 表头行包含：商品名称、仓库总库存、仓库预估总销售数、省份（部分截图无省份列）
+- 表头行包含：商品名称、仓库销售库存、仓库总库存、仓库预估总销售数、省份（部分截图无省份列）
 - 商品名称：文字较长的一列，原样抄写（如「盐渍海带苗500g/袋脆嫩爽口火锅三秒菜」）
-- 仓库总库存：单元格文字形如「100份 查看」，数字后带「份」和「查看」链接；库存为 0 时显示「0份 查看」或「0」，这是真实业务数据，必须如实输出该行
+- 仓库总库存：**该列单元格一定带「查看」链接**，文字形如「1860份 查看」或「0份 查看」；库存为 0 时显示「0份 查看」或「0」，这是真实业务数据，必须如实输出该行
+- 仓库销售库存：**紧挨在仓库总库存左边的另一列**，是纯数字（如「1000份」），不带「查看」链接。**不要把它当成仓库总库存**——只有带「查看」链接的那列才是仓库总库存
 - 仓库预估总销售数：单元格可能显示「258份 08-02 02:54」这样的数字+日期时间，只抄写数字和单位部分（如 "258份"），忽略日期时间；无数值填 0
 - 省份：有省份列则抄写省份名（如 云南），无省份列填 null
 
