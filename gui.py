@@ -641,7 +641,14 @@ class App(SettingsUIMixin):
                 return
             
             try:
-                subprocess.Popen([updater, '--target', sys.executable, '--restart', '--pid', str(os.getpid())])
+                # 兼容旧版更新器：先探测是否支持 --pid（v1.0 更新器不认识该参数会直接报错退出）
+                _args = [updater, '--help']
+                _probe = subprocess.run(_args, capture_output=True, timeout=5)
+                _help_out = (_probe.stdout + _probe.stderr).decode('utf-8', errors='replace')
+                _cmd = [updater, '--target', sys.executable, '--restart']
+                if '--pid' in _help_out:
+                    _cmd += ['--pid', str(os.getpid())]
+                subprocess.Popen(_cmd)
                 progress.stop()
                 status_lbl.configure(text="更新器已启动，主程序即将关闭...")
                 self.win.destroy()
