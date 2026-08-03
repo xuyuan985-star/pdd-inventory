@@ -245,6 +245,10 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
 if __name__ == '__main__':
     dist = os.path.join(REPO_ROOT, 'dist')
+    # dist 不存在时给出明确错误，而不是 os.listdir 抛 FileNotFoundError
+    if not os.path.isdir(dist):
+        print(f'错误: dist/ 目录不存在: {dist}\n请先执行 PyInstaller 打包')
+        sys.exit(1)
     # 自动发现 dist 下最新的 PDD EZ onedir
     candidates = [
         d for d in os.listdir(dist)

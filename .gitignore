@@ -20,3 +20,6 @@ _debug*.py
 _inject*.py
 _runner*.py
 keys.enc
+_trash/
+_trash_tmp/
+build_single/

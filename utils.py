@@ -4,7 +4,7 @@ PDD EZ — 公共工具函数
 """
 import os, sys, json
 
-VERSION = "v1.2"
+VERSION = "v1.3"
 EXE_NAME = f"PDD EZ {VERSION}.exe"
 
 
@@ -26,12 +26,14 @@ def version_newer(remote: str, local: str) -> bool:
         return remote != local  # fallback: 不相等即视为更新
 
 
+# 核心列映射默认值：真实 PDD 后台表头（glm-4.6v 实测确认）
+# 商品信息列含商品名 + 商品ID（小字 ID:xxx），识别时拆分为 name + sku_id
 DEFAULT_COL_MAPPING = {
-    'name': '商品名称',
+    'name': '商品信息',
     'stock': '仓库总库存',
     'sales': '仓库预估总销售数',
-    'region': '省份',
-    'warehouse': '仓库',
+    'region': '销售区域',
+    'warehouse': '仓库信息',
 }
 """核心列映射默认值：通用列名 → 业务字段。可在设置页修改（后台列名变化时）。"""
 
@@ -48,9 +50,19 @@ def get_ocr_columns() -> dict:
     mapping = dict(DEFAULT_COL_MAPPING)
     saved_map = cfg.get('mapping') or {}
     if isinstance(saved_map, dict):
-        for k, v in saved_map.items():
-            if v:  # 空值不覆盖默认
-                mapping[k] = v
+        # 旧默认检测：用户保存过但从未自定义（值恰为 v1.3 旧默认全集）时，
+        # 视为"默认映射未动过"，允许新默认覆盖——否则升级后旧列名（商品名称/省份/仓库）
+        # 匹配不上真实表头（商品信息/销售区域/仓库信息），导致识别为空。
+        _OLD_DEFAULTS = {
+            'name': '商品名称', 'stock': '仓库总库存', 'sales': '仓库预估总销售数',
+            'region': '省份', 'warehouse': '仓库',
+        }
+        _is_old_default = bool(saved_map) and all(
+            saved_map.get(k) == v for k, v in _OLD_DEFAULTS.items())
+        if not _is_old_default:
+            for k, v in saved_map.items():
+                if v:  # 空值不覆盖默认
+                    mapping[k] = v
     return {
         'all': list(cfg.get('all') or []),
         'selected': list(cfg.get('selected') or []),
@@ -122,7 +134,10 @@ def get_api_config() -> dict:
         if 'providers' in api:
             return api
         # 迁移旧格式 → 新格式
-        old_model = api.get('builtin_model', '') or api.get('custom_model', '')
+        # mode 字段可能是旧版唯一标识（{"api": {"mode": "qwen", "key": "xxx"}}），
+        # 需作为模型名回退，否则迁移后一律判成 doubao
+        old_model = (api.get('builtin_model', '') or api.get('custom_model', '')
+                     or api.get('mode', ''))
         old_key = api.get('key', '')
         # 推断提供商
         if old_model.lower().startswith('doubao') or 'doubao' in old_model.lower():
@@ -147,15 +162,19 @@ def get_api_config() -> dict:
     return {}
 
 
-def capture_pdd_screenshot(output_path: str) -> bool:
+def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> bool:
     """
     锁定浏览器窗口截图 → 按设置裁剪 → 保存。
     返回 True 表示截到窗口，False 表示未找到窗口（已 fallback 全屏）。
+    out_window_pos: 可选 dict，调用方传入后填充 {'left': int, 'top': int}（窗口左上角
+    在全屏坐标系中的位置）。滚动/点击坐标换算时用窗口位置还原全屏偏移，
+    避免窗口未最大化时坐标错位（如 1920 窗口在 4K 屏上）。
     """
     import os as _os, json as _json, time as _time
     _os.makedirs(_os.path.dirname(output_path) or '.', exist_ok=True)
 
     # 读裁剪比例（与默认值合并，缺字段时用默认，避免 KeyError）
+    # 强制 float：settings.json 被手改坏（如字符串 "abc"）时回退默认，避免 int() TypeError
     crop_cfg = {'left': 0.11, 'top': 0.40}
     try:
         sf = _os.path.join(get_base_dir(), 'settings.json')
@@ -166,12 +185,18 @@ def capture_pdd_screenshot(output_path: str) -> bool:
                     crop_cfg = {**crop_cfg, **saved}
     except Exception:
         pass
+    try:
+        crop_left = float(crop_cfg.get('left', 0.11))
+        crop_top = float(crop_cfg.get('top', 0.40))
+    except (TypeError, ValueError):
+        crop_left, crop_top = 0.11, 0.40
 
     import pyautogui as pg
     from PIL import Image as PILImage
 
     found_window = False
     img = None
+    win_left = win_top = 0
     try:
         import pygetwindow as gw
         for title in ['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox']:
@@ -183,6 +208,7 @@ def capture_pdd_screenshot(output_path: str) -> bool:
                     win.restore()
                 win.activate()
                 _time.sleep(0.2)
+                win_left, win_top = win.left, win.top
                 img = pg.screenshot(region=(win.left, win.top, win.width, win.height))
                 break
     except Exception:
@@ -191,12 +217,22 @@ def capture_pdd_screenshot(output_path: str) -> bool:
     if img is None:
         # 未找到窗口，或找到窗口但截图失败（句柄无效等）→ fallback 全屏
         img = pg.screenshot()
+        win_left = win_top = 0
+
+    # 调用方需要窗口位置（滚动坐标换算）时回传
+    if isinstance(out_window_pos, dict):
+        out_window_pos['left'] = int(win_left)
+        out_window_pos['top'] = int(win_top)
+        # 窗口原始宽高（截图缩放前），供滚动坐标按真实比例还原
+        if img is not None:
+            out_window_pos['width'] = int(img.size[0])
+            out_window_pos['height'] = int(img.size[1])
 
     w, h = img.size
-    sidebar = int(w * crop_cfg['left'])
+    sidebar = int(w * crop_left)
     # 裁剪参数合法性校验：防止 left 过大导致宽度为 0，进而 resize 除零崩溃
     sidebar = max(0, min(sidebar, w - 1))
-    top = int(h * crop_cfg['top'])
+    top = int(h * crop_top)
     top = max(0, min(top, h - 1))
     img = img.crop((sidebar, top, w, h))
     cw, ch = img.size  # 裁剪后尺寸
