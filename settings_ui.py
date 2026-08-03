@@ -79,6 +79,143 @@ class SettingsUIMixin:
         tk.Button(content, text='保存分辨率', command=save_res,
                   font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
 
+        # ── 识别列配置（v1.3 通用列：客户自主选择要识别的列）──
+        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
+        tk.Label(content, text='识别列配置', font=self.FONT_HEADING).pack(pady=(5,2))
+        self.col_status_var = tk.StringVar(self.win, value='')
+        tk.Label(content, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
+        col_btn_row = tk.Frame(content); col_btn_row.pack(pady=8)
+        tk.Button(col_btn_row, text='🔍 探测全部列', command=self._probe_columns,
+                  font=(self.FONT[0], 8), bg=self.C_SECONDARY, fg='#FFFFFF').pack(side='left', padx=5)
+        tk.Button(col_btn_row, text='⚙ 配置识别列', command=self._config_columns,
+                  font=(self.FONT[0], 8)).pack(side='left', padx=5)
+        tk.Label(content, textvariable=self.col_status_var,
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
+
+    def _probe_columns(self):
+        """探测：截图 → AI 定位表格 → 全量识别所有列 → 保存 all 列清单"""
+        import time, threading
+        self.col_status_var.set("探测中 — 请确保 PDD 后台订货管理页面在前台…")
+        def task():
+            try:
+                from utils import capture_pdd_screenshot, get_base_dir as _gbd
+                import os as _os
+                shot = _os.path.join(_gbd(), 'output', '_probe_cols.png')
+                capture_pdd_screenshot(shot)
+                # AI 定位表格（失败则全图识别，由 ocr_table 内部回退）
+                bbox = None
+                try:
+                    from vision import ai_locate_table
+                    loc = ai_locate_table(shot)
+                    if loc:
+                        bbox = loc.get('table')
+                except Exception:
+                    bbox = None
+                from ocr import ocr_table
+                result = ocr_table(shot, columns=None, table_bbox=bbox)
+                cols = result.get('columns') or []
+                if not cols:
+                    self.win.after(0, lambda: self.col_status_var.set(
+                        "❌ 未识别到表格列，请确认页面已打开订货管理表格"))
+                    return
+                from utils import save_ocr_columns, get_ocr_columns
+                cfg = get_ocr_columns()
+                save_ocr_columns(all_cols=cols, selected=cfg['selected'], mapping=cfg['mapping'])
+                self.win.after(0, lambda: self.col_status_var.set(
+                    f"✅ 探测到 {len(cols)} 列：{'、'.join(cols[:8])}{'…' if len(cols)>8 else ''}\n"
+                    f"（已保存，点「配置识别列」勾选要识别的列）"))
+                self.win.after(0, lambda: messagebox.showinfo(
+                    "探测完成", f"识别到 {len(cols)} 列：\n{'、'.join(cols)}\n\n"
+                    f"点「配置识别列」勾选需要识别的列。\n库存/销量列用于补货计算，建议保留。",
+                    parent=self.win))
+            except Exception as e:
+                self.win.after(0, lambda e=e: self.col_status_var.set(f"❌ 探测失败: {str(e)[:60]}"))
+        threading.Thread(target=task, daemon=True).start()
+
+    def _config_columns(self):
+        """配置识别列：勾选要识别的列 + 核心列映射下拉"""
+        from utils import get_ocr_columns, save_ocr_columns
+        cfg = get_ocr_columns()
+        all_cols = cfg['all'] or []
+        if not all_cols:
+            messagebox.showwarning("未探测", "请先点「探测全部列」识别后台表格的所有列",
+                                   parent=self.win)
+            return
+        dlg = tk.Toplevel(self.win)
+        dlg.title("配置识别列")
+        dlg.geometry("480x560")
+        dlg.configure(bg=self.C_BG)
+        tk.Label(dlg, text="勾选要识别的列", font=self.FONT_HEADING,
+                 bg=self.C_BG, fg=self.C_TEXT).pack(pady=(10,2))
+        tk.Label(dlg, text="库存/销量列为补货计算必需，取消后计算列将为空",
+                 font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack()
+
+        # 列勾选（可滚动）
+        canvas = tk.Canvas(dlg, bg=self.C_SURFACE, highlightthickness=0)
+        sb = tk.Scrollbar(dlg, orient="vertical", command=canvas.yview)
+        list_frame = tk.Frame(canvas, bg=self.C_SURFACE)
+        list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=list_frame, anchor="nw", width=430)
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=(15,0), pady=5)
+        sb.pack(side="right", fill="y", padx=(0,15), pady=5)
+
+        selected_set = set(cfg['selected'])
+        col_vars = {}
+        for c in all_cols:
+            var = tk.BooleanVar(dlg, value=(c in selected_set))
+            col_vars[c] = var
+            tk.Checkbutton(list_frame, text=c, variable=var, font=(self.FONT[0], 8),
+                           bg=self.C_SURFACE, fg=self.C_TEXT,
+                           selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE,
+                           anchor="w").pack(fill="x", padx=8, pady=1)
+
+        # 核心列映射
+        map_frame = tk.Frame(dlg, bg=self.C_BG)
+        map_frame.pack(fill="x", padx=15, pady=(8,2))
+        tk.Label(map_frame, text="核心列映射（后台列名变化时修改）",
+                 font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(anchor="w")
+        mapping = cfg['mapping']
+        map_vars = {}
+        for field, label in [('name', '商品名称列'), ('stock', '库存列'),
+                             ('sales', '销量列'), ('region', '省份列'), ('warehouse', '仓库列')]:
+            row = tk.Frame(map_frame, bg=self.C_BG)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=label, font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                     width=10, anchor="w").pack(side="left")
+            var = tk.StringVar(dlg, value=mapping.get(field, ''))
+            map_vars[field] = var
+            tk.OptionMenu(row, var, *all_cols).pack(side="left", fill="x", expand=True)
+
+        def save():
+            selected = [c for c, v in col_vars.items() if v.get()]
+            new_map = {f: v.get() for f, v in map_vars.items()}
+            # 强制必选核心列：商品名称/库存/销量（含映射对应的列）
+            missing = []
+            for f, label in [('name', '商品名称列'), ('stock', '库存列'), ('sales', '销量列')]:
+                col = new_map.get(f, '')
+                if not col:
+                    missing.append(label)
+            if missing:
+                messagebox.showwarning("核心列缺失", "请为「" + "、".join(missing) + "」指定对应列\n"
+                                        "（商品名称/库存/销量为识别与补货计算必需）", parent=dlg)
+                return
+            # 核心列映射列强制加入 selected（识别必需）
+            for f in ('name', 'stock', 'sales'):
+                col = new_map.get(f, '')
+                if col and col not in selected:
+                    selected.append(col)
+            save_ocr_columns(all_cols=all_cols, selected=selected, mapping=new_map)
+            self.col_status_var.set(f"已保存识别列：{len(selected)} 列")
+            self.status_text.set(f"识别列配置已保存 — {len(selected)} 列")
+            dlg.destroy()
+
+        tk.Button(dlg, text="保存", command=save, font=self.FONT_BOLD,
+                  bg=self.C_PRIMARY, fg="#FFFFFF", width=14).pack(pady=(8,12))
+        dlg.transient(self.win)
+        dlg.grab_set()
+
     def _pick_export_path(self, parent):
         from tkinter import filedialog
         path = filedialog.askdirectory(title="选择导出文件夹")
@@ -470,15 +607,24 @@ class SettingsUIMixin:
                 tk.Label(pw, text="倒计时结束后自动记录鼠标位置", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
                 recorded = [False]
                 def countdown(n=3):
+                    # 窗口可能已被关闭（用户取消/主窗口销毁）→ after 回调仍可能触发，需防 TclError
+                    try:
+                        if not pw.winfo_exists():
+                            return
+                    except Exception:
+                        return
                     if recorded[0]: return
-                    if n > 0:
-                        cdlbl.configure(text=str(n))
-                        pw.after(1000, lambda: countdown(n-1))
-                    else:
-                        pos[step] = pyautogui.position()
-                        recorded[0] = True
-                        cdlbl.configure(text="✓ 已记录")
-                        pw.after(500, pw.destroy)
+                    try:
+                        if n > 0:
+                            cdlbl.configure(text=str(n))
+                            pw.after(1000, lambda: countdown(n-1))
+                        else:
+                            pos[step] = pyautogui.position()
+                            recorded[0] = True
+                            cdlbl.configure(text="✓ 已记录")
+                            pw.after(500, pw.destroy)
+                    except Exception:
+                        return
                 pw.after(500, countdown)
                 try:
                     pw.grab_set(); pw.wait_window()

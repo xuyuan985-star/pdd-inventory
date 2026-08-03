@@ -26,6 +26,52 @@ def version_newer(remote: str, local: str) -> bool:
         return remote != local  # fallback: 不相等即视为更新
 
 
+DEFAULT_COL_MAPPING = {
+    'name': '商品名称',
+    'stock': '仓库总库存',
+    'sales': '仓库预估总销售数',
+    'region': '省份',
+    'warehouse': '仓库',
+}
+"""核心列映射默认值：通用列名 → 业务字段。可在设置页修改（后台列名变化时）。"""
+
+
+def get_ocr_columns() -> dict:
+    """
+    读取识别列配置：{all: [探测到的全部列], selected: [客户勾选列], mapping: {字段: 列名}}。
+    缺省时用默认映射，selected 为空则默认全部列。
+    """
+    s = Config.load()
+    cfg = s.get('ocr_columns') or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    mapping = dict(DEFAULT_COL_MAPPING)
+    saved_map = cfg.get('mapping') or {}
+    if isinstance(saved_map, dict):
+        for k, v in saved_map.items():
+            if v:  # 空值不覆盖默认
+                mapping[k] = v
+    return {
+        'all': list(cfg.get('all') or []),
+        'selected': list(cfg.get('selected') or []),
+        'mapping': mapping,
+    }
+
+
+def save_ocr_columns(all_cols: list = None, selected: list = None, mapping: dict = None):
+    """持久化识别列配置到 settings.json（原子写入）。"""
+    s = Config.load()
+    cur = s.get('ocr_columns') or {}
+    if all_cols is not None:
+        cur['all'] = list(all_cols)
+    if selected is not None:
+        cur['selected'] = list(selected)
+    if mapping is not None:
+        cur['mapping'] = dict(mapping)
+    s['ocr_columns'] = cur
+    Config.save(s)
+
+
 class Config:
     """配置单例：唯一读写 settings.json，原子写入。"""
     @staticmethod
