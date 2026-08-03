@@ -35,6 +35,20 @@ except ImportError:
 from config import RESOLUTION_PRESETS, THEMES, load_theme_pref, load_resolution_pref
 
 
+def _validate_num_entry(p) -> bool:
+    """数字输入校验：空串或纯数字（含整数/小数）通过，非法字符拒绝"""
+    if p is None:
+        return True
+    s = str(p).strip()
+    if not s:
+        return True
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
 class App(SettingsUIMixin):
     # Design system — New Minimalism / Flat Design
     C_PRIMARY = '#1E293B'      # Slate 800
@@ -111,6 +125,8 @@ class App(SettingsUIMixin):
         self._apply_theme(self._theme_name)
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
+        self._filter_warning_only = False  # 结果表"仅显示预警"筛选
+        self._suppress_auto_append = False  # 清空输入时临时禁用自动加行
         self._batch_stop = threading.Event()  # 紧急停止信号
         self.status_text = tk.StringVar(self.win, value="就绪 — 输入库存和预估销量后点计算")
         self.regions = self._load_regions()
@@ -136,7 +152,7 @@ class App(SettingsUIMixin):
         except Exception:
             return
 
-        CURRENT_CONFIG_VERSION = 3
+        CURRENT_CONFIG_VERSION = 4  # v1.4 移除绝对坐标模式
         ver = s.get('config_version', 0)
         if ver >= CURRENT_CONFIG_VERSION:
             return
@@ -200,6 +216,17 @@ class App(SettingsUIMixin):
                         cal[key] = {}
                 s['calibrate'] = cal
             s['config_version'] = 3
+            _write()
+
+        # v3 → v4: 移除绝对坐标模式，统一 AI 智能定位
+        # 旧 absolute 数据仅作展示参考，不再作为定位来源（运行时 AI 实时定位覆盖）
+        if ver < 4:
+            cal = s.get('calibrate', {})
+            if isinstance(cal, dict):
+                cal['mode'] = 'ai'
+                cal.setdefault('ai', {})
+                s['calibrate'] = cal
+            s['config_version'] = 4
             _write()
         
     def _check_update(self):
@@ -374,6 +401,21 @@ class App(SettingsUIMixin):
         self.tree = ttk.Treeview(self.result_frame, columns=columns, show="headings", height=15)
         self.tree.pack(fill="both", expand=True, padx=3, pady=3)
         
+        # 仅显示预警筛选
+        filter_frame = tk.Frame(self.result_frame)
+        filter_frame.pack(fill="x", padx=3, pady=(0,3))
+        self._filter_var = tk.BooleanVar(self.win, value=False)
+        def toggle_filter():
+            self._filter_warning_only = self._filter_var.get()
+            if self.plans:
+                self._render_tree(self.plans)
+        tk.Checkbutton(filter_frame, text="仅显示预警（需补货/近期补货）", variable=self._filter_var,
+                       command=toggle_filter, font=(self.FONT[0], 8),
+                       bg=self.C_SURFACE, fg=self.C_TEXT, selectcolor=self.C_SURFACE,
+                       activebackground=self.C_SURFACE).pack(side="left")
+        tk.Label(filter_frame, text="商品过多时可筛选，减少渲染量",
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=8)
+        
         for col, w in zip(columns, [260, 80, 80, 80, 100, 70]):
             self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
             self.tree.column(col, width=w, anchor="center")
@@ -527,11 +569,43 @@ class App(SettingsUIMixin):
                         bg=self.C_SURFACE, fg=self.C_TEXT, insertbackground=self.C_TEXT,
                         selectbackground=self.C_SECONDARY, selectforeground='#FFFFFF')
         
+        # 数字输入校验：只允许数字（含空串），非法输入即时标红
+        _bad_bg = '#FEE2E2'  # 浅红底提示非法
+
+        def _make_num_entry(var, col):
+            entry = tk.Entry(f, textvariable=var, width=10, justify="center", **e_kwargs)
+            entry.grid(row=0, column=col, padx=4, pady=2)
+            # 输入时校验：非法字符拒绝并标红，合法恢复
+            def _on_key(p):
+                ok = _validate_num_entry(p)
+                try:
+                    entry.configure(bg=self.C_SURFACE if ok else _bad_bg)
+                except Exception:
+                    pass
+                return True
+            entry.configure(validate='key', validatecommand=(self.win.register(_on_key), '%P'))
+            return entry
+
         tk.Entry(f, textvariable=row['name'], **e_kwargs).grid(row=0, column=0, sticky="ew", padx=10, pady=2)
-        tk.Entry(f, textvariable=row['stock'], width=10, justify="center", **e_kwargs).grid(row=0, column=1, padx=4, pady=2)
-        tk.Entry(f, textvariable=row['sales'], width=10, justify="center", **e_kwargs).grid(row=0, column=2, padx=4, pady=2)
+        _make_num_entry(row['stock'], 1)
+        _make_num_entry(row['sales'], 2)
         
         self.rows.append(row)
+        
+        # 自动加行：最后一行有数据时自动追加（监听三个输入框变化）
+        # 注意：trace_add 对每行都注册，回调必须校验"触发者即末行"，否则回改中间行会误加空行
+        def _auto_append(row, *_args):
+            if getattr(self, '_suppress_auto_append', False):
+                return  # 清空输入时禁用
+            if not self.rows:
+                return
+            if row is not self.rows[-1]:
+                return  # 只有末行输入才可能触发加行
+            if row['name'].get().strip() or row['stock'].get().strip() or row['sales'].get().strip():
+                self._add_row()
+        row['name'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
+        row['stock'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
+        row['sales'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
     
     def _load_regions(self):
         """加载地区→商品运输时效映射，兼容旧格式 {region: days} → {region: {product: days}}"""
@@ -695,8 +769,9 @@ class App(SettingsUIMixin):
         def _walk_color(w):
             if getattr(w, '_skip_theme', False):
                 return
-            # ttk 控件由 _update_ttk_theme 统一管理，跳过避免 TclError
-            if w.winfo_class().startswith('T'):
+            # ttk 控件由 _update_ttk_theme 统一管理，跳过避免 TclError；
+            # 但 Toplevel（弹窗）类名也以 T 开头，不是 ttk，需排除
+            if w.winfo_class().startswith('T') and w.winfo_class() != 'Toplevel':
                 return
             for attr in ('bg', 'fg', 'highlightbackground', 'highlightcolor',
                          'activebackground', 'selectbackground', 'selectforeground'):
@@ -760,7 +835,19 @@ class App(SettingsUIMixin):
                             w.configure(bg=theme['C_BG'])
                         actual_bg = theme['C_BG']
                 elif cls == 'Label':
-                    w.configure(bg=parent_bg, fg=theme['C_TEXT'])
+                    if getattr(w, '_skip_theme', False):
+                        # 跳过标记的容器内 Label：保留其定制 fg（如标题栏白字、徽章色）
+                        try:
+                            w.configure(bg=parent_bg)
+                        except Exception:
+                            pass
+                    else:
+                        # 普通 Label：只设背景跟随父级；fg 已由 _walk_color 按旧→新映射处理，
+                        # 不再强制覆盖 C_TEXT，避免标题栏白字被刷黑（白底/深色主题下看不清）
+                        try:
+                            w.configure(bg=parent_bg)
+                        except Exception:
+                            pass
                     actual_bg = parent_bg
                 elif cls == 'Button':
                     # 保持功能性按钮颜色，但设默认底色
@@ -901,28 +988,30 @@ class App(SettingsUIMixin):
         except Exception:
             _sel_cols = []
         if not _sel_cols:
-            _sel_cols = ['商品名称', '仓库总库存', '仓库预估总销售数']
+            _sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
+
+        # 防御性转换：兼容字符串/None/含单位文本，避免 ValueError/TypeError（循环外定义避免重复建函数）
+        def _to_int(v, default=0):
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                return default
+
+        # 补货时间偏移量：默认 1，可由 settings.replenishment_offset 覆盖（循环外读一次，避免每迭代 IO）
+        try:
+            from utils import Config as _Cfg
+            _off = int(_Cfg.load().get('replenishment_offset', 1))
+        except Exception:
+            _off = 1
 
         for item in items:
             name = item.get('name', '')
-            # 防御性转换：兼容字符串/None/含单位文本，避免 ValueError/TypeError
-            def _to_int(v, default=0):
-                try:
-                    return int(v)
-                except (ValueError, TypeError):
-                    return default
             stock = _to_int(item.get('stock', 0))
             daily = max(_to_int(item.get('sales', 0)), 0)
             calc_daily = daily if daily > 0 else 1  # 除法保护，显示保留原始值
             shipping = self._get_shipping(region, name)  # 逐商品查运输时效
             
             ratio = stock / calc_daily
-            # 补货时间偏移量：默认 1，可由 settings.replenishment_offset 覆盖（与 main.py 一致）
-            try:
-                from utils import Config as _Cfg
-                _off = int(_Cfg.load().get('replenishment_offset', 1))
-            except Exception:
-                _off = 1
             lead_time = shipping + _off
             reorder = ratio - lead_time
             
@@ -957,38 +1046,12 @@ class App(SettingsUIMixin):
         priority = {'red': 0, 'yellow': 1, 'green': 2}
         plans.sort(key=lambda p: priority.get(p['color'], 99))
         
-        # 动态列：勾选列 + 固定计算列（可售卖天数/状态/补货量）
-        calc_cols = [('可售卖天数', 'ratio'), ('状态', 'status'), ('补货量', 'qty')]
-        display_cols = list(_sel_cols) + [c[0] for c in calc_cols]
-        # 重建 tree 列（ttk.Treeview 支持运行时改 columns）
-        try:
-            self.tree.configure(columns=display_cols)
-            for col in display_cols:
-                width = 260 if col in ('商品名称', '商品') or '名称' in col else 80
-                self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
-                self.tree.column(col, width=width, anchor="center")
-        except Exception:
-            pass  # tree 尚未构建完成时忽略（首次 _build_ui 已建默认列）
-
-        # Show
-        self.tree.delete(*self.tree.get_children())
-        for p in plans:
-            tags = ()
-            if p['color'] == 'red': tags = ('urgent',)
-            elif p['color'] == 'yellow': tags = ('warning',)
-            raw = p['_raw'] or {}
-            row_vals = []
-            for col in _sel_cols:
-                # 勾选列优先取 _raw 原文；缺省回退 plan 字段（旧路径兼容）
-                v = raw.get(col)
-                if v is None or v == '':
-                    v = p.get(col, '')
-                row_vals.append(v)
-            row_vals += [p['ratio'], p['status'], p['qty']]
-            self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
+        # Show（按筛选状态渲染，内部重建动态列）
+        self._render_tree(plans)
         
         self.plans = plans
-        self.status_text.set(f"计算完成 — {len(plans)} 个商品")
+        self.status_text.set(f"计算完成 — {len(plans)} 个商品"
+                             + ("（仅显示预警）" if self._filter_warning_only else ""))
         self.export_btn.config(state="normal")
         self._sort_col = None
         self._auto_expand(len(plans))
@@ -998,6 +1061,44 @@ class App(SettingsUIMixin):
         self.active_region = region
         self.cache[region] = {'plans': plans, 'items': items}
         self._update_tabs()
+    
+    def _render_tree(self, plans):
+        """按当前筛选状态把 plans 渲染到结果表（支持“仅显示预警”筛选）"""
+        from utils import get_ocr_columns
+        try:
+            _col_cfg = get_ocr_columns()
+            _sel_cols = [c for c in (_col_cfg.get('selected') or []) if c]
+        except Exception:
+            _sel_cols = []
+        if not _sel_cols:
+            _sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
+        calc_cols = [('可售卖天数', 'ratio'), ('状态', 'status'), ('补货量', 'qty')]
+        display_cols = list(_sel_cols) + [c[0] for c in calc_cols]
+        try:
+            self.tree.configure(columns=display_cols)
+            for col in display_cols:
+                width = 260 if col in ('商品名称', '商品') or '名称' in col else 80
+                self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
+                self.tree.column(col, width=width, anchor="center")
+        except Exception:
+            pass
+        self.tree.delete(*self.tree.get_children())
+        # 筛选：仅显示预警（红/黄行）
+        if getattr(self, '_filter_warning_only', False):
+            plans = [p for p in plans if p.get('color') in ('red', 'yellow')]
+        for p in plans:
+            tags = ()
+            if p['color'] == 'red': tags = ('urgent',)
+            elif p['color'] == 'yellow': tags = ('warning',)
+            raw = p['_raw'] or {}
+            row_vals = []
+            for col in _sel_cols:
+                v = raw.get(col)
+                if v is None or v == '':
+                    v = p.get(col, '')
+                row_vals.append(v)
+            row_vals += [p['ratio'], p['status'], p['qty']]
+            self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
     
     def _update_tabs(self):
         """更新地区切换标签"""
@@ -1026,39 +1127,14 @@ class App(SettingsUIMixin):
         data = self.cache[region]
         self.region_var.set(region)
         
-        # 显示该地区的结果（v1.3 动态列：与 _calc_from_items 一致的勾选列 + 计算列）
-        calc_cols = [('可售卖天数', 'ratio'), ('状态', 'status'), ('补货量', 'qty')]
-        sel_cols = []
-        if data['plans'] and data['plans'][0].get('_sel_cols'):
-            sel_cols = list(data['plans'][0]['_sel_cols'])
-        if not sel_cols:
-            sel_cols = ['商品名称', '仓库总库存', '仓库预估总销售数']
-        display_cols = list(sel_cols) + [c[0] for c in calc_cols]
-        try:
-            self.tree.configure(columns=display_cols)
-            for col in display_cols:
-                width = 260 if col in ('商品名称', '商品') or '名称' in col else 80
-                self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
-                self.tree.column(col, width=width, anchor="center")
-        except Exception:
-            pass
-        self.tree.delete(*self.tree.get_children())
-        for p in data['plans']:
-            tags = ()
-            if p['color'] == 'red': tags = ('urgent',)
-            elif p['color'] == 'yellow': tags = ('warning',)
-            raw = p.get('_raw') or {}
-            row_vals = []
-            for col in sel_cols:
-                v = raw.get(col)
-                if v is None or v == '':
-                    v = p.get(col, '')
-                row_vals.append(v)
-            row_vals += [p.get('ratio', p.get('days_left', '')), p['status'], p['qty']]
-            self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
+        # 显示该地区的结果（v1.3 动态列 + 筛选：复用 _render_tree）
+        self._render_tree(data['plans'])
         self.plans = data['plans']
+        self._sort_col = None
+        self._sort_reverse = False
         self._update_tabs()
-        self.status_text.set(f"已切换到 {region} — {len(data['plans'])} 个商品")
+        suffix = "（仅显示预警）" if self._filter_warning_only else ""
+        self.status_text.set(f"已切换到 {region} — {len(data['plans'])} 个商品{suffix}")
         self._auto_expand(len(data['plans']))
     
     def _del_row(self):
@@ -1070,10 +1146,20 @@ class App(SettingsUIMixin):
     
     def _clear_input_rows(self):
         """清空所有输入行，同时清除 Treeview 结果"""
-        for row in self.rows:
-            row['name'].set('')
-            row['stock'].set('')
-            row['sales'].set('')
+        # 临时禁用自动加行：set('') 触发 write trace 会追加空行，清空后多出一行
+        self._suppress_auto_append = True
+        try:
+            for row in self.rows:
+                row['name'].set('')
+                row['stock'].set('')
+                row['sales'].set('')
+        finally:
+            self._suppress_auto_append = False
+        # 清理自动加行产生的多余空行（保留初始 3 行）
+        while len(self.rows) > 3 and all(
+                not r['name'].get().strip() and not r['stock'].get().strip()
+                and not r['sales'].get().strip() for r in self.rows[-1:]):
+            self._del_row()
         # 也清掉 Treeview 旧结果
         self.tree.delete(*self.tree.get_children())
     
@@ -1091,7 +1177,7 @@ class App(SettingsUIMixin):
         except Exception:
             mapping, selected = {}, []
         if not selected:
-            selected = ['商品名称', '仓库总库存', '仓库预估总销售数']
+            selected = ['商品信息', '仓库总库存', '仓库预估总销售数']
         # 覆盖所有勾选列（未填到的保持空字符串，渲染时显示空白而非缺失）
         raw = {col: '' for col in selected}
         for field, val in (('name', name), ('stock', stock),
@@ -1233,11 +1319,13 @@ class App(SettingsUIMixin):
                 hud_text.pack(fill='both', expand=True)
                 hud_text.insert('end', '🔍 测试模式启动\n')
                 hud_text.see('end')
+            # 先缓存所有 UI 值再销毁对话框（destroy 后访问控件会 TclError）
+            _wh_raw = wh_entry.get().strip()
+            _dual_mode = dual_var.get()
             dlg.destroy()
             # 解析分仓库映射：格式 "省份=仓库1,仓库2; 省份2=仓库A,仓库B"
             # 支持全角分号/逗号/等号/冒号容错；省份名自动去「省/市/自治区/特别行政区」后缀
             warehouse_map = {}
-            _wh_raw = wh_entry.get().strip()
             if _wh_raw:
                 for _part in _wh_raw.replace('；', ';').replace('，', ',').replace('＝', '=').split(';'):
                     _part = _part.strip()
@@ -1264,7 +1352,7 @@ class App(SettingsUIMixin):
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
             threading.Thread(target=self._run_batch_sequence,
-                             args=(selected, hud, hud_text, dual_var.get()),
+                             args=(selected, hud, hud_text, _dual_mode),
                              kwargs={'warehouse_map': warehouse_map}, daemon=True).start()
         
         tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
@@ -1295,7 +1383,10 @@ class App(SettingsUIMixin):
         
         def dlog(msg):
             if hud_text:
-                self.win.after(0, lambda m=msg: (hud_text.insert('end', f'{m}\n'), hud_text.see('end')))
+                # HUD 可能被用户手动关闭：insert 前先确认窗口存活，防 TclError
+                self.win.after(0, lambda m=msg: (
+                    (hud_text.insert('end', f'{m}\n'), hud_text.see('end'))
+                    if hud_text.winfo_exists() else None))
             self.win.after(0, lambda m=msg: self.status_text.set(f"🔍 {m}"))
         
         self.win.after(0, self.win.iconify); time.sleep(1.5)
@@ -1308,8 +1399,9 @@ class App(SettingsUIMixin):
                 tasks.append((reg, wh))
         total = len(tasks); success = 0; total_items = 0
         from utils import capture_pdd_screenshot
+        win_pos = {}  # 记录浏览器窗口左上角（全屏坐标），滚动换算用
         def ss(path):
-            capture_pdd_screenshot(path)
+            capture_pdd_screenshot(path, out_window_pos=win_pos)
         preset = RESOLUTION_PRESETS.get(load_resolution_pref(), RESOLUTION_PRESETS['1920×1080 (Full HD)'])
         try:
             sw, sh = pyautogui.size()
@@ -1323,6 +1415,8 @@ class App(SettingsUIMixin):
             with open(os.path.join(get_base_dir(), 'settings.json'), 'r', encoding='utf-8') as _f:
                 _cal = _json.load(_f).get('calibrate', {})
             _cal_mode = _cal.get('mode', 'ai')
+            if _cal_mode != 'ai':
+                _cal_mode = 'ai'  # v1.4 起只保留 AI 定位，旧 absolute/offset 模式强制转 ai
         except Exception: pass
 
         # AI 自动定位：AI 模式下，批量识别启动时实时定位按钮坐标
@@ -1358,25 +1452,23 @@ class App(SettingsUIMixin):
                 except Exception:
                     pass  # 失败静默回退，用旧坐标继续
 
-        # 获取有效坐标（AI 模式取 ai 子节点，absolute 取 absolute 子节点）
+        # 获取有效坐标（v1.4 起只保留 AI 定位；绝对坐标模式已移除）
         def _get_coords():
             import pyautogui as _pg
-            if _cal_mode == 'ai':
-                ai_data = _cal.get('ai', {})
-                dd = ai_data.get('dropdown', {})
-                qq = ai_data.get('query', {})
-                # 分辨率适配
-                orig_w = ai_data.get('screen_width') or _pg.size()[0]
-                orig_h = ai_data.get('screen_height') or _pg.size()[1]
-                curr_w, curr_h = _pg.size()
-                scale_x = curr_w / orig_w if orig_w and curr_w != orig_w else 1
-                scale_y = curr_h / orig_h if orig_h and curr_h != orig_h else 1
-                if dd and (scale_x != 1 or scale_y != 1):
-                    dd = {'x': int(dd['x'] * scale_x), 'y': int(dd['y'] * scale_y)}
-                if qq and (scale_x != 1 or scale_y != 1):
-                    qq = {'x': int(qq['x'] * scale_x), 'y': int(qq['y'] * scale_y)}
-                return dd, qq
-            return _cal.get('absolute', {}).get('dropdown'), _cal.get('absolute', {}).get('query')
+            ai_data = _cal.get('ai', {})
+            dd = ai_data.get('dropdown', {})
+            qq = ai_data.get('query', {})
+            # 分辨率适配
+            orig_w = ai_data.get('screen_width') or _pg.size()[0]
+            orig_h = ai_data.get('screen_height') or _pg.size()[1]
+            curr_w, curr_h = _pg.size()
+            scale_x = curr_w / orig_w if orig_w and curr_w != orig_w else 1
+            scale_y = curr_h / orig_h if orig_h and curr_h != orig_h else 1
+            if dd and (scale_x != 1 or scale_y != 1):
+                dd = {'x': int(dd['x'] * scale_x), 'y': int(dd['y'] * scale_y)}
+            if qq and (scale_x != 1 or scale_y != 1):
+                qq = {'x': int(qq['x'] * scale_x), 'y': int(qq['y'] * scale_y)}
+            return dd, qq
 
         dd_coord, qq_coord = _get_coords()
         if dd_coord and qq_coord:
@@ -1447,11 +1539,12 @@ class App(SettingsUIMixin):
                     continue
 
                 # 3.5 填仓库（分仓库模式）：AI 定位的仓库下拉框 → 粘贴仓库名 → 回车
+                # 单次定位（samples=1）：只取 warehouse_dropdown 粗略坐标，不采样省 API
                 if warehouse:
                     wh_pos = None
                     try:
                         from vision import ai_locate_table as _alt
-                        _loc = _alt(sp)
+                        _loc = _alt(sp, samples=1)
                         if _loc and _loc.get('warehouse_dropdown'):
                             wh_pos = _loc['warehouse_dropdown']
                     except Exception:
@@ -1502,7 +1595,7 @@ class App(SettingsUIMixin):
                 # 6. 截图 → AI 定位表格（bbox + has_more）→ OCR → 滚动循环
                 table_bbox = None
                 scroll_round = 0
-                seen_names = set()      # 该 (省份,仓库) 组合已识别的商品名（去重基准）
+                seen_name2sku = {}      # 该 (省份,仓库) 组合去重表 {name: sku_id}（覆盖漏ID/重名四场景）
                 round_items = []        # 该组合全部轮次的识别结果
                 while scroll_round < MAX_SCROLL_ROUNDS:
                     if self._batch_stop.is_set(): break
@@ -1539,17 +1632,45 @@ class App(SettingsUIMixin):
                         except Exception as ex:
                             dlog(f"  OCR异常: {ex}")
                             time.sleep(2)
-                    # 合并：同仓库内按 name 去重，跨仓库保留
+                    # 合并：同仓库内去重（有 sku_id 用 ID 区分重名，无 ID 回退 name），跨仓库保留
+                    # 去重表 seen_name2sku: {name: sku_id}，覆盖四场景：
+                    #  A 同名不同ID(都有ID) → 各自保留（name 相同但 sku 不同）
+                    #  B 先无ID后有ID(同商品) → 拦截（name 已登记）
+                    #  C 先有ID后无ID(同商品) → 拦截（name 已登记，且原 sku 匹配）
+                    #  D 无ID同名 → 去重（name 相同）
                     new_in_round = 0
                     if items:
                         for it in items:
                             nm = it.get('name', '')
-                            if nm and nm not in seen_names:
-                                seen_names.add(nm)
-                                it['region'] = reg
-                                it['warehouse'] = warehouse
-                                round_items.append(it)
-                                new_in_round += 1
+                            sku = it.get('sku_id', '')
+                            if not nm:
+                                continue
+                            has_prev = nm in seen_name2sku
+                            prev_sku = seen_name2sku.get(nm)
+                            if sku:
+                                # 有 ID：name 首次出现，或已有 ID 与本次不同 → 视为不同商品保留
+                                if not has_prev:
+                                    seen_name2sku[nm] = sku
+                                elif prev_sku and prev_sku != sku:
+                                    # 同名不同 ID（场景 A）：靠 ID 区分，各自保留
+                                    # 复合键 nm\x00sku 只登记不查询会导致重复出现时无条件重 append，
+                                    # 需检查复合键是否已存在
+                                    _compound = nm + '\x00' + sku
+                                    if _compound in seen_name2sku:
+                                        continue
+                                    seen_name2sku[_compound] = sku
+                                else:
+                                    # 同名同 ID，或此前无 ID（场景 B 补全）→ 视为同商品，去重
+                                    continue
+                            else:
+                                # 无 ID：name 已登记过（含之前有 ID 的场景 C）→ 拦截
+                                if nm in seen_name2sku:
+                                    continue
+                                seen_name2sku[nm] = ''
+                            it['region'] = reg
+                            it['warehouse'] = warehouse
+                            round_items.append(it)
+                            new_in_round += 1
                     if items:
                         dlog(f"6.✓ 本轮{len(items)}个，新增{new_in_round}个")
                     else:
@@ -1587,9 +1708,16 @@ class App(SettingsUIMixin):
                             except Exception:
                                 _ow = _oh = 0
                             if _ow > 0:
-                                # bbox 中心 → 缩放图比例 → 屏幕坐标
-                                cx = int(((table_bbox['left'] + table_bbox['right']) / 2 / _ow) * sw)
-                                cy = int((((table_bbox['top'] + table_bbox['bottom']) * 0.7) / _oh) * sh)
+                                # bbox 是截图（窗口区域）内坐标；截图已被 capture 缩放到宽≤2560，
+                                # 用 win_pos['width']（窗口原始宽）还原回窗口像素，再加窗口左上角偏移
+                                _wl = int(win_pos.get('left', 0) or 0)
+                                _wt = int(win_pos.get('top', 0) or 0)
+                                _win_w = int(win_pos.get('width', _ow) or _ow)
+                                _win_h = int(win_pos.get('height', _oh) or _oh)
+                                _sx = _win_w / _ow if _ow > 0 else 1.0
+                                _sy = _win_h / _oh if _oh > 0 else 1.0
+                                cx = int(((table_bbox['left'] + table_bbox['right']) / 2) * _sx) + _wl
+                                cy = int((((table_bbox['top'] + table_bbox['bottom']) * 0.7) * _sy)) + _wt
                             else:
                                 cx = sw // 2
                                 cy = int(sh * 0.6)
@@ -1642,7 +1770,7 @@ class App(SettingsUIMixin):
     
     def _poll_batch_queue(self, q, success, total, total_items, idle=0):
         """主线程每 100ms 轮询队列，逐批刷新 UI（避免一次性创建大量控件导致假死）。
-        idle 为『连续空闲』计数：收到新数据立即清零，连续 1800 次空闲（=3 分钟）
+        idle 为『连续空闲』计数：收到新数据立即清零，连续 6000 次空闲（=10 分钟）
         视为后台线程已异常终止，强制收尾——不会截断仍在正常产出的批量任务。
         多批次（分仓库）结果累积后一次性填充，避免后批覆盖前批。"""
         import queue as _queue
@@ -1668,10 +1796,10 @@ class App(SettingsUIMixin):
                 self.status_text.set(f"❌ 批量轮询异常: {str(_e)[:50]}")
         
         idle = 0 if got_data else idle + 1
-        if idle >= 1800:
+        if idle >= 6000:
             # 后台线程可能已崩溃：强制收尾，避免死循环。
-            # 阈值 1800 × 100ms = 3 分钟 —— 一个地区完整滚动识别（最多 16 轮截图/OCR）
-            # 可能耗时数分钟，30 秒旧阈值会误截断正常长任务。
+            # 阈值 6000 × 100ms = 10 分钟 —— 一个地区完整滚动识别（最多 16 轮截图/OCR，
+            # 每轮含 60s 超时 × 3 次重试）在弱网/长表格下可能超过 3 分钟，需给足余量。
             self.win.after(100, lambda: self._finish_batch(success, total, total_items))
             return
         self.win.after(100, lambda: self._poll_batch_queue(q, success, total, total_items, idle))
@@ -1763,7 +1891,7 @@ class App(SettingsUIMixin):
         cfg = get_ocr_columns()
         sel = [c for c in (cfg.get('selected') or []) if c]
         if not sel:
-            sel = ['商品名称', '仓库总库存', '仓库预估总销售数']
+            sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
         if dual_verify:
             from ocr import ocr_dual_verify_generic
             return ocr_dual_verify_generic(image_path, columns=sel,
@@ -1782,11 +1910,15 @@ class App(SettingsUIMixin):
         if not items:
             self.status_text.set("OCR未识别到任何数据")
             return
-        # 清空所有现有行
-        for row in self.rows:
-            row['name'].set('')
-            row['stock'].set('')
-            row['sales'].set('')
+        # 清空所有现有行（临时禁用自动加行，避免 set('') 触发追加空行）
+        self._suppress_auto_append = True
+        try:
+            for row in self.rows:
+                row['name'].set('')
+                row['stock'].set('')
+                row['sales'].set('')
+        finally:
+            self._suppress_auto_append = False
         # 确保有足够行
         while len(self.rows) < len(items):
             self._add_row()

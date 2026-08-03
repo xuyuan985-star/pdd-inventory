@@ -32,7 +32,7 @@ def _crop_bbox(image_path: str, bbox: dict):
         return None
 
 
-def _prep_image_b64(image_path: str, max_side: int = 1600, quality: int = 85,
+def _prep_image_b64(image_path: str, max_side: int = 1280, quality: int = 80,
                     table_bbox: dict = None) -> str:
     """
     统一图片预处理：长边缩放 + JPEG 压缩 → base64。
@@ -65,29 +65,6 @@ def _prep_image_b64(image_path: str, max_side: int = 1600, quality: int = 85,
             return base64.b64encode(f.read()).decode()
 
 
-def _clean_json(text: str) -> str:
-    """从OCR回复中提取纯JSON（数组或对象）"""
-    text = text.strip()
-    # 去掉 markdown 代码块
-    if '```' in text:
-        parts = text.split('```')
-        for p in parts:
-            p = p.strip()
-            if p.startswith('json'):
-                p = p[4:].strip()
-            if p.startswith('[') or p.startswith('{'):
-                return p
-    # 找第一个 [ 到最后一个 ]（数组）
-    start = text.find('[')
-    end = text.rfind(']')
-    if start >= 0 and end > start:
-        return text[start:end+1]
-    # 兜底：找第一个 { 到最后一个 }（对象，如 {"items":[...]}）
-    start = text.find('{')
-    end = text.rfind('}')
-    if start >= 0 and end > start:
-        return text[start:end+1]
-    return text
 
 
 # 全角→半角映射常量（模块级缓存，避免 _parse_num_text 每次调用重建）
@@ -195,260 +172,23 @@ def _parse_num_text(v) -> int:
     return int(round(num))
 
 
-def align_columns(items: list) -> list:
-    """
-    列对齐后处理：用模型返回的 stock_x/sales_x（相对整图宽度比例）校验列错位。
-    同一列（如 stock 列）所有行的 x 比例应接近（方差小）；若某行 x 明显偏离
-    该列中位数，且与另一列更接近，则判定为列错位并交换该行的 stock/sales。
-    模型未返回 x 坐标（全部为 None）时原样返回。
-    """
-    if not items:
-        return items
-    stock_xs = [it.get('stock_x') for it in items]
-    sales_xs = [it.get('sales_x') for it in items]
-    if not any(x is not None for x in stock_xs + sales_xs):
-        return items  # 无坐标信息，跳过
-
-    def _median(vals):
-        vs = sorted(v for v in vals if v is not None)
-        if not vs:
-            return None
-        n = len(vs)
-        return vs[n // 2] if n % 2 else (vs[n // 2 - 1] + vs[n // 2]) / 2
-
-    med_stock = _median(stock_xs)
-    med_sales = _median(sales_xs)
-    if med_stock is None or med_sales is None:
-        return items
-
-    for it in items:
-        sx = it.get('stock_x')
-        lx = it.get('sales_x')
-        if sx is None or lx is None:
-            continue
-        # 若该行 stock_x 更接近 sales 列中位数、且 sales_x 更接近 stock 列中位数 → 列错位，交换
-        if (abs(sx - med_sales) < abs(sx - med_stock)
-                and abs(lx - med_stock) < abs(lx - med_sales)):
-            it['stock'], it['sales'] = it['sales'], it['stock']
-    return items
 
 
-def _validate_items(items: list) -> list:
-    """验证并修正OCR结果。兼容两种格式：
-    新格式 {"name","stock_text","sales_text","region","index"}
-    旧格式 {"name","stock","sales","region"}
-    """
-    # 防御：API 偶尔返回 {"items":[...]} 之类的 dict 结构
-    if isinstance(items, dict):
-        for k in ('items', 'data', 'results', 'list'):
-            if isinstance(items.get(k), list):
-                items = items[k]
-                break
-        else:
-            return []
-    if not isinstance(items, list):
-        return []
-    cleaned = []
-    seen_names = set()  # 去重：同名商品只保留第一条
-    for item in items:
-        # 防御：模型返回 null 时 Python 解析为 None，转 str 会变成 "None"
-        name = item.get('name')
-        name = '' if name is None or str(name).strip().lower() in ('none', 'null', '') else str(name).strip()
-        if not name:
-            continue
-        # 数字：优先解析原始文字（新格式），回退旧格式数字字段
-        # 三值解析：stock_text(仓库总库存)、sales_stock_text(仓库销售库存)、sales_text(仓库预估销售)
-        _stock_txt = str(item.get('stock_text', '') or '')
-        _sales_stock_txt = str(item.get('sales_stock_text', '') or '')
-        _sales_txt = str(item.get('sales_text', '') or '')
-        # 旧格式兼容：无 stock_text 时回退 stock/sales 字段
-        _stock_raw = _parse_num_text(_stock_txt if _stock_txt else item.get('stock', 0))
-        _sales_stock_raw = _parse_num_text(_sales_stock_txt)
-        _sales_raw = _parse_num_text(_sales_txt if _sales_txt else item.get('sales', 0))
-        # 0 库存修正（规则A）：sales_stock_text 带「查看」且值为 0 → 0 就在仓库总库存列（查看链接定位），直接取 0
-        if _sales_stock_raw == 0 and '查看' in _sales_stock_txt:
-            stock = 0
-        # 0 库存修正（规则B，带保险丝）：stock 异常大（> sales_stock×10）且 0 在 sales/sales_stock → 列错位
-        elif (_stock_raw > 0 and _sales_stock_raw > 0
-                and _stock_raw > _sales_stock_raw * 10
-                and (_sales_raw == 0 or _sales_stock_raw == 0)):
-            stock = 0
-        else:
-            stock = _stock_raw
-        sales = _sales_raw
-        region = item.get('region')
-        region = '' if region is None or str(region).strip().lower() in ('none', 'null', '') else str(region).strip()
-        # 去重：完全同名
-        if name in seen_names:
-            continue
-        seen_names.add(name)
-        # 数值合理性：超过 99999999 视为读错位数，置 0
-        if stock > 99999999 or stock < 0:
-            stock = 0
-        if sales > 99999999 or sales < 0:
-            sales = 0
-        cleaned.append({'name': name, 'stock': stock, 'sales': sales, 'region': region,
-                        'index': item.get('index'),
-                        'stock_x': item.get('stock_x'), 'sales_x': item.get('sales_x'),
-                        '_stock_text': _stock_txt})
-    
-    if not cleaned:
-        return []
-    
-    # 按模型给的 index 恢复表格顺序（防御模型乱序输出；兼容字符串行号）
-    def _index_key(it):
-        try:
-            return int(it.get('index'))
-        except (TypeError, ValueError):
-            return 99999
-    if any(_index_key(it) != 99999 for it in cleaned):
-        cleaned.sort(key=_index_key)
-    
-    # ── 幻觉数据过滤器 ──
-    KNOWN_REGIONS = {'云南','广东','浙江','北京','上海','江苏','山东','四川','湖北','湖南','河南','河北',
-                     '福建','安徽','辽宁','陕西','重庆','江西','广西','贵州','山西','吉林','黑龙江',
-                     '甘肃','内蒙古','新疆','海南','宁夏','青海','西藏','天津','香港','澳门','台湾'}
-    
-    # 检查1：所有地区都是假地名 → 幻觉（宽容省/市后缀）
-    regions_found = {strip_region_suffix(it['region']) for it in cleaned if it['region']}
-    if regions_found and not regions_found & KNOWN_REGIONS:
-        return []
-    
-    # 检查2 已移除：同名复读由 seen_names 去重拦截；
-    # 「不同名但 stock/sales 全同」是同一系列 SKU 的真实场景，不再误杀。
-    
-    # 检查3：商品名过短（<2字）或全是数字/符号 → 幻觉
-    # （2 字中文商品名、纯英文 SKU 如 "iPhone 15 Pro" 都是合法业务数据）
-    valid_names = 0
-    for it in cleaned:
-        name = it['name']
-        chinese_chars = sum(1 for c in name if '\u4e00' <= c <= '\u9fff')
-        has_alpha = any(c.isalpha() for c in name)
-        if len(name) >= 2 and (chinese_chars >= 1 or has_alpha):
-            valid_names += 1
-    if valid_names == 0 and len(cleaned) > 0:
-        return []
-    
-    # 读错列兜底：仅当库存大到不可能是真实业务数据（≥10万且超销量1000倍）才置0。
-    # 滞销品/预售品/季节性囤货的库存远大于销量是真实场景，不再静默清零。
-    for it in cleaned:
-        s, sa = it.get('stock', 0), it.get('sales', 0)
-        if sa > 0 and s > sa * 1000 and s >= 100000:
-            it['stock'] = 0
-    
-    # 仓库销售库存列误读检测：仓库总库存列一定带「查看」链接。
-    # 若多数行的 stock_text 含「查看」而个别行不含（且 stock 明显非 0），
-    # 判定该行读成了紧邻的「仓库销售库存」列（纯数字），修正为 0。
-    _txts = [it.get('_stock_text', '') for it in cleaned]
-    _with_link = sum(1 for t in _txts if '查看' in t)
-    if cleaned and _with_link >= max(2, len(cleaned) // 2):
-        for it in cleaned:
-            t = it.get('_stock_text', '')
-            if '查看' not in t and it.get('stock', 0) > 0:
-                it['stock'] = 0
-    
-    # x 坐标左偏检测（不依赖模型是否抄「查看」链接）：
-    # PDD 表格列固定——仓库销售库存 | 仓库总库存 相邻，仓库销售库存在左。
-    # 若模型把 0 库存行读成左列（仓库销售库存），其 stock_x 会明显偏左于列中位数。
-    _sx_vals = [it.get('stock_x') for it in cleaned if it.get('stock_x') is not None]
-    if len(_sx_vals) >= 3:
-        _med_sx = sorted(_sx_vals)[len(_sx_vals) // 2]
-        for it in cleaned:
-            sx = it.get('stock_x')
-            # 左偏超过列间距的一半（约 0.06 比例）且该行 stock 非 0 → 读成左列，修正 0
-            if sx is not None and it.get('stock', 0) > 0 and sx < _med_sx - 0.06:
-                it['stock'] = 0
-    
-    # 清理内部字段，保持下游接口 {name, stock, sales, region}
-    for it in cleaned:
-        it.pop('index', None)
-        it.pop('_stock_text', None)
-    
-    # 列对齐校验：用 stock_x/sales_x 检测并修正列错位（模型未返回坐标时原样返回）
-    cleaned = align_columns(cleaned)
-    
-    # 清理 x 坐标字段，保持下游接口纯净
-    for it in cleaned:
-        it.pop('stock_x', None)
-        it.pop('sales_x', None)
-    
-    return cleaned
 
 
-def ocr_screenshot(image_path: str, forced_model: str = None, table_bbox: dict = None) -> list:
-    """
-    识别 PDD 后台截图。根据 settings 中提供商配置选择 API。
-    table_bbox: AI 定位得到的表格区域 {left, top, right, bottom}（像素），
-    传入时优先按此裁剪再识别（批量识别已定位过一次，避免重复调 API）。
-    """
-    img_b64 = _prep_image_b64(image_path, table_bbox=table_bbox)
-
-    # 统一提示词 — 两列都抄（仓库总库存+仓库销售库存），代码层按「查看」链接选对列
-    prompt = """你是数据录入员，识别图中 PDD 后台订货表格。表格为竖向列表，每行一个商品。
-
-版面说明：
-- 表格从左到右的列顺序是：仓库销售库存、仓库总库存、仓库预估总销售数
-- 商品名称：最左侧文字较长的一列，原样抄写（如「盐渍海带苗500g/袋脆嫩爽口火锅三秒菜」）
-- 仓库销售库存：**第一列**（左边），是数字（如「10000份」）
-- 仓库总库存：**第二列**（中间），是数字（如「1860份」或「0份」）；库存为 0 时显示「0份」或「0」，这是真实业务数据（售罄），必须如实输出该行
-- 仓库预估总销售数：**第三列**（右边），可能显示「258份 08-02 02:54」这样的数字+日期时间，只抄写数字和单位部分（如 "258份"），忽略日期时间；无数值填 0
-- 省份：有省份列则抄写省份名（如 云南），无省份列填 null
-- 注意：按列位置识别，不要被「查看」链接或其他文字干扰——只抄数字和单位
-
-输出要求：
-1. 严格按表格从上到下的顺序，逐行输出，一行不漏、不重复、不合并
-2. 每行输出一个 JSON 对象：
-   {"index": 行号从1开始, "name": "商品名", "stock_text": "仓库总库存（第二列）单元格原文", "sales_stock_text": "仓库销售库存（第一列）单元格原文", "sales_text": "仓库预估总销售数（第三列）单元格原文", "region": "省份名或null", "stock_x": 库存数字中心相对整图宽度的比例, "sales_x": 销量数字中心相对整图宽度的比例}
-3. stock_text / sales_stock_text / sales_text 必须原样抄写，不要自己转换数字、不要去掉单位；日期时间不抄
-4. stock_x / sales_x 是 0~1 之间的小数（如 0.62），表示该数字水平位置；无法确定时填 null
-5. 无法识别的单元格填 null，不要编造
-6. 仓库总库存为 0 是真实业务数据（售罄），该行必须保留并输出 stock_text "0份" 或 "0"、stock_x 照常，绝不能跳过该行或返回空
-7. 整张截图没有订货表格、无有效商品数据时只输出 []
-8. 只输出 JSON 数组，不要任何解释文字
-
-示例（仅示意格式，不是真实数据）：
-[{"index": 1, "name": "盐渍海带苗500g", "stock_text": "128份", "sales_stock_text": "1000份", "sales_text": "258份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78},
- {"index": 2, "name": "盐渍海带结500g", "stock_text": "0份", "sales_stock_text": "500份", "sales_text": "318份", "region": "云南", "stock_x": 0.62, "sales_x": 0.78}]"""
-    max_tok = 1024
-
-    # 调用视觉 API（复用 _ocr_api_call：模型 fallback + 双格式端点），只解析一次
-    try:
-        content, _mdl = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model)
-    except RuntimeError as e:
-        # 保留具体错误（API Key 未配置等），不误判为截图问题
-        raise RuntimeError(f"识别失败: {e}")
-    clean = _clean_json(content)
-    try:
-        items = json.loads(clean)
-    except json.JSONDecodeError as e:
-        # 模型返回非 JSON 垃圾内容：转 RuntimeError，由调用方提示（与 ocr_table 一致）
-        raise RuntimeError(f"识别失败: 模型返回无法解析的内容 ({str(e)[:60]})")
-    validated = _validate_items(items)
-    # qwen3.5-omni-flash 等模型字段名兼容：映射到统一字段后重新校验
-    if not validated and isinstance(items, (list, dict)):
-        items = items.get('items') if isinstance(items, dict) and isinstance(items.get('items'), list) else items
-        if isinstance(items, list):
-            for it in items:
-                if 'goods_name' in it and 'name' not in it:
-                    it['name'] = it.get('goods_name', '')
-                if 'sales_volume' in it and 'sales_text' not in it:
-                    it['sales_text'] = it.get('sales_volume', '')
-                if 'stock' in it and 'stock_text' not in it:
-                    it['stock_text'] = it.get('stock', '')
-                if 'area' in it and 'region' not in it:
-                    it['region'] = it.get('area', '')
-            validated = _validate_items(items)
-
-    if validated:
-        return validated
-
-    # 模型 fallback 已在 _ocr_api_call 内部处理；若所有模型都返回空数据则报错
-    raise RuntimeError("无法从截图中提取有效数据，请确保截图中包含PDD订货管理表格")
 
 
-def ocr_screenshot_crosscheck(image_path: str, forced_model: str = None, table_bbox: dict = None) -> list:
-    """单次 OCR 识别，底层 ocr_screenshot 内部已有 fallback 模型重试。"""
-    return ocr_screenshot(image_path, forced_model, table_bbox=table_bbox)
+def _dedup_models(*names) -> list:
+    """模型列表去重（保留顺序）：用户配置模型恰好是 fallback 时避免重复请求"""
+    seen = set()
+    out = []
+    for n in names:
+        if n and n.strip():
+            s = n.strip()
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+    return out
 
 
 def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
@@ -482,19 +222,25 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
             # 避免过期的接入点 ID 顶掉用户配置的模型名
             custom_ep = provider.get('custom_endpoint', '')
             fallback = model_name or custom_ep
-            models = [m for m in [fallback, 'glm-4v-flash'] if m and m.strip()]
+            models = _dedup_models(fallback, 'glm-4v-flash')
         else:
-            models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()]
+            models = _dedup_models(model_name, 'glm-4v-flash')
     elif active == 'qwen':
         if not endpoint:
             endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-        models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()] if model_name else ['qwen3.5-omni-flash', 'glm-4v-flash']
+        models = _dedup_models(model_name, 'glm-4v-flash') if model_name else ['qwen3.5-omni-flash', 'glm-4v-flash']
     else:  # glm
         if not endpoint:
             endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-        models = [m for m in [model_name, 'glm-4v-flash'] if m and m.strip()] if model_name else ['glm-4v-flash']
+        models = _dedup_models(model_name, 'glm-4v-flash') if model_name else ['glm-4v-flash']
 
     for attempt, mdl in enumerate(models):
+        mdl = mdl.strip()  # 用户可能输入带前后空格的模型名，发送前清理
+        # glm-4v-flash 输出上限 1024（与 vision._call_vision_api 一致）：超限会 400
+        if mdl.lower().startswith('glm-4v-flash') or mdl.lower() == 'glm-4v-flash':
+            cur_max_tok = min(max_tok, 1024)
+        else:
+            cur_max_tok = max_tok
         # 如果fallback是智谱模型但当前走的是阿里/豆包端点，切换endpoint + 格式
         # 模型名/端点判断统一小写化，避免用户配 "GLM-4V-Flash"/"Responses" 时匹配失败
         cur_endpoint = endpoint
@@ -530,7 +276,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                         ]}],
                         'temperature': 0.0,
                         # Responses API 规范的输出长度限制参数（区别于 Chat Completions 的 max_tokens）
-                        'max_output_tokens': max_tok,
+                        'max_output_tokens': cur_max_tok,
                         'stream': False
                     }, timeout=60)
                 data = resp.json()
@@ -541,17 +287,18 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                 # output[-1] = 最后一条消息（跳过 reasoning）
                 content = data['output'][-1]['content'][0]['text']
             else:
-                # Chat Completions 分支：GLM API 不识别 thinking 参数，仅非智谱模型发送
+                # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
+                # 必须显式禁用 thinking；glm-4v-flash 无 reasoning 但同样接受该参数。
+                # 其他模型（doubao/qwen）也发，保证一致。
                 cc_payload = {
                     'model': mdl,
                     'messages': [{'role': 'user', 'content': [
                         {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
                         {'type': 'text', 'text': prompt}
                     ]}],
-                    'temperature': 0.0, 'max_tokens': max_tok,
+                    'temperature': 0.0, 'max_tokens': cur_max_tok,
+                    'thinking': {'type': 'disabled'},
                 }
-                if not is_glm:
-                    cc_payload['thinking'] = {'type': 'disabled'}
                 resp = requests.post(cur_endpoint,
                         headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
                     json=cc_payload, timeout=60)
@@ -600,24 +347,58 @@ def normalize_col_name(name) -> str:
     return s
 
 
+_SKU_ID_RE = None  # 延迟初始化（正则编译一次）
+
+
+def _split_name_id(value: str) -> tuple:
+    """
+    拆分商品信息列的值 → (商品名, sku_id)。
+    后台格式：'盐渍鞭炮笋500g/袋 ID:96622588033' → ('盐渍鞭炮笋500g/袋', '96622588033')
+    支持 ID:xxx / 商品ID:xxx / id=xxx / #xxx 等常见格式；无 ID 时返回 (原值, '')。
+    """
+    global _SKU_ID_RE
+    if _SKU_ID_RE is None:
+        import re as _re
+        _SKU_ID_RE = _re.compile(
+            r'(?:商品ID|商品id|sku\s*id|sku_id|(?<![A-Za-z0-9])ID|(?<![A-Za-z0-9])id)'
+            r'\s*[:：=#]?\s*(\d{5,})', _re.IGNORECASE)
+    s = str(value or '').strip()
+    if not s:
+        return '', ''
+    m = _SKU_ID_RE.search(s)
+    if m:
+        sku_id = m.group(1)
+        name = (s[:m.start()] + s[m.end():]).strip(' \t\r\n-—|·,，。')
+        # 清理名称里残留的 ID 标记碎片
+        name = name.replace('商品ID', '').replace('sku_id', '').replace('ID:', '').strip()
+        return name, sku_id
+    return s, ''
+
+
 def map_columns_to_fields(row: dict, mapping: dict) -> dict:
     """
-    把通用列行 {列名: 值} 按映射转成业务字段 {name, stock, sales, region, warehouse}。
-    mapping: {'name': '商品名称', 'stock': '仓库总库存', 'sales': '仓库预估总销售数',
-              'region': '省份', 'warehouse': '仓库'}
+    把通用列行 {列名: 值} 按映射转成业务字段 {name, stock, sales, region, warehouse, sku_id}。
+    mapping: {'name': '商品信息', 'stock': '仓库总库存', 'sales': '仓库预估总销售数',
+              'region': '销售区域', 'warehouse': '仓库信息'}
     列名匹配用 normalize_col_name 归一化（容忍模型返回列名的细微差异）。
-    返回带原始列数据的 dict：{name, stock, sales, region, warehouse, _raw: {列名: 值}}。
+    商品信息列值含 ID 时拆分为 name + sku_id（重名商品靠 ID 去重）。
+    返回带原始列数据的 dict：{name, stock, sales, region, warehouse, sku_id, _raw: {列名: 值}}。
     """
     norm_map = {}
     for field, col in (mapping or {}).items():
         if col:
             norm_map[normalize_col_name(col)] = field
     out = {'name': '', 'stock': '', 'sales': '', 'region': '', 'warehouse': '',
-           '_raw': dict(row)}
+           'sku_id': '', '_raw': dict(row)}
     for col, val in row.items():
         field = norm_map.get(normalize_col_name(col))
         if field and field in ('name', 'stock', 'sales', 'region', 'warehouse'):
             out[field] = '' if val is None else str(val)
+    # 商品信息列拆分：name + sku_id
+    if out.get('name'):
+        _name, _sku = _split_name_id(out['name'])
+        out['name'] = _name
+        out['sku_id'] = _sku
     return out
 
 
@@ -657,6 +438,11 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 
     if columns:
         cols_txt = '、'.join(str(c) for c in columns)
+        # 示例 JSON 先整体序列化（列名可能含引号/花括号，json.dumps 保证安全且不破坏 f-string 语法）
+        _ex_col1 = columns[0]
+        _ex_col2 = columns[1] if len(columns) > 1 else '库存'
+        _example_json = json.dumps({_ex_col1: "盐渍海带苗500g", _ex_col2: "128份"},
+                                   ensure_ascii=False)
         prompt = f"""你是数据录入员，识别图中 PDD 后台表格。表格为竖向列表，每行一条数据。
 
 只识别以下列（严格按这些列名作为 JSON key，列名原样）：{cols_txt}
@@ -666,11 +452,12 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 2. 每行输出一个 JSON 对象，key 用上面给的列名原样（缺某列的值填 null，不要编造）
 3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
 4. 值为 0 是真实业务数据，该行必须保留，绝不能跳过
-5. 整张截图没有有效表格时只输出 []
-6. 只输出 JSON 数组，不要任何解释文字
+5. 商品信息类列（如「商品信息」「商品名称」）包含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分——商品ID用于区分重名商品
+6. 整张截图没有有效表格时只输出 []
+7. 只输出 JSON 数组，不要任何解释文字
 
 示例（仅示意格式）：
-[{{"{columns[0]}": "盐渍海带苗500g", "{columns[1] if len(columns)>1 else '库存'}": "128份"}}]"""
+[{_example_json}]"""
         # 列多时按列数放大 token，但设 8192 上限防止过度消耗 API 额度
         max_tok = min(max(1024, 512 * max(1, len(columns))), 8192)
     else:
@@ -687,10 +474,11 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 - columns 与表头完全一致（顺序、文字原样）
 - rows 每行一个对象，key 必须与 columns 完全一致
 - 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄
+- 商品信息类列（如「商品信息」）含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分
 - 值为 0 是真实业务数据，必须保留该行
 - 无法识别的单元格填 null，不要编造
 - 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
-        max_tok = 2048
+        max_tok = 2048  # glm-4.6v 有 reasoning 需更大预算；glm-4v-flash 由 _ocr_api_call 自动钳制到 1024
 
     content, _mdl = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model)
 
@@ -710,6 +498,15 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
             data = json.loads(text)
             cols = data.get('columns') or []
             rows = data.get('rows') or data.get('items') or []
+            # rows 可能是数组格式 [["a","b"],...]（glm-4.6v 偶发），按 columns 对齐转 dict
+            # 行短于列 → 补 None（符合"缺列填 null"语义）；行长于列 → 截断；非 list 行原样保留
+            if cols and rows:
+                _n = len(cols)
+                def _norm_row(r):
+                    if isinstance(r, list):
+                        return dict(zip(cols, (r + [None] * _n)[:_n]))
+                    return r
+                rows = [_norm_row(r) for r in rows]
             return {'columns': list(cols), 'rows': list(rows)}
         # 纯数组：从第一行推断列名（无表头信息，尽力而为）
         rows = json.loads(text)
@@ -723,75 +520,6 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 
 
 
-
-if __name__ == '__main__':
-    import sys
-    if len(sys.argv) < 2:
-        print("用法: python ocr.py 后台截图.jpg")
-        sys.exit(1)
-
-    items = ocr_screenshot(sys.argv[1])
-    for item in items:
-        print(f"{item['name']}: 库存={item['stock']}, 销量={item['sales']}")
-
-    # Auto compute
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from main import calculate_replenishment, generate_schedule, export_results
-
-    inventory = [{'sku': i['name'][:12], 'name': i['name'], 'stock': i['stock']} for i in items]
-    sales = {i['name'][:12]: {'sales': i['sales']} for i in items}
-
-    plans = calculate_replenishment(inventory, sales)
-    schedule = generate_schedule(plans)
-    path = export_results(plans, os.path.join(get_base_dir(), 'output'))
-    print(f'\n导出: {path}')
-
-
-def ocr_dual_verify(image_path: str, secondary_model: str = 'glm-4v-flash', table_bbox: dict = None) -> list:
-    """
-    [deprecated] v1.2 固定商品字段列版双模型交叉验证。
-    v1.3 起请改用 ocr_dual_verify_generic（支持通用列配置）。
-    仅保留供历史引用；默认 table_bbox=None 且内部用 ocr_screenshot（固定列），
-    误调会绕过通用列配置产生错误结果，勿用于新代码。
-    双模型交叉验证：主模型 + 副模型双路 OCR，按 name 匹配比较 stock/sales。
-    对差异 >30% 的字段标记 _low_confidence=True（供 UI 标红提示），
-    stock 保守取两模型较大值（库存宁可多看，避免漏补）。
-    返回主模型结果（带 _low_confidence 标记），副模型失败时回退主模型结果。
-    """
-    primary = ocr_screenshot(image_path, table_bbox=table_bbox)
-    if not primary:
-        return primary
-
-    try:
-        secondary = ocr_screenshot(image_path, forced_model=secondary_model, table_bbox=table_bbox)
-    except Exception:
-        return primary  # 副模型失败（无 Key/网络），回退单模型结果
-
-    if not secondary:
-        return primary
-
-    # 按 name 建立副模型索引（去空白归一化）
-    def _norm(n):
-        return str(n).replace(' ', '').lower()
-    sec_by_name = {}
-    for it in secondary:
-        key = _norm(it.get('name'))
-        if key and key not in sec_by_name:
-            sec_by_name[key] = it
-
-    for item in primary:
-        match = sec_by_name.get(_norm(item.get('name')))
-        if not match:
-            continue
-        # 字段差异 >30% → 标记待复核；stock/sales 均取保守较大值
-        # （销量高估比低估更安全：宁可多补货，避免断货）
-        for field in ('stock', 'sales'):
-            a, b = item.get(field, 0), match.get(field, 0)
-            denom = max(b, 1)
-            if abs(a - b) / denom > 0.3:
-                item['_low_confidence'] = True
-                item[field] = max(a, b)
-    return primary
 
 
 def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict = None,
@@ -807,7 +535,7 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     mapping = cfg.get('mapping') or {}
     sel = [c for c in (columns or cfg.get('selected') or []) if c]
     if not sel:
-        sel = ['商品名称', '仓库总库存', '仓库预估总销售数']
+        sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
 
     # 主模型
     try:

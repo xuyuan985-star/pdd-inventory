@@ -33,25 +33,48 @@ class SettingsUIMixin:
         self.export_path_var = tk.StringVar(self.win, value=self._get_export_path())
         tk.Entry(pf, textvariable=self.export_path_var, font=self.FONT, width=50).pack(side='left')
         tk.Button(pf, text='浏览', command=lambda: self._pick_export_path(None), font=(self.FONT[0], 8)).pack(side='left', padx=5)
+        def open_export_dir():
+            """打开导出目录；不存在/不可写时给出明确提示"""
+            import os as _os
+            path = self.export_path_var.get().strip()
+            if not path:
+                messagebox.showwarning("路径为空", "请先选择导出路径", parent=self.win)
+                return
+            if not _os.path.isdir(path):
+                try:
+                    _os.makedirs(path, exist_ok=True)
+                except OSError as e:
+                    messagebox.showerror("路径不可用", f"无法创建目录：{e}", parent=self.win)
+                    return
+            try:
+                _os.startfile(path)
+            except OSError as e:
+                messagebox.showwarning("无法打开", f"打开文件夹失败：{e}", parent=self.win)
+        tk.Button(pf, text='打开文件夹', command=open_export_dir, font=(self.FONT[0], 8)).pack(side='left', padx=5)
         tk.Button(content, text='保存', command=lambda: self._save_settings(None), font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
         tk.Label(content, text='截图裁剪', font=self.FONT_HEADING).pack(pady=(5,2))
         cf = tk.Frame(content); cf.pack(pady=5)
+        # 回显已保存的裁剪配置（缺省 0.11 / 0.40）
+        try:
+            from utils import Config as _Cfg
+            _saved_crop = (_Cfg.load().get('crop') or {})
+            _cur_left = str(_saved_crop.get('left', 0.11))
+            _cur_top = str(_saved_crop.get('top', 0.40))
+        except Exception:
+            _cur_left, _cur_top = '0.11', '0.40'
         tk.Label(cf, text='左:', font=(self.FONT[0], 8), fg=self.C_TEXT).pack(side='left')
-        left_var = tk.StringVar(self.win, value='0.11')
+        left_var = tk.StringVar(self.win, value=_cur_left)
         tk.Entry(cf, textvariable=left_var, font=(self.FONT[0], 8), width=5).pack(side='left', padx=3)
         tk.Label(cf, text='上:', font=(self.FONT[0], 8), fg=self.C_TEXT).pack(side='left', padx=(10,0))
-        top_var = tk.StringVar(self.win, value='0.40')
+        top_var = tk.StringVar(self.win, value=_cur_top)
         tk.Entry(cf, textvariable=top_var, font=(self.FONT[0], 8), width=5).pack(side='left', padx=3)
         def save_crop():
             import json
-            sf = os.path.join(get_base_dir(), 'settings.json')
-            try: 
-                with open(sf, 'r', encoding='utf-8') as f:
-                    s = json.load(f)
-            except: s = {}
+            from utils import Config as _Cfg2
+            s = _Cfg2.load()  # 安全回退：文件损坏返回 {}，不抛异常不清空
             try: s['crop'] = {'left': float(left_var.get()), 'top': float(top_var.get())}
             except: s['crop'] = {'left': 0.11, 'top': 0.40}
             
@@ -178,8 +201,8 @@ class SettingsUIMixin:
                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(anchor="w")
         mapping = cfg['mapping']
         map_vars = {}
-        for field, label in [('name', '商品名称列'), ('stock', '库存列'),
-                             ('sales', '销量列'), ('region', '省份列'), ('warehouse', '仓库列')]:
+        for field, label in [('name', '商品信息列(含ID)'), ('stock', '库存列'),
+                             ('sales', '销量列'), ('region', '销售区域列'), ('warehouse', '仓库信息列')]:
             row = tk.Frame(map_frame, bg=self.C_BG)
             row.pack(fill="x", pady=1)
             tk.Label(row, text=label, font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
@@ -233,20 +256,26 @@ class SettingsUIMixin:
             return os.path.join(os.path.expanduser('~'), 'Desktop')
 
     def _save_settings(self, dlg):
-        import json
+        import json, os as _os, tempfile
         settings_file = os.path.join(get_base_dir(), 'settings.json')
         path = self.export_path_var.get().strip()
         if not path:
             messagebox.showwarning("路径为空", "请先选择或输入导出路径", parent=dlg)
             return
+        # 路径可写性即时验证：目录不存在则创建，测试能否写入文件
         try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                s = json.load(f)
-        except:
-            s = {}
+            if not _os.path.isdir(path):
+                _os.makedirs(path, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=path, prefix='.write_test_', delete=True):
+                pass  # 能创建即说明可写，自动清理不留残留
+        except OSError as e:
+            messagebox.showerror("路径不可用", f"导出路径无法写入：\n{path}\n\n{str(e)}\n"
+                                "请检查目录权限或换个路径", parent=dlg)
+            return
+        from utils import Config
+        s = Config.load()  # 安全回退：文件损坏返回 {}，不抛异常不清空
         s['export_path'] = path
         try:
-            from utils import Config
             Config.save(s)  # 原子写入
         except Exception as e:
             messagebox.showerror("保存失败", f"无法写入配置文件：\n{settings_file}\n\n{str(e)}", parent=dlg)
@@ -384,6 +413,25 @@ class SettingsUIMixin:
         tk.Button(btn_frame, text="保存时效设置", command=save_all,
                   bg="#4CAF50", fg="#FFFFFF", font=self.FONT_BOLD).pack(side="left", padx=5)
 
+        # 一键全设（批量调运输天数，避免逐商品手调）
+        def set_all_days(days):
+            region = self._settings_region_var.get()
+            if not region or region.startswith('（'):
+                return
+            spinboxes = getattr(self, '_settings_spinboxes', {})
+            if not spinboxes:
+                messagebox.showwarning("无商品", "该地区暂无商品可设置", parent=self.win)
+                return
+            for prod, spin in spinboxes.items():
+                spin.delete(0, "end")
+                spin.insert(0, str(days))
+            self.status_text.set(f"已将所有商品运输时效设为 {days} 天（记得点保存）")
+
+        tk.Button(btn_frame, text="全部设为 3 天", command=lambda: set_all_days(3),
+                  font=(self.FONT[0], 8)).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="全部设为 5 天", command=lambda: set_all_days(5),
+                  font=(self.FONT[0], 8)).pack(side="left", padx=5)
+
     def _build_skin_tab(self, parent):
         """主题选择：四套主题 2×2 网格，点击预览卡即切换"""
         tk.Label(parent, text="选择界面主题", font=self.FONT_HEADING).pack(pady=(15,2))
@@ -483,16 +531,14 @@ class SettingsUIMixin:
                     pass
 
     def _build_calibrate_tab(self, parent, dlg=None):
-        """校准页：AI 智能视觉定位 / 绝对坐标手动校准"""
+        """校准页：AI 智能视觉定位（v1.4 起唯一模式，绝对坐标已移除）"""
         import json, time as _time
         from datetime import datetime
 
         tk.Label(parent, text="定位校准", font=self.FONT_HEADING).pack(pady=(15,2))
 
-        settings_file = os.path.join(get_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f: s = json.load(f)
-        except: s = {}
+        from utils import Config as _Cfg3
+        s = _Cfg3.load()  # 安全回退
         cal = s.get('calibrate', {})
         if not cal: cal = {'mode': 'ai', 'ai': {}, 'absolute': {}}
 
@@ -504,17 +550,12 @@ class SettingsUIMixin:
         tk.Radiobutton(mode_frame, text="AI 智能视觉定位（自动识别，自适应分辨率）", variable=mode_var,
                        value='ai', font=(self.FONT[0], 8), fg=self.C_TEXT,
                        selectcolor=self.C_BG, activebackground=self.C_BG).pack(anchor='w')
-        tk.Radiobutton(mode_frame, text="绝对坐标（手动校准，固定不变）", variable=mode_var,
-                       value='absolute', font=(self.FONT[0], 8), fg=self.C_TEXT,
-                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(anchor='w')
-
         def save_mode():
             cal['mode'] = mode_var.get()
             s['calibrate'] = cal
-            with open(settings_file + '.tmp', 'w', encoding='utf-8') as f:
-                json.dump(s, f, ensure_ascii=False, indent=2)
-            os.replace(settings_file + '.tmp', settings_file)
-            self.status_text.set(f"定位模式已设为: {'AI 智能定位' if mode_var.get()=='ai' else '绝对坐标'}")
+            from utils import Config as _CfgM
+            _CfgM.save(s)  # 原子写入（安全回退一致）
+            self.status_text.set("定位模式已设为: AI 智能定位")
             _refresh_cards()
 
         tk.Button(mode_frame, text="保存模式", command=save_mode,
@@ -558,9 +599,8 @@ class SettingsUIMixin:
                 }
                 cal['mode'] = 'ai'
                 s['calibrate'] = cal
-                with open(settings_file + '.tmp', 'w', encoding='utf-8') as f:
-                    json.dump(s, f, ensure_ascii=False, indent=2)
-                os.replace(settings_file + '.tmp', settings_file)
+                from utils import Config as _CfgA
+                _CfgA.save(s)  # 原子写入
                 ai_status_lbl.configure(text="✅ 定位完成")
                 self.status_text.set("AI 智能定位完成")
             except Exception as e:
@@ -572,108 +612,27 @@ class SettingsUIMixin:
         tk.Button(ai_btn_frame, text="测试点击", command=lambda: _test_click(cal),
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
 
-        # ── 绝对坐标模式卡片 ──
-        abs_card = tk.Frame(parent)
-
-        def show_val(key, label):
-            v = cal.get('absolute', {}).get(key, {})
-            txt = f"{label}: X={v.get('x','?')} Y={v.get('y','?')}" if v else f"{label}: 未校准"
-            return tk.Label(abs_card, text=txt, font=self.FONT, fg=self.C_TEXT)
-
-        lbl_dd = show_val('dropdown', '销售区域文本框')
-        lbl_dd.pack(pady=(15,3))
-        lbl_qq = show_val('query', '查询按钮')
-        lbl_qq.pack(pady=3)
-
-        abs_status_lbl = tk.Label(abs_card, text="", font=(self.FONT[0], 8), fg=self.C_ACCENT)
-        abs_status_lbl.pack(pady=5)
-
-        def start_calibrate():
-            import pyautogui
-            sf = os.path.join(get_base_dir(), 'settings.json')
-            try:
-                with open(sf, 'r', encoding='utf-8') as f: s2 = json.load(f)
-            except: s2 = {}
-            cal2 = s2.get('calibrate', {})
-            pos = {}
-            for step, hint in enumerate(['销售区域文本框', '查询按钮']):
-                pw = tk.Toplevel()
-                pw.title(f"校准 {step+1}/2")
-                pw.geometry("400x200"); pw.attributes('-topmost', True)
-                pw.configure(bg=self.C_BG)
-                tk.Label(pw, text=f"第{step+1}步：鼠标移到「{hint}」上", font=self.FONT_HEADING, fg=self.C_TEXT).pack(pady=(15,5))
-                cdlbl = tk.Label(pw, text="", font=('Consolas', 36, 'bold'), fg=self.C_PRIMARY)
-                cdlbl.pack(pady=10)
-                tk.Label(pw, text="倒计时结束后自动记录鼠标位置", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-                recorded = [False]
-                def countdown(n=3):
-                    # 窗口可能已被关闭（用户取消/主窗口销毁）→ after 回调仍可能触发，需防 TclError
-                    try:
-                        if not pw.winfo_exists():
-                            return
-                    except Exception:
-                        return
-                    if recorded[0]: return
-                    try:
-                        if n > 0:
-                            cdlbl.configure(text=str(n))
-                            pw.after(1000, lambda: countdown(n-1))
-                        else:
-                            pos[step] = pyautogui.position()
-                            recorded[0] = True
-                            cdlbl.configure(text="✓ 已记录")
-                            pw.after(500, pw.destroy)
-                    except Exception:
-                        return
-                pw.after(500, countdown)
-                try:
-                    pw.grab_set(); pw.wait_window()
-                except Exception:
-                    # 主窗口在校准期间被关闭 → wait_window 抛 TclError，安全退出
-                    return
-                if step not in pos: abs_status_lbl.configure(text="已取消"); return
-            cal2['absolute'] = {'dropdown': {'x': pos[0][0], 'y': pos[0][1]}, 'query': {'x': pos[1][0], 'y': pos[1][1]}}
-            cal2['mode'] = 'absolute'
-            s2['calibrate'] = cal2
-            with open(sf + '.tmp', 'w', encoding='utf-8') as f:
-                json.dump(s2, f, ensure_ascii=False, indent=2)
-            os.replace(sf + '.tmp', sf)
-            lbl_dd.configure(text=f"销售区域文本框: X={pos[0][0]} Y={pos[0][1]}")
-            lbl_qq.configure(text=f"查询按钮: X={pos[1][0]} Y={pos[1][1]}")
-            abs_status_lbl.configure(text="✅ 校准完成！")
-            _refresh_cards()
-
-        tk.Button(abs_card, text="开始校准", command=start_calibrate,
-                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=15, height=2).pack(pady=15)
-        tk.Label(abs_card, text="移好鼠标→点记录按钮→重复两次", font=(self.FONT[0], 7), fg=self.C_MUTED).pack()
-
         # ── 刷新显示 ──
         def _refresh_cards():
-            is_ai = mode_var.get() == 'ai'
-            if is_ai:
-                abs_card.pack_forget()
-                ai_card.pack(fill='x', padx=20, pady=10)
-                ai_data = cal.get('ai', {})
-                if ai_data.get('last_time'):
-                    t = datetime.fromtimestamp(ai_data['last_time']).strftime('%Y-%m-%d %H:%M:%S')
-                    dd = ai_data.get('dropdown', {})
-                    qq = ai_data.get('query', {})
-                    ai_status_lbl.configure(text=f"上次定位: {t}")
-                    ai_coords_lbl.configure(text=f"下拉框 ({dd.get('x','?')}, {dd.get('y','?')})  查询 ({qq.get('x','?')}, {qq.get('y','?')})")
-                    ai_conf_lbl.configure(text=f"置信度: {ai_data.get('confidence', 0):.0%}")
-                    ai_res_lbl.configure(text=f"定位分辨率: {ai_data.get('screen_width',0)}×{ai_data.get('screen_height',0)}")
-                else:
-                    ai_status_lbl.configure(text="尚未进行 AI 定位")
-                    ai_coords_lbl.configure(text="")
-                    ai_conf_lbl.configure(text="")
-                    ai_res_lbl.configure(text="")
+            # v1.4 起只保留 AI 智能定位（绝对坐标模式已移除）
+            ai_card.pack(fill='x', padx=20, pady=10)
+            ai_data = cal.get('ai', {})
+            if ai_data.get('last_time'):
+                t = datetime.fromtimestamp(ai_data['last_time']).strftime('%Y-%m-%d %H:%M:%S')
+                dd = ai_data.get('dropdown', {})
+                qq = ai_data.get('query', {})
+                ai_status_lbl.configure(text=f"上次定位: {t}")
+                ai_coords_lbl.configure(text=f"下拉框 ({dd.get('x','?')}, {dd.get('y','?')})  查询 ({qq.get('x','?')}, {qq.get('y','?')})")
+                ai_conf_lbl.configure(text=f"置信度: {ai_data.get('confidence', 0):.0%}")
+                ai_res_lbl.configure(text=f"定位分辨率: {ai_data.get('screen_width',0)}×{ai_data.get('screen_height',0)}")
             else:
-                ai_card.pack_forget()
-                abs_card.pack(fill='x', padx=20, pady=10)
+                ai_status_lbl.configure(text="尚未进行 AI 定位")
+                ai_coords_lbl.configure(text="")
+                ai_conf_lbl.configure(text="")
+                ai_res_lbl.configure(text="")
 
         def _test_click(cal_data):
-            mode = cal_data.get('mode', 'ai')
-            dd = (cal_data.get('ai', {}) if mode == 'ai' else cal_data.get('absolute', {})).get('dropdown', {})
+            dd = cal_data.get('ai', {}).get('dropdown', {})
             if dd and 'x' in dd and dd['x'] is not None:
                 import pyautogui as pg
                 pg.click(dd['x'], dd['y'])
@@ -706,13 +665,17 @@ class SettingsUIMixin:
                     var.set('')
                     entry.configure(fg=self.C_TEXT)
             def on_focus_out(e):
-                if not var.get():
+                # 值为空或仍是 placeholder 文案时恢复占位符（防用户恰好输入了占位符文字被误判）
+                if var.get() in (placeholder, ''):
                     var.set(placeholder)
                     entry.configure(fg=self.C_MUTED)
             entry.bind('<FocusIn>', on_focus_in)
             entry.bind('<FocusOut>', on_focus_out)
             if not var.get():
                 var.set(placeholder)
+            else:
+                # 已有真实值：显示正常文字色，避免看起来像 placeholder
+                entry.configure(fg=self.C_TEXT)
         _ph_entry(acc_entry, '输入手机号', acc_var)
 
         pwd_frame = tk.Frame(parent)
@@ -742,21 +705,17 @@ class SettingsUIMixin:
                  font=(self.FONT[0], 7), fg=self.C_MUTED).pack(pady=(10,0))
 
         def save_backend():
-            import json
-            settings_file = os.path.join(get_base_dir(), 'settings.json')
-            try:
-                with open(settings_file, 'r', encoding='utf-8') as f:
-                    s = json.load(f)
-            except:
-                s = {}
+            from utils import Config as _CfgB
+            s = _CfgB.load()  # 安全回退
+            if not isinstance(s, dict):
+                s = {}  # 顶层合法 JSON 但不是 dict（如 []）时防 TypeError
             s['backend'] = {
                 'url': url_var.get().strip(),
                 'account': '' if acc_var.get() in ('输入手机号', '') else acc_var.get().strip(),
                 'password': '' if pwd_var.get() == '输入密码' else pwd_var.get()
             }
             try:
-                from utils import Config
-                Config.save(s)  # 原子写入
+                _CfgB.save(s)  # 原子写入
             except Exception as e:
                 messagebox.showerror("保存失败", str(e), parent=dlg)
                 return

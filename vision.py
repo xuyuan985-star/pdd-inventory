@@ -188,6 +188,10 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     mdl = provider.get('model', 'Doubao-Seed-2.1-pro')
     mdl_l = (mdl or '').lower()
     is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
+    # glm-4v-flash 输出上限 1024；glm-4.6v 等有 reasoning 需要更大预算
+    # 统一钳制避免 400（flash 超 1024 报错），同时保证 4.6v 的定位/OCR 有足够 token
+    if mdl_l.startswith('glm-4v-flash') or mdl_l == 'glm-4v-flash':
+        max_tokens = min(max_tokens, 1024)
     if use_responses:
         resp = _req.post(endpoint,
             headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
@@ -205,7 +209,8 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
         if 'output' not in data:
             raise RuntimeError(f'API 返回异常: {data}')
         return data['output'][-1]['content'][0]['text']
-    # Chat Completions 分支：GLM API 不识别 thinking 参数，仅非智谱模型发送
+    # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
+    # 必须显式禁用 thinking；glm-4v-flash 等已实测接受该参数。统一发送保证一致。
     payload = {
         'model': mdl,
         'messages': [{'role': 'user', 'content': [
@@ -213,9 +218,8 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
             {'type': 'text', 'text': prompt}
         ]}],
         'temperature': 0.0, 'max_tokens': max_tokens,
+        'thinking': {'type': 'disabled'},
     }
-    if not is_glm:
-        payload['thinking'] = {'type': 'disabled'}
     resp = _req.post(endpoint,
         headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
         json=payload, timeout=timeout)
@@ -242,6 +246,9 @@ def _load_screenshot_b64(screenshot_path: str = None, max_side: int = 1280, qual
         return None, 0, 0
     screen_w, screen_h = img.size
     buf = _io.BytesIO()
+    # RGBA/P 模式 JPEG 不支持，先转 RGB（截图/粘贴图常见 RGBA）
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
     r = max_side / max(screen_w, screen_h)
     if r < 1:
         img = img.resize((int(screen_w * r), int(screen_h * r)), PILImg.LANCZOS)
@@ -259,131 +266,198 @@ def _parse_json_obj(content: str) -> dict:
     return _json.loads(content[start:end + 1])
 
 
+def _median(values):
+    """取中位数（多次采样补偿坐标偏差用）"""
+    if not values:
+        return 0
+    s = sorted(values)
+    n = len(s)
+    if n % 2:
+        return s[n // 2]
+    # 偶数样本：均值。整数坐标用整除，float 置信度用真除（避免 // 把 0.85 变 0）
+    a, b = s[n // 2 - 1], s[n // 2]
+    if isinstance(a, int) and isinstance(b, int):
+        return (a + b) // 2
+    return (a + b) / 2
+
+
 def ai_locate_elements(screenshot_path: str = None) -> dict:
     """
     AI 智能视觉定位：截图 → Vision API → 返回下拉框和查询按钮坐标。
+    多次采样（3 次）取中位数，减少单次定位的坐标偏差。
     返回 {'dropdown': {x,y}, 'query': {x,y}, 'confidence': float, 'screen_width': int, 'screen_height': int}
     失败返回 None（任何异常都不外抛，避免批量识别线程崩溃）。
     """
-    try:
-        img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
-        if not img_b64:
-            return None
-        prompt = """识别这张PDD商家后台截图中的两个UI元素坐标（相对于整张截图的像素比例）：
+    samples = []
+    for _ in range(3):
+        try:
+            r = _locate_elements_once(screenshot_path)
+            if r:
+                samples.append(r)
+        except Exception:
+            continue
+    if not samples:
+        return None
+    if len(samples) == 1:
+        return samples[0]
+    # 各坐标字段取中位数
+    out = {
+        'dropdown': {
+            'x': _median([s['dropdown']['x'] for s in samples]),
+            'y': _median([s['dropdown']['y'] for s in samples]),
+        },
+        'query': {
+            'x': _median([s['query']['x'] for s in samples]),
+            'y': _median([s['query']['y'] for s in samples]),
+        },
+        'confidence': _median([s['confidence'] for s in samples]),
+        'screen_width': samples[0]['screen_width'],
+        'screen_height': samples[0]['screen_height'],
+    }
+    return out
+
+
+def _locate_elements_once(screenshot_path: str = None) -> dict:
+    """单次 AI 元素定位（多次采样的底层调用）"""
+    img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
+    if not img_b64:
+        return None
+    prompt = """识别这张PDD商家后台截图中的两个UI元素坐标（相对于整张截图的像素比例）：
 1. 省份/地区下拉选择框的中心点
 2. "查询"按钮的中心点
 输出严格JSON: {"dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY},"confidence":0.XX}"""
-        content = _call_vision_api(img_b64, prompt, max_tokens=256)
-        result = _parse_json_obj(content)
-        if not result:
-            return None
-        dd = result.get('dropdown', {})
-        qq = result.get('query', {})
-        conf = float(result.get('confidence', 0.8) or 0)
-        dd_x = int(float(dd.get('x', 0)) * screen_w)
-        dd_y = int(float(dd.get('y', 0)) * screen_h)
-        qq_x = int(float(qq.get('x', 0)) * screen_w)
-        qq_y = int(float(qq.get('y', 0)) * screen_h)
-        # 低置信度拒绝：模型没把握时返回 None，调用方走模板/校准坐标兜底
-        if conf < 0.5:
-            return None
-        # 合理性校验（含 Y 轴越界，防止点击到屏幕外）
-        if dd_x <= 0 or dd_y <= 0 or qq_x <= 0 or qq_y <= 0:
-            return None
-        if dd_x >= screen_w or qq_x >= screen_w:
-            return None
-        if dd_y >= screen_h or qq_y >= screen_h:
-            return None
-        return {
-            'dropdown': {'x': dd_x, 'y': dd_y},
-            'query': {'x': qq_x, 'y': qq_y},
-            'confidence': min(max(conf, 0), 1),
-            'screen_width': screen_w,
-            'screen_height': screen_h,
-        }
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[AI定位] 失败: {e}")
+    content = _call_vision_api(img_b64, prompt, max_tokens=2048)
+    result = _parse_json_obj(content)
+    if not result:
         return None
+    dd = result.get('dropdown') or {}
+    qq = result.get('query') or {}
+    conf = float(result.get('confidence', 0.8) or 0)
+    dd_x = int(float(dd.get('x', 0)) * screen_w)
+    dd_y = int(float(dd.get('y', 0)) * screen_h)
+    qq_x = int(float(qq.get('x', 0)) * screen_w)
+    qq_y = int(float(qq.get('y', 0)) * screen_h)
+    # 低置信度拒绝：模型没把握时返回 None，调用方走模板/校准坐标兜底
+    if conf < 0.5:
+        return None
+    # 合理性校验（含 Y 轴越界，防止点击到屏幕外）
+    if dd_x <= 0 or dd_y <= 0 or qq_x <= 0 or qq_y <= 0:
+        return None
+    if dd_x >= screen_w or qq_x >= screen_w:
+        return None
+    if dd_y >= screen_h or qq_y >= screen_h:
+        return None
+    return {
+        'dropdown': {'x': dd_x, 'y': dd_y},
+        'query': {'x': qq_x, 'y': qq_y},
+        'confidence': min(max(conf, 0), 1),
+        'screen_width': screen_w,
+        'screen_height': screen_h,
+    }
 
 
-def ai_locate_table(screenshot_path: str = None) -> dict:
+def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
     """
     AI 智能表格定位：截图 → Vision API → 返回商品表格区域 bbox、是否还有更多商品、
     以及省份/仓库下拉框坐标（用于分仓库批量识别）。
-
-    返回 {
-      'table': {'left': px, 'top': px, 'right': px, 'bottom': px},   # 表格区域（像素）
-      'has_more': bool,           # 表格底部是否被截断（还有更多商品未显示）
-      'dropdown': {x, y},         # 省份下拉框中心（像素）
-      'warehouse_dropdown': {x, y},  # 城市仓下拉框中心（像素，可能为 None）
-      'query': {x, y},            # 查询按钮中心（像素）
-      'confidence': float,
-      'screen_width': int, 'screen_height': int,
-    }
+    多次采样（默认 3 次）取中位数，减少单次定位的坐标偏差（尤其 warehouse_dropdown）。
+    samples=1 时单次调用（调用方明确只需粗略坐标时省 API）。
     失败返回 None（任何异常都不外抛，避免批量识别线程崩溃）。
     """
-    try:
-        img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
-        if not img_b64:
-            return None
-        prompt = """识别这张PDD商家后台「订货管理」页面截图中的 UI 元素（坐标均为相对整张截图的像素比例 0~1）：
+    samples = max(1, int(samples or 1))
+    results = []
+    for _ in range(samples):
+        try:
+            r = _locate_table_once(screenshot_path)
+            if r:
+                results.append(r)
+        except Exception:
+            continue
+    if not results:
+        return None
+    if len(results) == 1:
+        return results[0]
+    # 各字段取中位数；has_more 取多数票；可选坐标字段有值才参与
+    out = {
+        'table': {
+            'left': _median([s['table']['left'] for s in results]),
+            'top': _median([s['table']['top'] for s in results]),
+            'right': _median([s['table']['right'] for s in results]),
+            'bottom': _median([s['table']['bottom'] for s in results]),
+        },
+        'has_more': sum(1 for s in results if s.get('has_more')) >= 2,
+        'confidence': _median([s['confidence'] for s in results]),
+        'screen_width': results[0]['screen_width'],
+        'screen_height': results[0]['screen_height'],
+    }
+    for key in ('dropdown', 'warehouse_dropdown', 'query'):
+        vals = [s.get(key) for s in results if s.get(key)]
+        if vals:
+            out[key] = {
+                'x': _median([v['x'] for v in vals]),
+                'y': _median([v['y'] for v in vals]),
+            }
+        else:
+            out[key] = None
+    return out
+
+
+def _locate_table_once(screenshot_path: str = None) -> dict:
+    """单次 AI 表格定位（多次采样的底层调用）"""
+    img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
+    if not img_b64:
+        return None
+    prompt = """识别这张PDD商家后台「订货管理」页面截图中的 UI 元素（坐标均为相对整张截图的像素比例 0~1）：
 1. table：商品表格区域的边界框（left/top/right/bottom，表格主体含表头，不含底部工具栏）
 2. has_more：表格底部是否被截断——即页面还有更多商品需要滚动才能看到（看表格最后一行是否被切掉一半、或底部有滚动条未到底/加载更多提示）
 3. dropdown：省份/地区下拉选择框的中心点
 4. warehouse_dropdown：城市仓下拉选择框的中心点（若页面上没有该元素则填 null）
 5. query："查询"按钮的中心点
 输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "warehouse_dropdown": {"x": 0.XX, "y": 0.YY} 或 null, "query": {"x": 0.XX, "y": 0.YY}, "confidence": 0.XX}"""
-        content = _call_vision_api(img_b64, prompt, max_tokens=512)
-        result = _parse_json_obj(content)
-        if not result:
-            return None
-
-        def _px(v, dim, default=None):
-            try:
-                return int(float(v) * dim)
-            except (TypeError, ValueError):
-                return default
-
-        tbl = result.get('table') or {}
-        left = _px(tbl.get('left'), screen_w)
-        top = _px(tbl.get('top'), screen_h)
-        right = _px(tbl.get('right'), screen_w)
-        bottom = _px(tbl.get('bottom'), screen_h)
-        conf = float(result.get('confidence', 0.8) or 0)
-
-        # 低置信度拒绝：模型没把握时返回 None，调用方回退 OpenCV/全图
-        if conf < 0.5:
-            return None
-
-        # 表格区域合理性校验：至少覆盖 1/4 宽高，且 left<right, top<bottom
-        if (left is None or right is None or top is None or bottom is None
-                or right - left < screen_w // 4 or bottom - top < screen_h // 4
-                or left < 0 or top < 0 or right > screen_w or bottom > screen_h):
-            return None
-
-        out = {
-            'table': {'left': left, 'top': top, 'right': right, 'bottom': bottom},
-            'has_more': str(result.get('has_more', '')).strip().lower() == 'true',
-            'confidence': min(max(conf, 0), 1),
-            'screen_width': screen_w,
-            'screen_height': screen_h,
-        }
-        # 下拉框/查询按钮：可选字段，逐个校验（无则 None，调用方走模板/校准坐标）
-        for key, dim in (('dropdown', (screen_w, screen_h)),
-                         ('warehouse_dropdown', (screen_w, screen_h)),
-                         ('query', (screen_w, screen_h))):
-            el = result.get(key) or {}
-            x = _px(el.get('x'), dim[0])
-            y = _px(el.get('y'), dim[1])
-            if x is not None and y is not None and 0 < x < screen_w and 0 < y < screen_h:
-                out[key] = {'x': x, 'y': y}
-            else:
-                out[key] = None
-        return out
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[AI表格定位] 失败: {e}")
+    content = _call_vision_api(img_b64, prompt, max_tokens=2048)
+    result = _parse_json_obj(content)
+    if not result:
         return None
+
+    def _px(v, dim, default=None):
+        try:
+            return int(float(v) * dim)
+        except (TypeError, ValueError):
+            return default
+
+    tbl = result.get('table') or {}
+    left = _px(tbl.get('left'), screen_w)
+    top = _px(tbl.get('top'), screen_h)
+    right = _px(tbl.get('right'), screen_w)
+    bottom = _px(tbl.get('bottom'), screen_h)
+    conf = float(result.get('confidence', 0.8) or 0)
+
+    # 低置信度拒绝：模型没把握时返回 None，调用方回退 OpenCV/全图
+    if conf < 0.5:
+        return None
+
+    # 表格区域合理性校验：至少覆盖 1/4 宽高，且 left<right, top<bottom
+    if (left is None or right is None or top is None or bottom is None
+            or right - left < screen_w // 4 or bottom - top < screen_h // 4
+            or left < 0 or top < 0 or right > screen_w or bottom > screen_h):
+        return None
+
+    out = {
+        'table': {'left': left, 'top': top, 'right': right, 'bottom': bottom},
+        'has_more': str(result.get('has_more', '')).strip().lower() == 'true',
+        'confidence': min(max(conf, 0), 1),
+        'screen_width': screen_w,
+        'screen_height': screen_h,
+    }
+    # 下拉框/查询按钮：可选字段，逐个校验（无则 None，调用方走模板/校准坐标）
+    for key, dim in (('dropdown', (screen_w, screen_h)),
+                     ('warehouse_dropdown', (screen_w, screen_h)),
+                     ('query', (screen_w, screen_h))):
+        el = result.get(key) or {}
+        x = _px(el.get('x'), dim[0])
+        y = _px(el.get('y'), dim[1])
+        if x is not None and y is not None and 0 < x < screen_w and 0 < y < screen_h:
+            out[key] = {'x': x, 'y': y}
+        else:
+            out[key] = None
+    return out
