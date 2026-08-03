@@ -66,6 +66,19 @@ def _sanitize_cell(v):
     return v
 
 
+def _sanitize_csv_cell(v):
+    """
+    CSV 路径专用消毒：在 _sanitize_cell 基础上，清理内嵌换行/回车/制表符。
+    csv.writer 已处理逗号/引号的标准转义，但内嵌换行会让 Excel 打开时
+    单元格被拆成多行（视觉混淆/潜在注入载体），统一替换为空格。
+    """
+    if isinstance(v, str):
+        v = _sanitize_cell(v)
+        if '\n' in v or '\r' in v or '\t' in v:
+            v = v.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+    return v
+
+
 def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
     """
     GUI 路径：按地区分组的 cache → 追加 Sheet 到 PDD补货记录.xlsx
@@ -91,7 +104,16 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
         ws = wb.active
         ws.title = ts_date
 
-    headers = ['地区', '商品名称', f'库存({ts_date})', '当日销量', '可售卖天数', '补货状态', '建议补货量']
+    # 动态列（v1.3）：取第一个地区 plans 的勾选列；未配置回退默认商品字段
+    sel_cols = []
+    for _reg, _data in cache.items():
+        _pl = (_data or {}).get('plans') or []
+        if _pl and _pl[0].get('_sel_cols'):
+            sel_cols = list(_pl[0]['_sel_cols'])
+            break
+    if not sel_cols:
+        sel_cols = ['商品名称', '仓库总库存', '仓库预估总销售数']
+    headers = ['地区', '仓库'] + list(sel_cols) + ['可售卖天数', '补货状态', '建议补货量']
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = styles['header_font']
@@ -105,8 +127,14 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
         if not plans:
             continue
         for p in plans:
-            vals = [_sanitize_cell(region), _sanitize_cell(p['name']), p['stock'], p['daily'],
-                    p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
+            raw = p.get('_raw') or {}
+            vals = [_sanitize_cell(region), _sanitize_cell(p.get('warehouse', ''))]
+            for col in sel_cols:
+                v = raw.get(col)
+                if v is None or v == '':
+                    v = p.get(col, '')
+                vals.append(_sanitize_cell(v))
+            vals += [p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(row=row, column=ci, value=v)
                 c.font = styles['cell_font']
@@ -116,7 +144,7 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
                     c.fill = styles['fills'][p['color']]
             row += 1
 
-    widths = [10, 20, 10, 10, 10, 12, 10]
+    widths = [10, 12] + [20 if '名称' in c or '商品' in c else 12 for c in sel_cols] + [10, 12, 10]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -157,7 +185,14 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
         ws.title = ts
 
     ts_date = ts.split()[0].replace('-', '.')
-    headers = ['商品名称', f'库存({ts_date})', '当日销量', '可售卖天数', '补货状态', '建议补货量']
+    # 动态列兼容：CLI plans 若带 _sel_cols（v1.3 GUI 缓存导出复用）则走动态列，否则固定列
+    sel_cols = []
+    if plans and plans[0].get('_sel_cols'):
+        sel_cols = list(plans[0]['_sel_cols'])
+    if sel_cols:
+        headers = ['仓库'] + list(sel_cols) + ['可售卖天数', '补货状态', '建议补货量']
+    else:
+        headers = ['仓库', '商品名称', f'库存({ts_date})', '当日销量', '可售卖天数', '补货状态', '建议补货量']
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = styles['header_font']
@@ -166,8 +201,20 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
         c.border = styles['thin']
 
     for ri, p in enumerate(plans, 2):
-        vals = [_sanitize_cell(p['name']), p['stock'], p['daily'],
-                p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
+        if sel_cols:
+            raw = p.get('_raw') or {}
+            vals = [_sanitize_cell(p.get('warehouse', ''))]
+            for col in sel_cols:
+                v = raw.get(col)
+                if v is None or v == '':
+                    v = p.get(col, '')
+                vals.append(_sanitize_cell(v))
+            vals += [p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
+            widths = [12] + [20 if '名称' in c or '商品' in c else 12 for c in sel_cols] + [10, 12, 12]
+        else:
+            vals = [_sanitize_cell(p.get('warehouse', '')), _sanitize_cell(p['name']), p['stock'], p['daily'],
+                    p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
+            widths = [12, 22, 12, 10, 10, 12, 12]
         for ci, v in enumerate(vals, 1):
             c = ws.cell(row=ri, column=ci, value=v)
             c.font = styles['cell_font']
@@ -176,7 +223,6 @@ def export_plans_to_xlsx(plans: list, export_dir: str = None) -> str:
             if p.get('color') in styles['fills']:
                 c.fill = styles['fills'][p['color']]
 
-    widths = [22, 12, 10, 10, 12, 12]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -200,8 +246,8 @@ def export_plans_to_csv(plans: list, export_dir: str = None) -> str:
         w = csv.writer(f)
         w.writerow(['商品', '规格', '库存', '销量', '库存÷销量', '状态', '补货量', '下单日', '到货日'])
         for p in plans:
-            # GUI 路径 plans 无 order_date/arrive_date，用 .get 防御；单元格消毒防公式注入
-            w.writerow([_sanitize_cell(p['name']), _sanitize_cell(p.get('sku', p['name'])), p['stock'], p['daily'],
-                        p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty'],
+            # GUI 路径 plans 无 order_date/arrive_date，用 .get 防御；CSV 专用消毒防公式注入+换行拆行
+            w.writerow([_sanitize_csv_cell(p['name']), _sanitize_csv_cell(p.get('sku', p['name'])), p['stock'], p['daily'],
+                        p.get('ratio', p.get('days_left', '')), _sanitize_csv_cell(p['status']), p['qty'],
                         p.get('order_date', '-'), p.get('arrive_date', '-')])
     return path

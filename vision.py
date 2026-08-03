@@ -10,7 +10,7 @@ try:
     import numpy as np
 except ImportError:
     cv2 = None
-    numpy = None
+    np = None
 
 # ── 模板库路径（兼容打包）──
 if getattr(sys, 'frozen', False):
@@ -43,10 +43,11 @@ def template_match(screenshot, template_name, threshold=0.75):
     模板匹配：归一化相关系数 + 多尺度，支持多变体模板
     返回 (center_x, center_y, confidence) 或 None
     """
+    # 依赖检查提前：无 cv2/np 时 _load_templates 内部 cv2.imread 会先崩
+    if cv2 is None or np is None:
+        return None
     templates = _load_templates(template_name)
     if not templates:
-        return None
-    if cv2 is None:
         return None
     
     screen_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
@@ -88,10 +89,11 @@ def orb_match(screenshot, template_name, min_matches=8, threshold=0.6):
     ORB 特征点匹配：抗遮挡/旋转/形变
     返回 (center_x, center_y, match_count) 或 None
     """
+    # 依赖检查提前：无 cv2/np 时 _load_template 内部 cv2.imread 会先崩
+    if cv2 is None or np is None:
+        return None
     template = _load_template(template_name)
     if template is None:
-        return None
-    if cv2 is None:
         return None
     
     orb = cv2.ORB_create(nfeatures=500)
@@ -132,6 +134,8 @@ def locate_element(screenshot_path, template_name, method='auto', threshold=0.75
     method: 'template' | 'orb' | 'auto'（默认两法交叉校验）
     返回 (x, y) 或 None
     """
+    if cv2 is None or np is None:
+        return None
     screenshot = cv2.imread(screenshot_path)
     if screenshot is None:
         return None
@@ -164,50 +168,11 @@ def locate_element(screenshot_path, template_name, method='auto', threshold=0.75
     return result
 
 
-def ai_locate_elements(screenshot_path: str = None) -> dict:
+def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: int = 30) -> str:
     """
-    AI 智能视觉定位：截图 → Vision API → 返回下拉框和查询按钮坐标。
-    返回 {'dropdown': {x,y}, 'query': {x,y}, 'confidence': float, 'screen_width': int, 'screen_height': int}
-    失败返回 None（任何异常都不外抛，避免批量识别线程崩溃）。
+    调用配置的视觉 API（doubao responses / glm chat 两种格式），返回模型文本响应。
+    失败抛异常（由调用方包装层兜底）。
     """
-    try:
-        return _ai_locate_elements_impl(screenshot_path)
-    except Exception as e:
-        # 全部异常统一吞掉：API 结构异常、JSON 解析失败、网络错误等。
-        # 打印调试信息，便于区分网络 / Key / 返回格式问题
-        import traceback
-        traceback.print_exc()
-        print(f"[AI定位] 失败: {e}")
-        return None
-
-
-def _ai_locate_elements_impl(screenshot_path: str = None) -> dict:
-    """
-    实际定位逻辑。所有异常由 ai_locate_elements() 包装层兜底。
-    """
-    import json as _json, base64 as _b64, io as _io, time as _time
-    try:
-        from PIL import Image as PILImg
-        import pyautogui as pg
-    except ImportError:
-        return None
-
-    # 截图
-    if screenshot_path:
-        img = PILImg.open(screenshot_path)
-    else:
-        img = pg.screenshot()
-    screen_w, screen_h = img.size
-
-    # 压缩
-    buf = _io.BytesIO()
-    r = 1280 / max(screen_w, screen_h)
-    if r < 1:
-        img = img.resize((int(screen_w * r), int(screen_h * r)), PILImg.LANCZOS)
-    img.save(buf, format='JPEG', quality=75)
-    img_b64 = _b64.b64encode(buf.getvalue()).decode()
-
-    # 获取 API 配置（与 OCR 共用）
     from utils import get_api_config
     api_cfg = get_api_config()
     active = api_cfg.get('active_provider', 'doubao')
@@ -216,82 +181,209 @@ def _ai_locate_elements_impl(screenshot_path: str = None) -> dict:
     endpoint = provider.get('endpoint', 'https://ark.cn-beijing.volces.com/api/v3/chat/completions')
     key = provider.get('api_key', '')
     if not key:
-        return None
+        raise RuntimeError('API Key 未设置')
 
     import requests as _req
-    prompt = """识别这张PDD商家后台截图中的两个UI元素坐标（相对于整张截图的像素比例）：
-1. 省份/地区下拉选择框的中心点
-2. "查询"按钮的中心点
-输出严格JSON: {"dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY},"confidence":0.XX}"""
-
     use_responses = 'responses' in endpoint.lower()  # 大小写不敏感，与 ocr.py 一致
-    mdl_l = (provider.get('model', '') or '').lower()
+    mdl = provider.get('model', 'Doubao-Seed-2.1-pro')
+    mdl_l = (mdl or '').lower()
     is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
     if use_responses:
         resp = _req.post(endpoint,
             headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
             json={
-                'model': provider.get('model', 'Doubao-Seed-2.1-pro'),
+                'model': mdl,
                 'thinking': {'type': 'disabled'},
                 'input': [{'role': 'user', 'content': [
                     {'type': 'input_image', 'image_url': f'data:image/jpeg;base64,{img_b64}', 'detail': 'low'},
                     {'type': 'input_text', 'text': prompt}
                 ]}],
-                'temperature': 0.0, 'stream': False
-            }, timeout=30)
+                'temperature': 0.0, 'stream': False,
+                'max_output_tokens': max_tokens,
+            }, timeout=timeout)
         data = resp.json()
         if 'output' not in data:
-            return None
-        content = data['output'][-1]['content'][0]['text']
-    else:
-        # GLM API 不识别 thinking 参数，仅非智谱模型发送（与 ocr.py 一致）
-        payload = {
-            'model': provider.get('model', 'Doubao-Seed-2.1-pro'),
-            'messages': [{'role': 'user', 'content': [
-                {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
-                {'type': 'text', 'text': prompt}
-            ]}],
-            'temperature': 0.0, 'max_tokens': 256,
-        }
-        if not is_glm:
-            payload['thinking'] = {'type': 'disabled'}
-        resp = _req.post(endpoint,
-            headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
-            json=payload, timeout=30)
-        data = resp.json()
-        if 'choices' not in data:
-            return None
-        content = data['choices'][0]['message']['content']
+            raise RuntimeError(f'API 返回异常: {data}')
+        return data['output'][-1]['content'][0]['text']
+    # Chat Completions 分支：GLM API 不识别 thinking 参数，仅非智谱模型发送
+    payload = {
+        'model': mdl,
+        'messages': [{'role': 'user', 'content': [
+            {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
+            {'type': 'text', 'text': prompt}
+        ]}],
+        'temperature': 0.0, 'max_tokens': max_tokens,
+    }
+    if not is_glm:
+        payload['thinking'] = {'type': 'disabled'}
+    resp = _req.post(endpoint,
+        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+        json=payload, timeout=timeout)
+    data = resp.json()
+    if 'choices' not in data:
+        raise RuntimeError(f'API 返回异常: {data}')
+    return data['choices'][0]['message']['content']
 
-    # 解析 JSON — 用首尾 { } 配对，兼容嵌套对象
+
+def _load_screenshot_b64(screenshot_path: str = None, max_side: int = 1280, quality: int = 75) -> tuple:
+    """
+    截图（或读图）→ 压缩 JPEG → base64。
+    返回 (img_b64, screen_w, screen_h)；截图失败返回 (None, 0, 0)。
+    """
+    import base64 as _b64, io as _io
+    try:
+        from PIL import Image as PILImg
+        if screenshot_path:
+            img = PILImg.open(screenshot_path)
+        else:
+            import pyautogui as pg
+            img = pg.screenshot()
+    except ImportError:
+        return None, 0, 0
+    screen_w, screen_h = img.size
+    buf = _io.BytesIO()
+    r = max_side / max(screen_w, screen_h)
+    if r < 1:
+        img = img.resize((int(screen_w * r), int(screen_h * r)), PILImg.LANCZOS)
+    img.save(buf, format='JPEG', quality=quality)
+    return _b64.b64encode(buf.getvalue()).decode(), screen_w, screen_h
+
+
+def _parse_json_obj(content: str) -> dict:
+    """从模型回复中提取 JSON 对象（首尾 { } 配对，兼容嵌套）"""
+    import json as _json
     start = content.find('{')
     end = content.rfind('}')
     if start < 0 or end <= start:
-        return None
-    result = _json.loads(content[start:end+1])
+        return {}
+    return _json.loads(content[start:end + 1])
 
-    dd = result.get('dropdown', {})
-    qq = result.get('query', {})
-    conf = result.get('confidence', 0.8)
 
-    # 比例 → 像素
-    dd_x = int(float(dd.get('x', 0)) * screen_w)
-    dd_y = int(float(dd.get('y', 0)) * screen_h)
-    qq_x = int(float(qq.get('x', 0)) * screen_w)
-    qq_y = int(float(qq.get('y', 0)) * screen_h)
+def ai_locate_elements(screenshot_path: str = None) -> dict:
+    """
+    AI 智能视觉定位：截图 → Vision API → 返回下拉框和查询按钮坐标。
+    返回 {'dropdown': {x,y}, 'query': {x,y}, 'confidence': float, 'screen_width': int, 'screen_height': int}
+    失败返回 None（任何异常都不外抛，避免批量识别线程崩溃）。
+    """
+    try:
+        img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
+        if not img_b64:
+            return None
+        prompt = """识别这张PDD商家后台截图中的两个UI元素坐标（相对于整张截图的像素比例）：
+1. 省份/地区下拉选择框的中心点
+2. "查询"按钮的中心点
+输出严格JSON: {"dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY},"confidence":0.XX}"""
+        content = _call_vision_api(img_b64, prompt, max_tokens=256)
+        result = _parse_json_obj(content)
+        if not result:
+            return None
+        dd = result.get('dropdown', {})
+        qq = result.get('query', {})
+        conf = float(result.get('confidence', 0.8) or 0)
+        dd_x = int(float(dd.get('x', 0)) * screen_w)
+        dd_y = int(float(dd.get('y', 0)) * screen_h)
+        qq_x = int(float(qq.get('x', 0)) * screen_w)
+        qq_y = int(float(qq.get('y', 0)) * screen_h)
+        # 低置信度拒绝：模型没把握时返回 None，调用方走模板/校准坐标兜底
+        if conf < 0.5:
+            return None
+        # 合理性校验（含 Y 轴越界，防止点击到屏幕外）
+        if dd_x <= 0 or dd_y <= 0 or qq_x <= 0 or qq_y <= 0:
+            return None
+        if dd_x >= screen_w or qq_x >= screen_w:
+            return None
+        if dd_y >= screen_h or qq_y >= screen_h:
+            return None
+        return {
+            'dropdown': {'x': dd_x, 'y': dd_y},
+            'query': {'x': qq_x, 'y': qq_y},
+            'confidence': min(max(conf, 0), 1),
+            'screen_width': screen_w,
+            'screen_height': screen_h,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[AI定位] 失败: {e}")
+        return None
 
-    # 合理性校验（含 Y 轴越界，防止点击到屏幕外）
-    if dd_x <= 0 or dd_y <= 0 or qq_x <= 0 or qq_y <= 0:
-        return None
-    if dd_x >= screen_w or qq_x >= screen_w:
-        return None
-    if dd_y >= screen_h or qq_y >= screen_h:
-        return None
 
-    return {
-        'dropdown': {'x': dd_x, 'y': dd_y},
-        'query': {'x': qq_x, 'y': qq_y},
-        'confidence': min(max(float(conf), 0), 1),
-        'screen_width': screen_w,
-        'screen_height': screen_h,
+def ai_locate_table(screenshot_path: str = None) -> dict:
+    """
+    AI 智能表格定位：截图 → Vision API → 返回商品表格区域 bbox、是否还有更多商品、
+    以及省份/仓库下拉框坐标（用于分仓库批量识别）。
+
+    返回 {
+      'table': {'left': px, 'top': px, 'right': px, 'bottom': px},   # 表格区域（像素）
+      'has_more': bool,           # 表格底部是否被截断（还有更多商品未显示）
+      'dropdown': {x, y},         # 省份下拉框中心（像素）
+      'warehouse_dropdown': {x, y},  # 城市仓下拉框中心（像素，可能为 None）
+      'query': {x, y},            # 查询按钮中心（像素）
+      'confidence': float,
+      'screen_width': int, 'screen_height': int,
     }
+    失败返回 None（任何异常都不外抛，避免批量识别线程崩溃）。
+    """
+    try:
+        img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
+        if not img_b64:
+            return None
+        prompt = """识别这张PDD商家后台「订货管理」页面截图中的 UI 元素（坐标均为相对整张截图的像素比例 0~1）：
+1. table：商品表格区域的边界框（left/top/right/bottom，表格主体含表头，不含底部工具栏）
+2. has_more：表格底部是否被截断——即页面还有更多商品需要滚动才能看到（看表格最后一行是否被切掉一半、或底部有滚动条未到底/加载更多提示）
+3. dropdown：省份/地区下拉选择框的中心点
+4. warehouse_dropdown：城市仓下拉选择框的中心点（若页面上没有该元素则填 null）
+5. query："查询"按钮的中心点
+输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "warehouse_dropdown": {"x": 0.XX, "y": 0.YY} 或 null, "query": {"x": 0.XX, "y": 0.YY}, "confidence": 0.XX}"""
+        content = _call_vision_api(img_b64, prompt, max_tokens=512)
+        result = _parse_json_obj(content)
+        if not result:
+            return None
+
+        def _px(v, dim, default=None):
+            try:
+                return int(float(v) * dim)
+            except (TypeError, ValueError):
+                return default
+
+        tbl = result.get('table') or {}
+        left = _px(tbl.get('left'), screen_w)
+        top = _px(tbl.get('top'), screen_h)
+        right = _px(tbl.get('right'), screen_w)
+        bottom = _px(tbl.get('bottom'), screen_h)
+        conf = float(result.get('confidence', 0.8) or 0)
+
+        # 低置信度拒绝：模型没把握时返回 None，调用方回退 OpenCV/全图
+        if conf < 0.5:
+            return None
+
+        # 表格区域合理性校验：至少覆盖 1/4 宽高，且 left<right, top<bottom
+        if (left is None or right is None or top is None or bottom is None
+                or right - left < screen_w // 4 or bottom - top < screen_h // 4
+                or left < 0 or top < 0 or right > screen_w or bottom > screen_h):
+            return None
+
+        out = {
+            'table': {'left': left, 'top': top, 'right': right, 'bottom': bottom},
+            'has_more': str(result.get('has_more', '')).strip().lower() == 'true',
+            'confidence': min(max(conf, 0), 1),
+            'screen_width': screen_w,
+            'screen_height': screen_h,
+        }
+        # 下拉框/查询按钮：可选字段，逐个校验（无则 None，调用方走模板/校准坐标）
+        for key, dim in (('dropdown', (screen_w, screen_h)),
+                         ('warehouse_dropdown', (screen_w, screen_h)),
+                         ('query', (screen_w, screen_h))):
+            el = result.get(key) or {}
+            x = _px(el.get('x'), dim[0])
+            y = _px(el.get('y'), dim[1])
+            if x is not None and y is not None and 0 < x < screen_w and 0 < y < screen_h:
+                out[key] = {'x': x, 'y': y}
+            else:
+                out[key] = None
+        return out
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[AI表格定位] 失败: {e}")
+        return None

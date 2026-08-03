@@ -268,6 +268,7 @@ class App(SettingsUIMixin):
         self.main_paned.pack(fill="both", expand=True, padx=15, pady=(2, 15))
         # 左侧导航栏
         self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_SURFACE)
+        self.nav_frame._skip_theme = True  # 导航栏保持 C_SURFACE 区分色，主题切换不覆盖
         self.nav_frame.pack_propagate(False)
         self.nav_buttons = {}
         # 右侧内容
@@ -462,8 +463,7 @@ class App(SettingsUIMixin):
             self._build_api_page(page)
         if not hasattr(page, '_built'):
             page._built = True
-        # 每次切页都重涂，保证主题切换后已访问页面颜色同步刷新
-        self._apply_theme(self._theme_name)
+        # 切页只刷新模型徽章；主题全量重涂仅在主题切换时执行（避免每次切页全树 walk）
         self._refresh_model_badge()
 
     
@@ -669,6 +669,13 @@ class App(SettingsUIMixin):
         theme = THEMES.get(name, THEMES['极简白'])
         self._theme_name = name
         
+        # 窗口可能已在切换/关闭过程中销毁，walk 前先确认存活（防 TclError）
+        try:
+            if not self.win.winfo_exists():
+                return
+        except Exception:
+            return
+        
         # 记录旧色 → 新色映射（用于 tk 控件递归替换）
         old_colors = {}
         for k in theme:
@@ -737,7 +744,11 @@ class App(SettingsUIMixin):
             try:
                 if cls == 'Frame':
                     if getattr(w, '_skip_theme', False):
-                        actual_bg = parent_bg
+                        # 子控件应跟随该 Frame 自身底色（如导航栏 C_SURFACE），而非外层 parent_bg
+                        try:
+                            actual_bg = w.cget('bg')
+                        except Exception:
+                            actual_bg = parent_bg
                     else:
                         try:
                             hl = w.cget('highlightthickness')
@@ -878,11 +889,20 @@ class App(SettingsUIMixin):
         return 3  # 兼容旧格式
     
     def _calc_from_items(self, items):
-        """直接从OCR结果计算并显示"""
+        """直接从OCR结果计算并显示（v1.3 动态列：勾选列 + 固定计算列）"""
         today = datetime.now()
         region = self.region_var.get()
         plans = []
-        
+        # 读取客户勾选的识别列（未配置/空 → 回退默认商品字段列）
+        try:
+            from utils import get_ocr_columns
+            _col_cfg = get_ocr_columns()
+            _sel_cols = [c for c in (_col_cfg.get('selected') or []) if c]
+        except Exception:
+            _sel_cols = []
+        if not _sel_cols:
+            _sel_cols = ['商品名称', '仓库总库存', '仓库预估总销售数']
+
         for item in items:
             name = item.get('name', '')
             # 防御性转换：兼容字符串/None/含单位文本，避免 ValueError/TypeError
@@ -927,22 +947,45 @@ class App(SettingsUIMixin):
                 'days_left': round(ratio, 1),
                 'status': status, 'color': color, 'qty': qty,
                 'stat_date': f'{today.month}.{today.day}',
+                'warehouse': item.get('warehouse', ''),
+                # 通用列原始数据：客户勾选列从 _raw 取原文显示
+                '_raw': item.get('_raw') or {},
+                '_sel_cols': _sel_cols,
             })
         
         # Sort
         priority = {'red': 0, 'yellow': 1, 'green': 2}
         plans.sort(key=lambda p: priority.get(p['color'], 99))
         
+        # 动态列：勾选列 + 固定计算列（可售卖天数/状态/补货量）
+        calc_cols = [('可售卖天数', 'ratio'), ('状态', 'status'), ('补货量', 'qty')]
+        display_cols = list(_sel_cols) + [c[0] for c in calc_cols]
+        # 重建 tree 列（ttk.Treeview 支持运行时改 columns）
+        try:
+            self.tree.configure(columns=display_cols)
+            for col in display_cols:
+                width = 260 if col in ('商品名称', '商品') or '名称' in col else 80
+                self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
+                self.tree.column(col, width=width, anchor="center")
+        except Exception:
+            pass  # tree 尚未构建完成时忽略（首次 _build_ui 已建默认列）
+
         # Show
         self.tree.delete(*self.tree.get_children())
         for p in plans:
             tags = ()
             if p['color'] == 'red': tags = ('urgent',)
             elif p['color'] == 'yellow': tags = ('warning',)
-            self.tree.insert("", "end", values=(
-                p['name'], p['stock'], p['daily'], p['ratio'],
-                p['status'], p['qty'],
-            ), tags=tags)
+            raw = p['_raw'] or {}
+            row_vals = []
+            for col in _sel_cols:
+                # 勾选列优先取 _raw 原文；缺省回退 plan 字段（旧路径兼容）
+                v = raw.get(col)
+                if v is None or v == '':
+                    v = p.get(col, '')
+                row_vals.append(v)
+            row_vals += [p['ratio'], p['status'], p['qty']]
+            self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
         
         self.plans = plans
         self.status_text.set(f"计算完成 — {len(plans)} 个商品")
@@ -983,16 +1026,36 @@ class App(SettingsUIMixin):
         data = self.cache[region]
         self.region_var.set(region)
         
-        # 显示该地区的结果
+        # 显示该地区的结果（v1.3 动态列：与 _calc_from_items 一致的勾选列 + 计算列）
+        calc_cols = [('可售卖天数', 'ratio'), ('状态', 'status'), ('补货量', 'qty')]
+        sel_cols = []
+        if data['plans'] and data['plans'][0].get('_sel_cols'):
+            sel_cols = list(data['plans'][0]['_sel_cols'])
+        if not sel_cols:
+            sel_cols = ['商品名称', '仓库总库存', '仓库预估总销售数']
+        display_cols = list(sel_cols) + [c[0] for c in calc_cols]
+        try:
+            self.tree.configure(columns=display_cols)
+            for col in display_cols:
+                width = 260 if col in ('商品名称', '商品') or '名称' in col else 80
+                self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
+                self.tree.column(col, width=width, anchor="center")
+        except Exception:
+            pass
         self.tree.delete(*self.tree.get_children())
         for p in data['plans']:
             tags = ()
             if p['color'] == 'red': tags = ('urgent',)
             elif p['color'] == 'yellow': tags = ('warning',)
-            self.tree.insert("", "end", values=(
-                p['name'], p['stock'], p['daily'], p['ratio'],
-                p['status'], p['qty'],
-            ), tags=tags)
+            raw = p.get('_raw') or {}
+            row_vals = []
+            for col in sel_cols:
+                v = raw.get(col)
+                if v is None or v == '':
+                    v = p.get(col, '')
+                row_vals.append(v)
+            row_vals += [p.get('ratio', p.get('days_left', '')), p['status'], p['qty']]
+            self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
         self.plans = data['plans']
         self._update_tabs()
         self.status_text.set(f"已切换到 {region} — {len(data['plans'])} 个商品")
@@ -1014,6 +1077,31 @@ class App(SettingsUIMixin):
         # 也清掉 Treeview 旧结果
         self.tree.delete(*self.tree.get_children())
     
+    def _build_raw_from_fields(self, name, stock, sales, region='', warehouse=''):
+        """
+        按当前列配置把业务字段填回中文列名（手动输入路径构造 _raw 用）。
+        从 selected 勾选列出发覆盖全部显示列，再按 mapping 填业务字段值，
+        保证手动输入路径与 OCR 路径的 _raw key 一致、勾选列不空白。
+        """
+        try:
+            from utils import get_ocr_columns
+            cfg = get_ocr_columns()
+            mapping = cfg.get('mapping') or {}
+            selected = cfg.get('selected') or []
+        except Exception:
+            mapping, selected = {}, []
+        if not selected:
+            selected = ['商品名称', '仓库总库存', '仓库预估总销售数']
+        # 覆盖所有勾选列（未填到的保持空字符串，渲染时显示空白而非缺失）
+        raw = {col: '' for col in selected}
+        for field, val in (('name', name), ('stock', stock),
+                           ('sales', sales), ('region', region),
+                           ('warehouse', warehouse)):
+            col = mapping.get(field)
+            if col and val != '':
+                raw[col] = str(val)
+        return raw
+
     def _recalc_from_rows(self):
         """从当前输入行读取数据，重新计算（name 非空即保留，包括售罄/零数据商品）"""
         items = []
@@ -1034,7 +1122,10 @@ class App(SettingsUIMixin):
             except ValueError:
                 sales = 0
             items.append({'name': name, 'stock': stock, 'sales': sales,
-                         'region': self.region_var.get()})
+                         'region': self.region_var.get(),
+                         # 手动输入路径也要带 _raw，否则动态列渲染空白（与 OCR 路径一致）
+                         '_raw': self._build_raw_from_fields(name, stock, sales,
+                                                             region=self.region_var.get())})
         if not items:
             messagebox.showwarning("无数据", "请至少输入一个商品")
             return
@@ -1077,6 +1168,14 @@ class App(SettingsUIMixin):
         result_label = tk.Label(bottom_frame, text="", font=(self.FONT[0], 8),
                                bg=self.C_BG, fg=self.C_MUTED)
         result_label.pack()
+        
+        # ── 分仓库输入（可选）──
+        wh_label = tk.Label(bottom_frame, text="分仓库（可选，格式：省份=仓库1,仓库2）",
+                            font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT)
+        wh_label.pack(pady=(6,2))
+        wh_entry = tk.Entry(bottom_frame, font=(self.FONT[0], 8), width=36)
+        wh_entry.pack(pady=(0,4))
+        wh_entry.insert(0, "")
         
         test_var = tk.BooleanVar(dlg, value=False)
         tk.Checkbutton(bottom_frame, text="🔍 测试模式",
@@ -1135,12 +1234,38 @@ class App(SettingsUIMixin):
                 hud_text.insert('end', '🔍 测试模式启动\n')
                 hud_text.see('end')
             dlg.destroy()
+            # 解析分仓库映射：格式 "省份=仓库1,仓库2; 省份2=仓库A,仓库B"
+            # 支持全角分号/逗号/等号/冒号容错；省份名自动去「省/市/自治区/特别行政区」后缀
+            warehouse_map = {}
+            _wh_raw = wh_entry.get().strip()
+            if _wh_raw:
+                for _part in _wh_raw.replace('；', ';').replace('，', ',').replace('＝', '=').split(';'):
+                    _part = _part.strip()
+                    if not _part:
+                        continue
+                    if '=' in _part:
+                        _reg, _whs = _part.split('=', 1)
+                    elif '：' in _part:
+                        _reg, _whs = _part.split('：', 1)
+                    else:
+                        continue
+                    _reg = _reg.strip()
+                    from ocr import strip_region_suffix
+                    _reg = strip_region_suffix(_reg)
+                    _wh_list = [w.strip() for w in _whs.split(',') if w.strip()]
+                    if _reg and _wh_list:
+                        # 去重（同一仓库重复输入 → 只识别一次，避免重复任务）
+                        cur = warehouse_map.setdefault(_reg, [])
+                        for _w in _wh_list:
+                            if _w not in cur:
+                                cur.append(_w)
             # 禁用操作按钮防止并发
             for btn in [self.export_btn]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
             threading.Thread(target=self._run_batch_sequence,
-                             args=(selected, hud, hud_text, dual_var.get()), daemon=True).start()
+                             args=(selected, hud, hud_text, dual_var.get()),
+                             kwargs={'warehouse_map': warehouse_map}, daemon=True).start()
         
         tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
                   font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF",
@@ -1149,14 +1274,16 @@ class App(SettingsUIMixin):
         dlg.transient(self.win)
         dlg.grab_set()
     
-    def _run_batch_sequence(self, regions, hud=None, hud_text=None, dual_verify=False):
-        """批量识别：1.点文本框 2.粘贴省份 3.回车 4.点查询 5.等4秒 6.截图识别"""
+    def _run_batch_sequence(self, regions, hud=None, hud_text=None, dual_verify=False,
+                            warehouse_map=None):
+        """批量识别：1.点文本框 2.粘贴省份 3.(可选)填仓库 4.回车 5.点查询 6.等刷新
+        7.截图识别（AI 定位表格 + 滚动加载循环，直到无更多商品）
+        warehouse_map: {省份: [仓库名, ...]}，None/空表示该省份不填仓库（识别全部商品）"""
         import time, threading, queue
         result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
         try:
             import pyautogui, pyperclip
             from vision import locate_element
-            from ocr import ocr_screenshot_crosscheck as ocr_screenshot
             from PIL import Image as PILImage
         except ImportError as e:
             # 顶层依赖缺失：立即通知主线程收尾，避免用户白等 30 秒超时
@@ -1173,12 +1300,21 @@ class App(SettingsUIMixin):
         
         self.win.after(0, self.win.iconify); time.sleep(1.5)
         self._batch_stop.clear()
-        total = len(regions); success = 0; total_items = 0
+        # 展开任务列表：(省份, 仓库) 组合；未配置仓库 → 仓库为 None
+        tasks = []
+        for reg in regions:
+            whs = (warehouse_map or {}).get(reg) or [None]
+            for wh in whs:
+                tasks.append((reg, wh))
+        total = len(tasks); success = 0; total_items = 0
+        from utils import capture_pdd_screenshot
         def ss(path):
-            from utils import capture_pdd_screenshot
             capture_pdd_screenshot(path)
         preset = RESOLUTION_PRESETS.get(load_resolution_pref(), RESOLUTION_PRESETS['1920×1080 (Full HD)'])
-        sw, sh = pyautogui.size()
+        try:
+            sw, sh = pyautogui.size()
+        except Exception:
+            sw, sh = 1920, 1080  # 兜底：屏幕探测失败用 FHD 默认，避免线程崩溃
         # 加载校准配置
         _cal = {}
         _cal_mode = 'ai'
@@ -1259,9 +1395,12 @@ class App(SettingsUIMixin):
         except Exception as _e:
             dlog(f"API配置读取失败: {_e}")
         
-        for i, reg in enumerate(regions):
+        # 滚动加载保险丝：最多 16 轮 OCR（实际滚动 15 次 × 2 格 = 30 格覆盖，防 API 误判死循环）
+        MAX_SCROLL_ROUNDS = 16
+        for i, (reg, warehouse) in enumerate(tasks):
             if self._batch_stop.is_set(): dlog("⏹ 停止"); break
-            dlog(f"── [{reg}] ({i+1}/{total}) ──")
+            label = f"{reg}" + (f"/{warehouse}" if warehouse else "")
+            dlog(f"── [{label}] ({i+1}/{total}) ──")
             try:
                 # 1. 截图 → 找文本框 → 优先校准坐标
                 sp = os.path.join(get_base_dir(), 'output', f'_vis_{i}.png')
@@ -1306,7 +1445,28 @@ class App(SettingsUIMixin):
                             dlog(f"操作失败(剪贴板/按键): {ex}")
                 if not op_ok:
                     continue
-                
+
+                # 3.5 填仓库（分仓库模式）：AI 定位的仓库下拉框 → 粘贴仓库名 → 回车
+                if warehouse:
+                    wh_pos = None
+                    try:
+                        from vision import ai_locate_table as _alt
+                        _loc = _alt(sp)
+                        if _loc and _loc.get('warehouse_dropdown'):
+                            wh_pos = _loc['warehouse_dropdown']
+                    except Exception:
+                        wh_pos = None
+                    if not wh_pos:
+                        # 兜底：仓库下拉框通常在省份框下方约 45px（比例制适配分辨率）
+                        wh_pos = {'x': dx, 'y': dy + int(45 * sh / 1080)}
+                    pyautogui.click(wh_pos['x'], wh_pos['y']); time.sleep(0.3)
+                    pyautogui.click(wh_pos['x'], wh_pos['y']); time.sleep(0.2)
+                    pyperclip.copy(warehouse)
+                    pyautogui.tripleClick(wh_pos['x'], wh_pos['y']); time.sleep(0.15)
+                    pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
+                    pyautogui.press('enter'); time.sleep(1.0)
+                    dlog(f"3.5填仓库'{warehouse}'")
+
                 # 4. 找查询按钮
                 if qq_coord:
                     qx, qy = qq_coord['x'], qq_coord['y']
@@ -1338,53 +1498,134 @@ class App(SettingsUIMixin):
                     for _p in (_w0, _w1):
                         try: os.remove(_p)
                         except Exception: pass
-                
-                # 6. 截图 → OCR识别（阻塞，API返回才继续）
-                sp2 = os.path.join(get_base_dir(), 'output', f'_result_{i}.png')
-                ss(sp2)
-                try:
-                    im = PILImage.open(sp2); w, h = im.size
-                    if w > 2560: im = im.resize((2560, int(h*2560/w)), PILImage.LANCZOS); im.save(sp2)
-                except: pass
-                dlog(f"6.OCR识别中({'双模型' if dual_verify else '单模型'}，约{'12' if dual_verify else '6'}s)...")
-                items = None
-                for retry in range(3):
+
+                # 6. 截图 → AI 定位表格（bbox + has_more）→ OCR → 滚动循环
+                table_bbox = None
+                scroll_round = 0
+                seen_names = set()      # 该 (省份,仓库) 组合已识别的商品名（去重基准）
+                round_items = []        # 该组合全部轮次的识别结果
+                while scroll_round < MAX_SCROLL_ROUNDS:
+                    if self._batch_stop.is_set(): break
+                    sp2 = os.path.join(get_base_dir(), 'output', f'_result_{i}_{scroll_round}.png')
+                    ss(sp2)
                     try:
-                        if dual_verify:
-                            from ocr import ocr_dual_verify
-                            items = ocr_dual_verify(sp2)
+                        im = PILImage.open(sp2); w, h = im.size
+                        if w > 2560: im = im.resize((2560, int(h*2560/w)), PILImage.LANCZOS); im.save(sp2)
+                    except Exception as _e:
+                        dlog(f"  截图压缩失败(继续): {_e}")
+                    # 首轮：AI 定位表格；后续轮复用 bbox，但每 3 轮重新定位一次
+                    # （滚动加载可能改变表格容器高度，且需刷新 has_more 状态）
+                    ai_has_more = None  # None=AI定位失败未知, True=还有更多, False=已到底
+                    if scroll_round == 0 or table_bbox is None or scroll_round % 3 == 0:
+                        from vision import ai_locate_table
+                        loc = ai_locate_table(sp2)
+                        if loc:
+                            table_bbox = loc.get('table')
+                            ai_has_more = bool(loc.get('has_more', False))
+                            if ai_has_more:
+                                dlog(f"6.AI检测到还有更多商品，自动滚动加载...")
+                            elif scroll_round > 0 and ai_has_more is not None:
+                                dlog(f"6.AI确认滚动后已到底")
+                    dlog(f"6.{'首屏' if scroll_round == 0 else f'滚动{scroll_round}'}OCR识别中({'双模型' if dual_verify else '单模型'})...")
+                    items = None
+                    for retry in range(3):
+                        try:
+                            # v1.3 通用列：走 _ocr_generic_to_items（勾选列 + 映射 + 可选双模型）
+                            items = self._ocr_generic_to_items(sp2, table_bbox=table_bbox,
+                                                              dual_verify=dual_verify)
+                            if items: break
+                            dlog(f"  重试{retry+1}...")
+                            time.sleep(2)
+                        except Exception as ex:
+                            dlog(f"  OCR异常: {ex}")
+                            time.sleep(2)
+                    # 合并：同仓库内按 name 去重，跨仓库保留
+                    new_in_round = 0
+                    if items:
+                        for it in items:
+                            nm = it.get('name', '')
+                            if nm and nm not in seen_names:
+                                seen_names.add(nm)
+                                it['region'] = reg
+                                it['warehouse'] = warehouse
+                                round_items.append(it)
+                                new_in_round += 1
+                    if items:
+                        dlog(f"6.✓ 本轮{len(items)}个，新增{new_in_round}个")
+                    else:
+                        dlog("6.无数据")
+                    # 滚动决策：
+                    # - 首轮：AI has_more=True → 滚；AI 定位失败(未知)且本轮有商品 → 滚一次确认；AI 明确 False → 不滚
+                    # - 后续轮：本轮有新商品 → 继续滚；连续无新增 → 结束（保险）
+                    if scroll_round == 0:
+                        if ai_has_more is False:
+                            dlog("6.✓ AI确认表格已到底，无需滚动")
+                            break
+                        should_scroll = bool(items) and (ai_has_more is not False)
+                    else:
+                        should_scroll = new_in_round > 0
+                        if not should_scroll:
+                            dlog(f"6.⏹ 滚动{scroll_round}轮后无新增，结束")
+                            break
+                        # 周期性重新定位后 AI 明确到底 → 提前结束（防跳屏漏商品后空转）
+                        if ai_has_more is False and scroll_round % 3 == 0:
+                            dlog("6.✓ AI确认已到底，结束滚动")
+                            break
+                    scroll_round += 1
+                    if scroll_round >= MAX_SCROLL_ROUNDS:
+                        dlog(f"6.⏹ 达到最大滚动轮次({MAX_SCROLL_ROUNDS})，结束")
+                        break
+                    # 滚动：在表格区域向下滚动 2 格，等待加载
+                    # 坐标换算：capture_pdd_screenshot 内部把窗口截图缩到宽≤2560 保存，
+                    # AI bbox 是相对该缩放图的比例；滚动作用于真实屏幕，用比例×当前屏
+                    # 幕尺寸还原（窗口通常最大化/居中，落在表格区域足够触发滚轮）。
+                    try:
+                        if table_bbox:
+                            try:
+                                _im_orig = PILImage.open(sp2)
+                                _ow, _oh = _im_orig.size
+                            except Exception:
+                                _ow = _oh = 0
+                            if _ow > 0:
+                                # bbox 中心 → 缩放图比例 → 屏幕坐标
+                                cx = int(((table_bbox['left'] + table_bbox['right']) / 2 / _ow) * sw)
+                                cy = int((((table_bbox['top'] + table_bbox['bottom']) * 0.7) / _oh) * sh)
+                            else:
+                                cx = sw // 2
+                                cy = int(sh * 0.6)
+                            pyautogui.moveTo(cx, cy); time.sleep(0.3)
+                            pyautogui.scroll(-2)
                         else:
-                            items = ocr_screenshot(sp2)
-                        if items: break
-                        dlog(f"  重试{retry+1}...")
-                        time.sleep(2)
+                            pyautogui.moveTo(sw // 2, int(sh * 0.6)); time.sleep(0.3)
+                            pyautogui.scroll(-2)
+                        time.sleep(1.5)  # 等滚动加载渲染
                     except Exception as ex:
-                        dlog(f"  OCR异常: {ex}")
-                        time.sleep(2)
-                if items:
-                    for it in items: it['region'] = reg
-                    result_queue.put(items)
-                    success += 1; total_items += len(items)
-                    dlog(f"6.✓ {len(items)}个商品")
+                        dlog(f"  滚动失败: {ex}")
+                        break
+                if round_items:
+                    result_queue.put(round_items)
+                    success += 1; total_items += len(round_items)
+                    dlog(f"6.✓ 合计{len(round_items)}个商品")
                 else:
                     dlog("6.无数据")
             except Exception as e:
                 dlog(f"✗ {e}")
         
-        # 发送结束信号（for 内每地区已有 try-except 兜底；主线程另有 30 秒空闲超时收尾）
-        result_queue.put(None)
-        
-        # 集中清理本次批量识别产生的临时截图（_vis_/_wait_/_result_ 前缀）
+        # 发送结束信号 + 集中清理临时截图（_vis_/_wait_/_result_ 前缀）
+        # finally 保证异常路径也会清理，防止临时文件持续堆积
         try:
-            _out_dir = os.path.join(get_base_dir(), 'output')
-            for _f in os.listdir(_out_dir):
-                if _f.startswith(('_vis_', '_wait_', '_result_')) and _f.endswith('.png'):
-                    try:
-                        os.remove(os.path.join(_out_dir, _f))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+            result_queue.put(None)
+        finally:
+            try:
+                _out_dir = os.path.join(get_base_dir(), 'output')
+                for _f in os.listdir(_out_dir):
+                    if _f.startswith(('_vis_', '_wait_', '_result_')) and _f.endswith('.png'):
+                        try:
+                            os.remove(os.path.join(_out_dir, _f))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         
         self.win.after(0, self.win.deiconify)
         # 启动主线程轮询：切回主线程再调用，避免子线程直接操作 Tkinter 控件
@@ -1401,31 +1642,36 @@ class App(SettingsUIMixin):
     
     def _poll_batch_queue(self, q, success, total, total_items, idle=0):
         """主线程每 100ms 轮询队列，逐批刷新 UI（避免一次性创建大量控件导致假死）。
-        idle 为『连续空闲』计数：收到新数据立即清零，连续 300 次空闲（=30 秒）
-        视为后台线程已异常终止，强制收尾——不会截断仍在正常产出的批量任务。"""
+        idle 为『连续空闲』计数：收到新数据立即清零，连续 1800 次空闲（=3 分钟）
+        视为后台线程已异常终止，强制收尾——不会截断仍在正常产出的批量任务。
+        多批次（分仓库）结果累积后一次性填充，避免后批覆盖前批。"""
+        import queue as _queue
         got_data = False
+        all_batch = []
         try:
             while True:
                 items = q.get_nowait()
                 if items is None:
-                    # 后台线程已完成所有地区
+                    # 后台线程已完成所有任务：统一填充累积结果
+                    if got_data:
+                        try:
+                            self._fill_from_ocr(all_batch)
+                        except Exception as e:
+                            self.status_text.set(f"❌ 批量数据处理失败: {str(e)[:50]}")
                     self.win.after(100, lambda: self._finish_batch(success, total, total_items))
                     return
-                try:
-                    self._fill_from_ocr(items)
-                except Exception as e:
-                    # 单批数据处理失败：提示但不中断轮询
-                    self.status_text.set(f"❌ 批量数据处理失败: {str(e)[:50]}")
+                all_batch.extend(items)
                 got_data = True
         except Exception as _e:
             # 仅队列空继续轮询；其他异常（如队列对象异常）提示后继续
-            import queue as _queue
             if not isinstance(_e, _queue.Empty):
                 self.status_text.set(f"❌ 批量轮询异常: {str(_e)[:50]}")
         
         idle = 0 if got_data else idle + 1
-        if idle >= 300:
-            # 后台线程可能已崩溃：强制收尾，避免死循环
+        if idle >= 1800:
+            # 后台线程可能已崩溃：强制收尾，避免死循环。
+            # 阈值 1800 × 100ms = 3 分钟 —— 一个地区完整滚动识别（最多 16 轮截图/OCR）
+            # 可能耗时数分钟，30 秒旧阈值会误截断正常长任务。
             self.win.after(100, lambda: self._finish_batch(success, total, total_items))
             return
         self.win.after(100, lambda: self._poll_batch_queue(q, success, total, total_items, idle))
@@ -1469,8 +1715,7 @@ class App(SettingsUIMixin):
                 self.win.after(0, self.win.deiconify)
                 self.win.after(0, lambda: self.status_text.set('OCR识别中...'))
                 
-                from ocr import ocr_screenshot_crosscheck as ocr_screenshot
-                items = ocr_screenshot(ss_path)
+                items = self._ocr_generic_to_items(ss_path)
                 
                 if not items:
                     self.win.after(0, lambda: self.status_text.set('未识别到商品'))
@@ -1497,8 +1742,7 @@ class App(SettingsUIMixin):
         
         def task():
             try:
-                from ocr import ocr_screenshot_crosscheck as ocr_screenshot
-                items = ocr_screenshot(path)
+                items = self._ocr_generic_to_items(path)
                 self.win.after(0, lambda i=items: self._fill_from_ocr(i))
             except Exception as e:
                 self.win.after(0, self._show_error, str(e))
@@ -1506,6 +1750,29 @@ class App(SettingsUIMixin):
         import threading
         threading.Thread(target=task, daemon=True).start()
     
+    def _ocr_generic_to_items(self, image_path, table_bbox=None, dual_verify=False):
+        """
+        通用列识别 → 业务字段 items（v1.3 主入口）。
+        读取客户勾选列配置，ocr_table 指定列识别，parse_items_generic 映射为
+        {name, stock, sales, region, warehouse, _raw} 供填充/计算/导出。
+        未配置勾选列时回退默认商品字段列。
+        dual_verify=True 时走双模型交叉验证（ocr_dual_verify_generic）。
+        """
+        from ocr import ocr_table, parse_items_generic
+        from utils import get_ocr_columns
+        cfg = get_ocr_columns()
+        sel = [c for c in (cfg.get('selected') or []) if c]
+        if not sel:
+            sel = ['商品名称', '仓库总库存', '仓库预估总销售数']
+        if dual_verify:
+            from ocr import ocr_dual_verify_generic
+            return ocr_dual_verify_generic(image_path, columns=sel,
+                                           mapping=cfg.get('mapping') or {},
+                                           table_bbox=table_bbox)
+        result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
+        rows = result.get('rows') or []
+        return parse_items_generic(rows, cfg.get('mapping') or {})
+
     def _fill_from_ocr(self, items):
         """用OCR结果填充表格"""
         self._clear_error()  # 先重置状态，再设置识别进度提示（避免被覆盖）
@@ -1534,17 +1801,17 @@ class App(SettingsUIMixin):
             if low_conf:
                 low_conf_count += 1
                 name_disp = f"⚠{name_disp}"
+            # 分仓库识别：显示时附加 [仓库名]，计算仍用原始 name（避免时效匹配失败）
+            wh = item.get('warehouse', '')
+            if wh:
+                name_disp = f"{name_disp} [{wh}]"
             r['name'].set(name_disp)
             r['stock'].set(str(item.get('stock', '')))
             r['sales'].set(str(item.get('sales', '')))
             region = item.get('region', '')
             if region:
-                # 去后缀：云南省→云南，北京市→北京
-                for suffix in ['省', '市', '自治区', '特别行政区']:
-                    if region.endswith(suffix):
-                        region = region[:-len(suffix)]
-                        break
-                detected_regions.add(region)
+                from ocr import strip_region_suffix
+                detected_regions.add(strip_region_suffix(region))
         if low_conf_count:
             self.status_text.set(f"⚠ {low_conf_count} 个商品双模型结果不一致，已取保守值，请重点核对")
         # 自动匹配地区
@@ -1574,23 +1841,33 @@ class App(SettingsUIMixin):
                     parent=self.win))
         self.status_text.set(msg)
         # 直接用OCR结果计算，不依赖行数据
+        # 按地区分组：多省份×多仓库批量时每个地区独立缓存（避免全混进第一个地区）
         try:
-            self._calc_from_items(items)
+            by_region = {}
+            from ocr import strip_region_suffix
+            for it in items:
+                reg = strip_region_suffix(it.get('region', '')) or self.region_var.get()
+                by_region.setdefault(reg, []).append(it)
+            for reg, sub in by_region.items():
+                self.region_var.set(reg)
+                self._calc_from_items(sub)
         except Exception as e:
             self._show_error(f"计算出错: {e}", popup=True)
             import traceback; traceback.print_exc()
     
     def _sort_tree(self, col):
-        """点击列头排序"""
+        """点击列头排序（v1.3 动态列：按当前 tree 列名找索引）"""
         if self._sort_col == col:
             self._sort_reverse = not self._sort_reverse
         else:
             self._sort_col = col
             self._sort_reverse = False
         
-        # 列名到索引
-        col_map = {'商品': 0, '库存': 1, '预估销量': 2, '可售卖天数': 3, '状态': 4, '补货量': 5}
-        idx = col_map.get(col, 0)
+        # 列名到索引：动态取 tree 当前列顺序（v1.3 起列不固定）
+        try:
+            idx = self.tree['columns'].index(col)
+        except (ValueError, AttributeError):
+            idx = 0
         
         # 获取所有行数据
         items = [(self.tree.set(child, col), child) for child in self.tree.get_children()]
@@ -1611,7 +1888,7 @@ class App(SettingsUIMixin):
         
         # 更新表头箭头
         arrow = ' ▼' if self._sort_reverse else ' ▲'
-        for c in col_map:
+        for c in self.tree['columns']:
             text = c
             if c == col:
                 text += arrow

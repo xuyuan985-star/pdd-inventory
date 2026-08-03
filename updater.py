@@ -21,7 +21,8 @@ def get_latest_release():
         return None, []
 
 def download_asset(asset, dest):
-    """下载 release 附件，返回 (success, sha256_hex 或 None)"""
+    """下载 release 附件到 dest，返回 (success: bool, None)。
+    sha256 校验由调用方 _do_replace 单独执行（此函数不返回哈希）。"""
     url = asset["browser_download_url"]
     name = asset["name"]
     print(f"[更新器] 下载 {name} ({asset['size']} bytes)...")
