@@ -403,8 +403,18 @@ class App(SettingsUIMixin):
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
         
         columns = ("商品", "库存", "预估销量", "可售卖天数", "状态", "补货量")
-        self.tree = ttk.Treeview(self.result_frame, columns=columns, show="headings", height=15)
-        self.tree.pack(fill="both", expand=True, padx=3, pady=3)
+        # 结果表放入带滚动条的容器（勾选列多时右侧列不再被截断）
+        tree_frame = tk.Frame(self.result_frame)
+        tree_frame.pack(fill="both", expand=True, padx=3, pady=3)
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=15)
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
         
         # 仅显示预警筛选
         filter_frame = tk.Frame(self.result_frame)
