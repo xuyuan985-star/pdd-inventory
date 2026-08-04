@@ -1572,7 +1572,7 @@ class App(SettingsUIMixin):
                 # 6. 截图 → AI 定位表格（bbox + has_more）→ OCR → 滚动循环
                 table_bbox = None
                 scroll_round = 0
-                seen_sku = set()            # 已见 sku_id（权威去重：滚动重识别/商品名OCR波动都拦）
+                seen_sku = {}            # 已见 sku_id → name（权威去重：滚动重识别/名字波动/ID错位都拦）
                 seen_name_no_sku = set()    # 无 ID 商品登记过的 name
                 seen_name_with_id = set()   # 有 ID 商品登记过的 name
                 round_items = []        # 该组合全部轮次的识别结果
