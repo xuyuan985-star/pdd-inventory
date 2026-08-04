@@ -4,7 +4,7 @@ PDD EZ — 公共工具函数
 """
 import os, sys, json
 
-VERSION = "v1.3"
+VERSION = "v1.4"
 EXE_NAME = f"PDD EZ {VERSION}.exe"
 
 

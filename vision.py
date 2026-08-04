@@ -399,6 +399,82 @@ def ai_read_selected_province(screenshot_path: str = None) -> str:
         return None
 
 
+def ai_check_page_state(screenshot_path: str = None) -> dict:
+    """识别页面整体状态（v1.4 状态机，借鉴 granblue）：normal / login / captcha / modal / empty。
+    省份循环开始时检查：login 停止整个批量，captcha/modal/empty 跳过该省份。
+    失败返回 {'state': 'unknown'}（不阻断）。
+    """
+    img_b64, _, _ = _load_screenshot_b64(screenshot_path)
+    if not img_b64:
+        return {'state': 'unknown', 'hint': None}
+    prompt = ('判断这张PDD商家后台页面截图当前处于什么状态，只选一个：\n'
+              '1. normal：正常显示订货管理页面（有筛选栏和商品表格）\n'
+              '2. login：登录页 / 会话过期 / 需要重新登录\n'
+              '3. captcha：验证码或安全验证弹窗\n'
+              '4. modal：模态弹窗遮挡（居中弹窗无法点击操作）\n'
+              '5. empty：页面空白或加载失败\n'
+              '输出严格JSON: {"state": "normal", "hint": "一句话简述"}')
+    try:
+        content = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15)
+        import json as _json
+        text = (content or '').strip()
+        if '```' in text:
+            for _p in text.split('```'):
+                _p = _p.strip()
+                if _p.startswith('json'):
+                    _p = _p[4:].strip()
+                if _p.startswith('{'):
+                    text = _p
+                    break
+        if text.startswith('{'):
+            data = _json.loads(text)
+            st = str(data.get('state') or 'unknown').strip().lower()
+            if st not in ('normal', 'login', 'captcha', 'modal', 'empty'):
+                st = 'unknown'
+            return {'state': st, 'hint': data.get('hint') or None}
+        return {'state': 'unknown', 'hint': None}
+    except Exception:
+        return {'state': 'unknown', 'hint': None}
+
+
+def ai_detect_anomaly(screenshot_path: str = None) -> dict:
+    """检测页面异常（v1.4，借鉴 granblue 验证码检测）：验证码/安全验证、弹窗、
+    横幅警告、错误提示等。返回 {'anomaly': bool, 'type': str|None, 'hint': str|None}。
+    失败返回 {'anomaly': False, ...}（不阻断主流程）。
+    """
+    img_b64, _, _ = _load_screenshot_b64(screenshot_path)
+    if not img_b64:
+        return {'anomaly': False, 'type': None, 'hint': None}
+    prompt = ('判断这张PDD商家后台截图是否有**阻断操作的异常**：验证码/安全验证弹窗、'
+              '模态弹窗（居中遮挡导致无法点击操作）。'
+              '注意：页面顶部的常驻提示横幅（如预约警告、系统公告、红色提示条）**不算异常**，'
+              '它们不影响点击操作。'
+              '输出严格JSON: {"anomaly": true或false, "type": "验证码"或"弹窗"或null, '
+              '"hint": "一句话说明，无异常填null"}')
+    try:
+        content = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15)
+        import json as _json
+        text = (content or '').strip()
+        if '```' in text:
+            for _p in text.split('```'):
+                _p = _p.strip()
+                if _p.startswith('json'):
+                    _p = _p[4:].strip()
+                if _p.startswith('{'):
+                    text = _p
+                    break
+        if text.startswith('{'):
+            data = _json.loads(text)
+            return {
+                'anomaly': bool(data.get('anomaly')),
+                'type': data.get('type') or None,
+                'hint': data.get('hint') or None,
+            }
+        return {'anomaly': False, 'type': None, 'hint': None}
+    except Exception:
+        return {'anomaly': False, 'type': None, 'hint': None}
+
+
 def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
     """
     AI 智能表格定位：截图 → Vision API → 返回商品表格区域 bbox、是否还有更多商品、
@@ -446,6 +522,12 @@ def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
     _totals = [s.get('total_count') for s in results
                if isinstance(s.get('total_count'), int) and s['total_count'] > 0]
     out['total_count'] = _median(_totals) if _totals else None
+    # 行级 bbox：多采样时取行数最多的样本（行边界一致性优先于中位数）
+    _rows_opt = [s.get('rows') for s in results if s.get('rows')]
+    if _rows_opt:
+        out['rows'] = max(_rows_opt, key=len)
+    else:
+        out['rows'] = None
     return out
 
 
@@ -461,7 +543,8 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
 4. warehouse_dropdown：城市仓下拉选择框的中心点（若页面上没有该元素则填 null）
 5. query："查询"按钮的中心点
 6. total_count：页面统计信息里显示的商品总条数（如 "共 3 条" / "共 128 条"），找不到则填 null
-输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "warehouse_dropdown": {"x": 0.XX, "y": 0.YY} 或 null, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "confidence": 0.XX}"""
+7. rows：表格内容行的垂直边界（相对整图比例 top/bottom），按从上到下顺序，含表头行。格式：[{"top": 0.XX, "bottom": 0.YY}, ...]，最多返回 20 行；识别不了填 []
+输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "warehouse_dropdown": {"x": 0.XX, "y": 0.YY} 或 null, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "rows": [{"top": 0.XX, "bottom": 0.YY}], "confidence": 0.XX}"""
     content = _call_vision_api(img_b64, prompt, max_tokens=2048)
     result = _parse_json_obj(content)
     if not result:
@@ -497,6 +580,19 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
         'screen_width': screen_w,
         'screen_height': screen_h,
     }
+    # 行级 bbox（v1.4：供按行切分识别，防整表乱编）；异常/空时置 None 不影响主流程
+    _rows_raw = result.get('rows') or []
+    _rows = []
+    if isinstance(_rows_raw, list):
+        for rr in _rows_raw:
+            try:
+                _rt = _px(rr.get('top'), screen_h)
+                _rb = _px(rr.get('bottom'), screen_h)
+                if isinstance(_rt, int) and isinstance(_rb, int) and 0 < _rt < _rb < screen_h:
+                    _rows.append((_rt, _rb))
+            except Exception:
+                continue
+    out['rows'] = _rows if len(_rows) >= 2 else None
     # 页面总条数（“共 X 条”统计，供滚动结束后对比识别数量，防假数据/漏识别）
     try:
         total = int(float(result.get('total_count')))

@@ -1572,6 +1572,18 @@ class App(SettingsUIMixin):
                 sp = os.path.join(get_base_dir(), 'output', f'_vis_{i}.png')
                 os.makedirs(os.path.dirname(sp), exist_ok=True)
                 ss(sp)
+                # v1.4 状态机（借鉴 granblue）：省份开始前检查页面状态
+                # login → 会话过期，中止整个批量；captcha/modal/empty → 跳过该省份
+                from vision import ai_check_page_state as _check_state
+                _st = _check_state(sp)
+                if _st and _st.get('state') != 'normal':
+                    _st_hint = _st.get('hint') or ''
+                    if _st.get('state') == 'login':
+                        dlog(f"1.✋ 页面状态=登录/会话过期：{_st_hint}，批量中止，请重新登录后重试")
+                        break
+                    elif _st.get('state') in ('captcha', 'modal', 'empty'):
+                        dlog(f"1.✋ 页面状态={_st.get('state')}：{_st_hint}，跳过该省份")
+                        continue
                 tm_x = tm_y = None
                 pos = locate_element(sp, 'region_dropdown', method='template', threshold=0.80)
                 if pos:
@@ -1632,6 +1644,15 @@ class App(SettingsUIMixin):
                         dlog(f"3.✓ 省份已切换为「{_sel}」")
                         break
                     dlog(f"3.⚠ 省份验证失败（第{_p_attempt+1}次，显示:{_sel or '无法识别'}，期望:{reg}）")
+                    # v1.4：检测是否验证码/弹窗/横幅（这类异常重试无效，需人工处理）
+                    from vision import ai_detect_anomaly as _detect_anomaly
+                    _anom = _detect_anomaly(_vshot)
+                    if _anom and _anom.get('anomaly'):
+                        _at = _anom.get('type') or '异常情况'
+                        _ah = _anom.get('hint') or ''
+                        dlog(f"3.✋ 检测到{_at}：{_ah}，需人工处理后重试（程序已暂停该省份）")
+                        province_ok = False
+                        break
                     # 连续两次显示值相同且未变化 → 重选机制无效，别浪费第 3 次
                     if _sel and _sel == _last_sel:
                         _same_twice = True
@@ -1734,6 +1755,7 @@ class App(SettingsUIMixin):
                     # 首轮：AI 定位表格；后续轮复用 bbox，但每 3 轮重新定位一次
                     # （滚动加载可能改变表格容器高度，且需刷新 has_more 状态）
                     ai_has_more = None  # None=AI定位失败未知, True=还有更多, False=已到底
+                    _row_bboxes = None   # v1.4：表格行级边界（供首轮行切分识别）
                     if scroll_round == 0 or table_bbox is None or scroll_round % 3 == 0:
                         from vision import ai_locate_table, ai_read_total_count
                         loc = ai_locate_table(sp2)
@@ -1741,6 +1763,7 @@ class App(SettingsUIMixin):
                             table_bbox = loc.get('table')
                             ai_has_more = bool(loc.get('has_more', False))
                             _total_hint = loc.get('total_count')
+                            _row_bboxes = loc.get('rows')
                             if ai_has_more:
                                 dlog(f"6.AI检测到还有更多商品，自动滚动加载...")
                             elif scroll_round > 0 and ai_has_more is not None:
@@ -1756,7 +1779,9 @@ class App(SettingsUIMixin):
                         try:
                             # v1.3 通用列：走 _ocr_generic_to_items（勾选列 + 映射 + 可选双模型）
                             items = self._ocr_generic_to_items(sp2, table_bbox=table_bbox,
-                                                              dual_verify=dual_verify)
+                                                              dual_verify=dual_verify,
+                                                              # 首轮全量数据走行切分防乱编；滚动轮次行少回整表控成本
+                                                              row_bboxes=_row_bboxes if scroll_round == 0 else None)
                             if items: break
                             dlog(f"  重试{retry+1}...")
                             time.sleep(2)
@@ -1993,13 +2018,16 @@ class App(SettingsUIMixin):
         import threading
         threading.Thread(target=task, daemon=True).start()
     
-    def _ocr_generic_to_items(self, image_path, table_bbox=None, dual_verify=False):
+    def _ocr_generic_to_items(self, image_path, table_bbox=None, dual_verify=False,
+                              row_bboxes=None):
         """
         通用列识别 → 业务字段 items（v1.3 主入口）。
         读取客户勾选列配置，ocr_table 指定列识别，parse_items_generic 映射为
         {name, stock, sales, region, warehouse, _raw} 供填充/计算/导出。
         未配置勾选列时回退默认商品字段列。
         dual_verify=True 时走双模型交叉验证（ocr_dual_verify_generic）。
+        row_bboxes（v1.4）：表格行级边界 [(top,bottom),...]，优先走行级切分识别
+        （防整表乱编），失败自动回退整表。
         """
         from ocr import ocr_table, parse_items_generic
         from utils import get_ocr_columns
@@ -2022,7 +2050,17 @@ class App(SettingsUIMixin):
                                            mapping=cfg.get('mapping') or {},
                                            table_bbox=table_bbox,
                                            secondary_model=_sec)
-        result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
+        if row_bboxes:
+            from ocr import ocr_table_row_split
+            try:
+                result = ocr_table_row_split(image_path, columns=sel,
+                                             table_bbox=table_bbox,
+                                             row_bboxes=row_bboxes)
+            except Exception:
+                # 行切分失败（rows 无效/API 异常）回退整表，保证识别不中断
+                result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
+        else:
+            result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
         rows = result.get('rows') or []
         return parse_items_generic(rows, cfg.get('mapping') or {})
 
