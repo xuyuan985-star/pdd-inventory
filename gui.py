@@ -1855,11 +1855,17 @@ class App(SettingsUIMixin):
             sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
         if dual_verify:
             from ocr import ocr_dual_verify_generic
-            from utils import get_secondary_model
+            from utils import get_secondary_model, get_api_config
+            _sec = get_secondary_model()
+            _api = get_api_config()
+            _act = _api.get('active_provider', '')
+            _main = ((_api.get('providers') or {}).get(_act, {}) or {}).get('model', '')
+            if _main and str(_main).strip().lower() == str(_sec).strip().lower():
+                dlog(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
             return ocr_dual_verify_generic(image_path, columns=sel,
                                            mapping=cfg.get('mapping') or {},
                                            table_bbox=table_bbox,
-                                           secondary_model=get_secondary_model())
+                                           secondary_model=_sec)
         result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
         rows = result.get('rows') or []
         return parse_items_generic(rows, cfg.get('mapping') or {})
