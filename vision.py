@@ -392,7 +392,7 @@ def ai_read_selected_province(screenshot_path: str = None) -> str:
               '当前显示的省份名。只输出省份名（如 "云南" "广东省"），'
               '如果显示 "全部"/"所有地区" 或无法识别，输出空字符串。')
     try:
-        content = _call_vision_api(img_b64, prompt, max_tokens=32)
+        content = _call_vision_api(img_b64, prompt, max_tokens=32, timeout=15)
         content = (content or '').strip().strip('"').strip("'").strip()
         return content or None
     except Exception:
