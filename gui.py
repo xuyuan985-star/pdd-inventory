@@ -1366,8 +1366,21 @@ class App(SettingsUIMixin):
             for btn in [self.export_btn]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
-            threading.Thread(target=self._run_batch_sequence,
-                             args=(selected, hud, hud_text, _dual_mode), daemon=True).start()
+            def _batch_thread_wrapper():
+                """线程包装：任何异常都写日志 + 提示，避免静默死掉（窗口不恢复）"""
+                try:
+                    self._run_batch_sequence(selected, hud, hud_text, _dual_mode)
+                except Exception as _e:
+                    import traceback
+                    try:
+                        with open(os.path.join(get_base_dir(), 'output', 'ocr_dlog.txt'),
+                                  'a', encoding='utf-8') as _f:
+                            _f.write('[batch] 线程异常: ' + traceback.format_exc() + '\n')
+                    except Exception:
+                        pass
+                    self.win.after(0, lambda: self.status_text.set(f"❌ 批量识别异常: {str(_e)[:80]}"))
+                    self.win.after(0, self.win.deiconify)
+            threading.Thread(target=_batch_thread_wrapper, daemon=True).start()
         
         tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
                   font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF",
@@ -1401,6 +1414,12 @@ class App(SettingsUIMixin):
                     (hud_text.insert('end', f'{m}\n'), hud_text.see('end'))
                     if hud_text.winfo_exists() else None))
             self.win.after(0, lambda m=msg: self.status_text.set(f"🔍 {m}"))
+            try:
+                with open(os.path.join(get_base_dir(), 'output', 'ocr_dlog.txt'),
+                          'a', encoding='utf-8') as _f:
+                    _f.write('[batch] ' + msg + '\n')
+            except Exception:
+                pass
         
         self.win.after(0, self.win.iconify); time.sleep(1.5)
         self._batch_stop.clear()
