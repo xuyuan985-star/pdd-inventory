@@ -1097,10 +1097,13 @@ class App(SettingsUIMixin):
             elif p['color'] == 'yellow': tags = ('warning',)
             raw = p['_raw'] or {}
             row_vals = []
+            from ocr import strip_tail_noise  # 去「查看地址/查看」词条噪音（OCR 识别不稳定，展示层统一清）
             for col in _sel_cols:
                 v = raw.get(col)
                 if v is None or v == '':
                     v = p.get(col, '')
+                if isinstance(v, str):
+                    v = strip_tail_noise(v)
                 row_vals.append(v)
             row_vals += [p['ratio'], p['status'], p['qty']]
             self.tree.insert("", "end", values=tuple(row_vals), tags=tags)

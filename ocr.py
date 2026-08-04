@@ -336,23 +336,40 @@ def strip_region_suffix(region: str) -> str:
     return r
 
 
-# 仓库单元格常见词条噪音（链接/按钮文字被 OCR 连进单元格值）
-WAREHOUSE_NOISE_WORDS = ('查看地址',)
+# 词条噪音：后台单元格下方/旁边的链接文字（「查看地址」「查看」）会被 OCR 连进单元格值。
+# 识别不稳定：有时带空格、有时换行、有时粘连、有时只识别出半截，按尾部词条统一剥离。
+# 长词在前：先剥「查看地址」再剥「查看」，避免只剥「查看」留下「地址」残片。
+TAIL_NOISE_WORDS = ('查看地址', '查看')
+
+
+def strip_tail_noise(value) -> str:
+    """剥离值尾部的词条噪音，只删词条形态、不误伤名称。
+
+    例：'烟台1仓 查看地址' → '烟台1仓'，'128份查看' → '128份'，
+        '烟台1仓\\n查看地址 ' → '烟台1仓'，'查看地址' → ''。
+    词条前/后可带空白或换行；名称中非尾部的「查看」（如"查看库存"）不受影响。
+    """
+    if value is None:
+        return ''
+    import re as _re
+    s = str(value).strip()
+    changed = True
+    while changed:
+        changed = False
+        for word in TAIL_NOISE_WORDS:
+            m = _re.search(r'(?:[ \t\u3000\r\n]*)' + _re.escape(word) + r'[ \t\u3000\r\n]*$', s)
+            if m:
+                s = s[:m.start()].rstrip()
+                changed = True
+    return _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
 
 
 def strip_warehouse_noise(warehouse: str) -> str:
-    """仓库信息去词条噪音：后台仓库单元格下方常带「查看地址」链接词，OCR 会连进去。
+    """仓库信息去词条噪音（兼容别名，走通用 strip_tail_noise）。
 
     例：'烟台1仓 查看地址' → '烟台1仓'，'烟台1仓\\n查看地址' → '烟台1仓'。
-    保留仓库名本身的空白结构（压缩连续空白为单个空格）。
     """
-    if not warehouse:
-        return ''
-    w = str(warehouse).strip()
-    for word in WAREHOUSE_NOISE_WORDS:
-        w = w.replace(word, '')
-    import re as _re
-    return _re.sub(r'\s+', ' ', w).strip()
+    return strip_tail_noise(warehouse)
 
 
 def normalize_col_name(name) -> str:
