@@ -1616,22 +1616,32 @@ class App(SettingsUIMixin):
                         _sh.copyfile(_vshot, os.path.join(get_base_dir(), 'output', f'_prov_fail_{i}_{_p_attempt}.png'))
                     except Exception:
                         pass
-                    _p2 = locate_element(_vshot, 'region_dropdown', method='template', threshold=0.80)
-                    if _p2:
-                        _dx2, _dy2 = _p2[0] + int(90 * sw / 1920), _p2[1]
-                    elif dd_coord:
-                        _dx2, _dy2 = dd_coord['x'], dd_coord['y']
+                    # 重新走一遍 AI 定位：后台页面可能变化（如突发横条弹窗）导致初始定位坐标偏移，
+                    # 点击落在弹窗/错位上 → 粘贴没进下拉框 → 省份没变。不能用旧坐标重试。
+                    import tempfile as _tf
+                    from vision import ai_locate_elements as _relocate
+                    _re_shot = os.path.join(_tf.gettempdir(), 'pdd_relocate_prov.png')
+                    _re_pos = {}
+                    capture_pdd_screenshot(_re_shot, _re_pos)
+                    _re_loc = _relocate(_re_shot)
+                    if _re_loc:
+                        _ox2, _oy2 = _re_pos.get('left', 0), _re_pos.get('top', 0)
+                        _dx2 = int(_re_loc['dropdown']['x']) + _ox2
+                        _dy2 = int(_re_loc['dropdown']['y']) + _oy2
+                        dlog(f"3.↻ 重新AI定位下拉框({_dx2},{_dy2}) 置信度:{_re_loc.get('confidence', 0):.0%}")
+                        # 同时刷新坐标，后续省份/查询按钮也用新定位
+                        dd_coord = {'x': _dx2, 'y': _dy2}
+                        if _re_loc.get('query'):
+                            qq_coord = {'x': int(_re_loc['query']['x']) + _ox2, 'y': int(_re_loc['query']['y']) + _oy2}
                     else:
-                        dlog("3.✗ 重新定位下拉框失败，跳过")
+                        dlog("3.✗ 重新AI定位失败，跳过")
                         break
                     try:
-                        # 重选加固：先 ESC 收起可能展开的列表，再点下拉框，全选清空旧文本后粘贴
-                        pyautogui.press('esc'); time.sleep(0.3)
+                        # 正常操作：点下拉框（点开自动清空）→ 粘贴 → 回车
                         pyautogui.click(_dx2, _dy2); time.sleep(0.3)
                         pyautogui.click(_dx2, _dy2); time.sleep(0.2)
-                        pyautogui.hotkey('ctrl', 'a'); time.sleep(0.1)
-                        pyautogui.press('delete'); time.sleep(0.2)
                         pyperclip.copy(full)
+                        pyautogui.tripleClick(_dx2, _dy2); time.sleep(0.15)
                         pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
                         dlog(f"  重选: 粘贴'{full}'")
                         pyautogui.press('enter'); time.sleep(1.0)
