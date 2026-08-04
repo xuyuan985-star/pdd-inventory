@@ -280,7 +280,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                         'stream': False
                     }, timeout=(10, 30))
                 data = resp.json()
-                if 'output' not in data:
+                if not data.get('output'):
                     raise RuntimeError(f"OCR失败（{mdl}）: {data}")
                 # output[-1] = 最后一条消息（跳过 reasoning）
                 content = data['output'][-1]['content'][0]['text']
@@ -301,7 +301,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                         headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
                     json=cc_payload, timeout=(10, 30))
                 data = resp.json()
-                if 'choices' not in data:
+                if not data.get('choices'):
                     raise RuntimeError(f"OCR失败（{mdl}）: {data}")
                 content = data['choices'][0]['message']['content']
             return content, mdl

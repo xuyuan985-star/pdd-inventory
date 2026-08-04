@@ -1043,24 +1043,32 @@ class App(SettingsUIMixin):
             calc_daily = daily if daily > 0 else 1  # 除法保护，显示保留原始值
             shipping = self._get_shipping(region, name)  # 逐商品查运输时效
             
-            ratio = stock / calc_daily
-            lead_time = shipping + _off
-            reorder = ratio - lead_time
-            
-            if reorder <= 0:
-                status = '立刻补货'
-                color = 'red'
-                qty = max(daily * 8, 100)
-                qty = ((qty + 99) // 100) * 100
-            elif reorder <= 2:
-                status = f'{reorder:.0f}天后下单'
-                color = 'yellow'
-                qty = max(daily * 8, 100)
-                qty = ((qty + 99) // 100) * 100
-            else:
-                status = f'{reorder:.0f}天后下单'
-                color = 'green'
+            if daily <= 0:
+                # 无销量商品：不强制补货，标记观察（销量0可能数据未更新，交客户人工判断）
+                status = '无销量·观察'
+                color = 'gray'
                 qty = 0
+                ratio = 0.0
+                reorder = 0.0
+            else:
+                ratio = stock / calc_daily
+                lead_time = shipping + _off
+                reorder = ratio - lead_time
+
+                if reorder <= 0:
+                    status = '立刻补货'
+                    color = 'red'
+                    qty = max(daily * 8, 100)
+                    qty = ((qty + 99) // 100) * 100
+                elif reorder <= 2:
+                    status = f'{reorder:.0f}天后下单'
+                    color = 'yellow'
+                    qty = max(daily * 8, 100)
+                    qty = ((qty + 99) // 100) * 100
+                else:
+                    status = f'{reorder:.0f}天后下单'
+                    color = 'green'
+                    qty = 0
             
             plans.append({
                 'name': name, 'sku': name, 'stock': stock,
@@ -1382,6 +1390,8 @@ class App(SettingsUIMixin):
                         pass
                     self.win.after(0, lambda: self.status_text.set(f"❌ 批量识别异常: {str(_e)[:80]}"))
                     self.win.after(0, self.win.deiconify)
+                    # 异常路径立即恢复导出按钮，不等 10 分钟 idle 兜底（result_queue 无 None 信号）
+                    self.win.after(0, lambda: self.export_btn.configure(state='normal'))
             threading.Thread(target=_batch_thread_wrapper, daemon=True).start()
         
         tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
@@ -1897,7 +1907,9 @@ class App(SettingsUIMixin):
             _act = _api.get('active_provider', '')
             _main = ((_api.get('providers') or {}).get(_act, {}) or {}).get('model', '')
             if _main and str(_main).strip().lower() == str(_sec).strip().lower():
-                dlog(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
+                from ocr import _ocr_dlog
+                _ocr_dlog(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
+                self.status_text.set(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
             return ocr_dual_verify_generic(image_path, columns=sel,
                                            mapping=cfg.get('mapping') or {},
                                            table_bbox=table_bbox,
