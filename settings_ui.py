@@ -534,14 +534,20 @@ class SettingsUIMixin:
         ai_btn_frame.pack(pady=8)
 
         def do_ai_locate():
-            ai_status_lbl.configure(text="正在智能识别页面元素...")
-            self.win.update()
             minimized = False
             try:
                 import pyautogui as pg
                 from vision import ai_locate_elements
-                # 先最小化设置窗口再截图：ai_locate_elements 是全屏截图，
-                # 设置窗口开着会遮挡商家后台，导致定位到错误坐标
+                # 手动定位是全屏截图，必须先保证商家后台在前台且无遮挡。
+                # 给用户 3 秒倒计时去切换窗口，再最小化本窗口截图。
+                ai_status_lbl.configure(text="请将拼多多商家后台切到前台，3 秒后开始定位...")
+                self.win.update()
+                for _left in (3, 2, 1):
+                    _time.sleep(1.0)
+                    ai_status_lbl.configure(text=f"请将商家后台切到前台，{_left} 秒后开始定位...")
+                    self.win.update()
+                # 最小化主窗口再截图：ai_locate_elements 是全屏截图，
+                # 本窗口开着会遮挡商家后台，导致定位到错误坐标
                 try:
                     self.win.iconify()
                     self.win.update()
@@ -556,7 +562,7 @@ class SettingsUIMixin:
                             self.win.deiconify(); self.win.lift()
                         except Exception:
                             pass
-                    ai_status_lbl.configure(text="定位失败：API 返回空或校验不通过")
+                    ai_status_lbl.configure(text="定位失败：未识别到后台元素。请确认商家后台在前台、页面已加载且未被其他窗口遮挡")
                     _refresh_cards()
                     return
                 if minimized:
