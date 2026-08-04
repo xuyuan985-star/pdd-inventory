@@ -71,6 +71,26 @@ class SettingsUIMixin:
         tk.Label(content, textvariable=self.col_status_var,
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
 
+        # ── 副模型（双模型验证用，🛡 勾选时生效）──
+        sec_row = tk.Frame(content); sec_row.pack(pady=(4,2))
+        tk.Label(sec_row, text="副模型（双模型验证）:", font=(self.FONT[0], 8),
+                 fg=self.C_TEXT).pack(side="left")
+        from utils import get_secondary_model, save_secondary_model
+        sec_var = tk.StringVar(self.win, value=get_secondary_model())
+        ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=22,
+                     values=['glm-4v-flash', 'glm-4.6v', 'Doubao-Seed-2.1-pro',
+                             'qwen3-omni-flash', 'qwen3.5-omni-flash'],
+                     font=(self.FONT[0], 8)).pack(side="left", padx=8)
+        def _save_sec():
+            _v = sec_var.get().strip() or 'glm-4v-flash'
+            save_secondary_model(_v)
+            self.col_status_var.set(f"副模型已保存：{_v}")
+            self.status_text.set(f"副模型已保存：{_v}")
+        tk.Button(sec_row, text='保存', command=_save_sec,
+                  font=(self.FONT[0], 7)).pack(side="left")
+        tk.Label(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
+
     def _probe_columns(self):
         """探测：截图 → AI 定位表格 → 全量识别所有列 → 保存 all 列清单"""
         import time, threading
