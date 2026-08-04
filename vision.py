@@ -208,7 +208,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
                 'max_output_tokens': max_tokens,
             }, timeout=(5, timeout))
         data = resp.json()
-        if 'output' not in data:
+        if not data.get('output'):
             raise RuntimeError(f'API 返回异常: {data}')
         return data['output'][-1]['content'][0]['text']
     # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
@@ -226,7 +226,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
         headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
         json=payload, timeout=(5, timeout))
     data = resp.json()
-    if 'choices' not in data:
+    if not data.get('choices'):
         raise RuntimeError(f'API 返回异常: {data}')
     return data['choices'][0]['message']['content']
 
