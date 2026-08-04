@@ -1586,6 +1586,43 @@ class App(SettingsUIMixin):
                 if not op_ok:
                     continue
 
+                # 3.5 省份切换验证：粘贴+回车后确认筛选栏省份已切换为目标省份。
+                # 页面省份没变 = 切换失败（下拉框没选上/粘贴失败）。旧版第5步只做像素
+                # 变化检测，省份没变也照走，等于摆设——这里直接读回筛选栏值比对，
+                # 不一致则重新走一遍「定位下拉框 → 粘贴省份 → 回车」。
+                from ocr import strip_region_suffix as _strip_region
+                from vision import ai_read_selected_province as _read_province
+                province_ok = False
+                for _p_attempt in range(3):
+                    _vshot = os.path.join(get_base_dir(), 'output', f'_wait_{i}_prov.png')
+                    ss(_vshot)
+                    _sel = _read_province(_vshot)
+                    if _sel and _strip_region(_sel) == reg:
+                        province_ok = True
+                        dlog(f"3.✓ 省份已切换为「{_sel}」")
+                        break
+                    dlog(f"3.⚠ 省份验证失败（显示:{_sel or '无法识别'}，期望:{reg}），重新定位下拉框并重选...")
+                    _p2 = locate_element(_vshot, 'region_dropdown', method='template', threshold=0.80)
+                    if _p2:
+                        _dx2, _dy2 = _p2[0] + int(90 * sw / 1920), _p2[1]
+                    elif dd_coord:
+                        _dx2, _dy2 = dd_coord['x'], dd_coord['y']
+                    else:
+                        dlog("3.✗ 重新定位下拉框失败，跳过")
+                        break
+                    try:
+                        pyautogui.click(_dx2, _dy2); time.sleep(0.3); pyautogui.click(_dx2, _dy2); time.sleep(0.2)
+                        pyperclip.copy(full)
+                        pyautogui.tripleClick(_dx2, _dy2); time.sleep(0.15)
+                        pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
+                        pyautogui.press('enter'); time.sleep(1.0)
+                    except Exception as ex:
+                        dlog(f"  省份重选失败: {ex}")
+                        break
+                if not province_ok:
+                    dlog(f"3.✗ 省份切换确认失败（{reg}），跳过该省份")
+                    continue
+
                 # 4. 找查询按钮
                 if qq_coord:
                     qx, qy = qq_coord['x'], qq_coord['y']
