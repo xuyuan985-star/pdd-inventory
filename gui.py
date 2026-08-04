@@ -190,7 +190,10 @@ class App(SettingsUIMixin):
 
         # v2 → v3: 校准模块重构 — 相对偏移模式改为 AI 智能定位
         if ver < 3:
-            cal = s.get('calibrate', {})
+            cal = s.get('calibrate')
+            # 畸形 calibrate（None/list/str 等）先归一化为空 dict，后续 .get 不再崩
+            if not isinstance(cal, dict):
+                cal = {}
             # 迁移旧 absolute 格式（dropdown/query 直接挂在 calibrate 下）
             if 'dropdown' in cal and 'query' in cal and 'absolute' not in cal:
                 cal = {
@@ -221,11 +224,13 @@ class App(SettingsUIMixin):
         # v3 → v4: 移除绝对坐标模式，统一 AI 智能定位
         # 旧 absolute 数据仅作展示参考，不再作为定位来源（运行时 AI 实时定位覆盖）
         if ver < 4:
-            cal = s.get('calibrate', {})
-            if isinstance(cal, dict):
-                cal['mode'] = 'ai'
-                cal.setdefault('ai', {})
-                s['calibrate'] = cal
+            cal = s.get('calibrate')
+            if not isinstance(cal, dict):
+                cal = {'mode': 'ai', 'ai': {}}
+            cal['mode'] = 'ai'
+            if not isinstance(cal.get('ai'), dict):
+                cal['ai'] = {}  # 嵌套畸形兜底（程序自身不会写出，防御手改配置）
+            s['calibrate'] = cal
             s['config_version'] = 4
             _write()
         
@@ -1409,19 +1414,19 @@ class App(SettingsUIMixin):
             sw, sh = 1920, 1080  # 兜底：屏幕探测失败用 FHD 默认，避免线程崩溃
         # 加载校准配置
         _cal = {}
-        _cal_mode = 'ai'
+        _cal_mode = 'ai'  # v1.4 起只保留 AI 定位（旧 absolute/offset 已废弃）
         import json as _json
         try:
             with open(os.path.join(get_base_dir(), 'settings.json'), 'r', encoding='utf-8') as _f:
-                _cal = _json.load(_f).get('calibrate', {})
-            _cal_mode = _cal.get('mode', 'ai')
-            if _cal_mode != 'ai':
-                _cal_mode = 'ai'  # v1.4 起只保留 AI 定位，旧 absolute/offset 模式强制转 ai
+                _cal = _json.load(_f).get('calibrate')
+                if not isinstance(_cal, dict):
+                    _cal = {}  # 畸形 calibrate 归一化，防后续 .get 崩
         except Exception: pass
 
         # AI 自动定位：AI 模式下，批量识别启动时实时定位按钮坐标
         if _cal_mode == 'ai':
-            ai_data = _cal.get('ai', {})
+            _ai_raw = _cal.get('ai')
+            ai_data = _ai_raw if isinstance(_ai_raw, dict) else {}
             last_time = ai_data.get('last_time', 0)
             now = time.time()
             # 5 分钟内有缓存直接复用
@@ -1455,7 +1460,8 @@ class App(SettingsUIMixin):
         # 获取有效坐标（v1.4 起只保留 AI 定位；绝对坐标模式已移除）
         def _get_coords():
             import pyautogui as _pg
-            ai_data = _cal.get('ai', {})
+            _ai_raw = _cal.get('ai')
+            ai_data = _ai_raw if isinstance(_ai_raw, dict) else {}
             dd = ai_data.get('dropdown', {})
             qq = ai_data.get('query', {})
             # 分辨率适配

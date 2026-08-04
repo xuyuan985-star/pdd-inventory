@@ -539,29 +539,11 @@ class SettingsUIMixin:
 
         from utils import Config as _Cfg3
         s = _Cfg3.load()  # 安全回退
-        cal = s.get('calibrate', {})
-        if not cal: cal = {'mode': 'ai', 'ai': {}, 'absolute': {}}
+        cal = s.get('calibrate')
+        if not isinstance(cal, dict):
+            cal = {'mode': 'ai', 'ai': {}}
 
-        # ── 模式选择 ──
-        mode_var = tk.StringVar(self.win, value=cal.get('mode', 'ai'))
-        mode_frame = tk.Frame(parent)
-        mode_frame.pack(pady=10)
-        tk.Label(mode_frame, text="定位模式:", font=self.FONT, fg=self.C_TEXT).pack(side='left')
-        tk.Radiobutton(mode_frame, text="AI 智能视觉定位（自动识别，自适应分辨率）", variable=mode_var,
-                       value='ai', font=(self.FONT[0], 8), fg=self.C_TEXT,
-                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(anchor='w')
-        def save_mode():
-            cal['mode'] = mode_var.get()
-            s['calibrate'] = cal
-            from utils import Config as _CfgM
-            _CfgM.save(s)  # 原子写入（安全回退一致）
-            self.status_text.set("定位模式已设为: AI 智能定位")
-            _refresh_cards()
-
-        tk.Button(mode_frame, text="保存模式", command=save_mode,
-                  font=(self.FONT[0], 8)).pack(pady=5)
-
-        # ── AI 模式卡片 ──
+        # ── AI 模式卡片（v1.4 起唯一模式，无模式选择器）──
         ai_card = tk.Frame(parent, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
 
         ai_status_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_SURFACE)
@@ -616,7 +598,8 @@ class SettingsUIMixin:
         def _refresh_cards():
             # v1.4 起只保留 AI 智能定位（绝对坐标模式已移除）
             ai_card.pack(fill='x', padx=20, pady=10)
-            ai_data = cal.get('ai', {})
+            _ai_raw = cal.get('ai')
+            ai_data = _ai_raw if isinstance(_ai_raw, dict) else {}
             if ai_data.get('last_time'):
                 t = datetime.fromtimestamp(ai_data['last_time']).strftime('%Y-%m-%d %H:%M:%S')
                 dd = ai_data.get('dropdown', {})
@@ -632,8 +615,10 @@ class SettingsUIMixin:
                 ai_res_lbl.configure(text="")
 
         def _test_click(cal_data):
-            dd = cal_data.get('ai', {}).get('dropdown', {})
-            if dd and 'x' in dd and dd['x'] is not None:
+            _ai_raw = cal_data.get('ai')
+            ai_data = _ai_raw if isinstance(_ai_raw, dict) else {}
+            dd = ai_data.get('dropdown', {})
+            if dd and 'x' in dd and 'y' in dd and dd['x'] is not None and dd['y'] is not None:
                 import pyautogui as pg
                 pg.click(dd['x'], dd['y'])
                 self.status_text.set(f"已点击下拉框 ({dd['x']}, {dd['y']})，请确认是否展开")
