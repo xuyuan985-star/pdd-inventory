@@ -32,7 +32,7 @@ except ImportError:
     sys.exit(1)
 
 
-from config import RESOLUTION_PRESETS, THEMES, load_theme_pref, load_resolution_pref
+from config import THEMES, load_theme_pref
 
 
 def _validate_num_entry(p) -> bool:
@@ -1410,7 +1410,6 @@ class App(SettingsUIMixin):
         win_pos = {}  # 记录浏览器窗口左上角（全屏坐标），滚动换算用
         def ss(path):
             capture_pdd_screenshot(path, out_window_pos=win_pos)
-        preset = RESOLUTION_PRESETS.get(load_resolution_pref(), RESOLUTION_PRESETS['1920×1080 (Full HD)'])
         try:
             sw, sh = pyautogui.size()
         except Exception:
@@ -1519,8 +1518,10 @@ class App(SettingsUIMixin):
                     dx, dy = dd_coord['x'], dd_coord['y']
                     dlog(f"1.校准坐标({dx},{dy})")
                 else:
-                    dx = int(sw * preset['dropdown_x']); dy = int(sh * preset['dropdown_y'])
-                    dlog(f"1.预设({dx},{dy})")
+                    # v1.3 起完全依赖 AI 定位/模板匹配，无预设坐标兜底：
+                    # 宁可显式失败让用户处理，也不猜测位置乱点
+                    dlog(f"1.✗ 未定位到地区下拉框（模板匹配+AI校准均失败），跳过 {reg}")
+                    continue
                 # 点击+粘贴+回车，最多重试 3 次（PyAutoGUI 偶发失败）
                 op_ok = False
                 for _attempt in range(3):

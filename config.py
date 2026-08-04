@@ -6,15 +6,6 @@ import json
 import os
 from utils import get_base_dir
 
-# ── 分辨率预设 ──────────────────────────────────────────────────
-# 坐标是相对于屏幕的比例 (0.0~1.0)，适配所有分辨率
-RESOLUTION_PRESETS = {
-    "1920×1080 (Full HD)": {"w": 1920, "h": 1080, "dropdown_x": 0.28, "dropdown_y": 0.38, "query_x": 0.82, "query_y": 0.38},
-    "2560×1440 (2K)":      {"w": 2560, "h": 1440, "dropdown_x": 0.28, "dropdown_y": 0.38, "query_x": 0.82, "query_y": 0.38},
-    "3840×2160 (4K)":      {"w": 3840, "h": 2160, "dropdown_x": 0.26, "dropdown_y": 0.36, "query_x": 0.83, "query_y": 0.36},
-    "1366×768 (HD)":       {"w": 1366, "h": 768,  "dropdown_x": 0.30, "dropdown_y": 0.40, "query_x": 0.80, "query_y": 0.40},
-}
-
 # ── 皮肤系统 — New Minimalism ────────────────────────────────────
 THEMES = {
     "极简白": {
@@ -101,16 +92,4 @@ def save_theme_pref(name: str):
     """保存皮肤偏好"""
     s = _read_settings()
     s['theme'] = name
-    _write_settings(s)
-
-
-def load_resolution_pref() -> str:
-    """读取分辨率偏好"""
-    return _read_settings().get('resolution', '1920×1080 (Full HD)')
-
-
-def save_resolution_pref(name: str):
-    """保存分辨率偏好"""
-    s = _read_settings()
-    s['resolution'] = name
     _write_settings(s)
