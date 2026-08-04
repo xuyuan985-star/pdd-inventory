@@ -313,7 +313,6 @@ class App(SettingsUIMixin):
         self.page_products = tk.Frame(self.content_frame)
         self.page_theme = tk.Frame(self.content_frame)
         self.page_backend = tk.Frame(self.content_frame)
-        self.page_calibrate = tk.Frame(self.content_frame)
         self.page_api = tk.Frame(self.content_frame)
         self._current_page = self.page_home
         
@@ -485,7 +484,6 @@ class App(SettingsUIMixin):
             ("🔑 API", self.page_api),
             ("🎨 主题", self.page_theme),
             ("🔗 后台", self.page_backend),
-            ("📐 校准", self.page_calibrate),
         ]
         for text, page in items:
             btn = tk.Button(self.nav_frame, text=text, relief="flat",
@@ -518,8 +516,6 @@ class App(SettingsUIMixin):
             self._build_skin_tab(page)
         elif page == self.page_backend and not hasattr(page, '_built'):
             self._build_backend_tab(page)
-        elif page == self.page_calibrate and not hasattr(page, '_built'):
-            self._build_calibrate_tab(page)
         elif page == self.page_api and not hasattr(page, '_built'):
             self._build_api_page(page)
         if not hasattr(page, '_built'):

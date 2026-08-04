@@ -194,6 +194,10 @@ class SettingsUIMixin:
         dlg.transient(self.win)
         dlg.grab_set()
 
+        # ── 定位校准（并入通用页，不再单开导航）──
+        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
+        self._build_calibrate_tab(content)
+
     def _pick_export_path(self, parent):
         from tkinter import filedialog
         path = filedialog.askdirectory(title="选择导出文件夹")
