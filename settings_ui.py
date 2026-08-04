@@ -54,11 +54,11 @@ class SettingsUIMixin:
         tk.Button(content, text='保存', command=lambda: self._save_settings(None), font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
+        # ── 定位校准（AI 智能定位，v1.3 起唯一模式）──
+        self._build_calibrate_tab(content)
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
-        # ── 通用页以下无更多模块（AI 定位取代分辨率预设/截图裁剪）──
 
         # ── 识别列配置（v1.3 通用列：客户自主选择要识别的列）──
-        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
         tk.Label(content, text='识别列配置', font=self.FONT_HEADING).pack(pady=(5,2))
         self.col_status_var = tk.StringVar(self.win, value='')
         tk.Label(content, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
@@ -193,10 +193,6 @@ class SettingsUIMixin:
                   bg=self.C_PRIMARY, fg="#FFFFFF", width=14).pack(pady=(8,12))
         dlg.transient(self.win)
         dlg.grab_set()
-
-        # ── 定位校准（并入通用页，不再单开导航）──
-        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
-        self._build_calibrate_tab(content)
 
     def _pick_export_path(self, parent):
         from tkinter import filedialog
