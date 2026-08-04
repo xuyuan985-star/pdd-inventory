@@ -363,6 +363,11 @@ class App(SettingsUIMixin):
                   font=(self.FONT[0], 9, 'bold'), bg=self.C_SECONDARY, fg="#FFFFFF").pack(side="left", padx=15)
         tk.Button(btn_row, text="📋 批量识别", relief='flat', command=self._batch_scan,
                   font=(self.FONT[0], 8), bg="#8B5CF6", fg="#FFFFFF").pack(side="left", padx=8)
+        # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
+        self._single_dual_var = tk.BooleanVar(self.win, value=True)
+        tk.Checkbutton(btn_row, text="🛡 双模型", variable=self._single_dual_var,
+                       font=(self.FONT[0], 8), bg=self.C_SURFACE, fg=self.C_MUTED,
+                       selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE).pack(side="left", padx=10)
         tk.Button(btn_row, text="截图识别", relief='flat', command=self._ocr_fill,
                   font=(self.FONT[0], 8), bg="#FF9800", fg="#FFFFFF").pack(side="right")
         tk.Button(btn_row, text="实时截图", relief='flat', command=self._live_screenshot,
@@ -1303,7 +1308,7 @@ class App(SettingsUIMixin):
                       variable=test_var, font=(self.FONT[0], 8),
                       bg=self.C_BG, fg=self.C_MUTED,
                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left", padx=10)
-        dual_var = tk.BooleanVar(dlg, value=False)
+        dual_var = tk.BooleanVar(dlg, value=True)  # 默认开双模型（v1.3：不在乎 token 成本，识别更准）
         tk.Checkbutton(opt_row, text="🛡 双模型验证（慢一倍，更准）",
                       variable=dual_var, font=(self.FONT[0], 8),
                       bg=self.C_BG, fg=self.C_MUTED,
@@ -1799,7 +1804,7 @@ class App(SettingsUIMixin):
                 self.win.after(0, self.win.deiconify)
                 self.win.after(0, lambda: self.status_text.set('OCR识别中...'))
                 
-                items = self._ocr_generic_to_items(ss_path)
+                items = self._ocr_generic_to_items(ss_path, dual_verify=self._single_dual_var.get())
                 
                 if not items:
                     self.win.after(0, lambda: self.status_text.set('未识别到商品'))
@@ -1826,7 +1831,7 @@ class App(SettingsUIMixin):
         
         def task():
             try:
-                items = self._ocr_generic_to_items(path)
+                items = self._ocr_generic_to_items(path, dual_verify=self._single_dual_var.get())
                 self.win.after(0, lambda i=items: self._fill_from_ocr(i))
             except Exception as e:
                 self.win.after(0, self._show_error, str(e))
