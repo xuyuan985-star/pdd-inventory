@@ -1255,14 +1255,10 @@ class App(SettingsUIMixin):
                 bg=self.C_BG, fg=self.C_MUTED).pack()
         
         # 底部控制区（先pack确保不被挤掉）
-        bottom_frame = tk.Frame(dlg, height=130)
+        bottom_frame = tk.Frame(dlg, height=170)
         bottom_frame.pack(side="bottom", fill="x", padx=20, pady=(5,10))
         bottom_frame.pack_propagate(False)
-        
-        result_label = tk.Label(bottom_frame, text="", font=(self.FONT[0], 8),
-                               bg=self.C_BG, fg=self.C_MUTED)
-        result_label.pack()
-        
+
         # ── 分仓库输入（可选）──
         wh_label = tk.Label(bottom_frame, text="分仓库（可选，格式：省份=仓库1,仓库2）",
                             font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT)
@@ -1270,17 +1266,20 @@ class App(SettingsUIMixin):
         wh_entry = tk.Entry(bottom_frame, font=(self.FONT[0], 8), width=36)
         wh_entry.pack(pady=(0,4))
         wh_entry.insert(0, "")
-        
+
+        # 选项横排（测试模式 + 双模型），避免纵向堆叠把按钮挤出可视区
+        opt_row = tk.Frame(bottom_frame, bg=self.C_BG)
+        opt_row.pack(pady=(5,0))
         test_var = tk.BooleanVar(dlg, value=False)
-        tk.Checkbutton(bottom_frame, text="🔍 测试模式",
+        tk.Checkbutton(opt_row, text="🔍 测试模式",
                       variable=test_var, font=(self.FONT[0], 8),
                       bg=self.C_BG, fg=self.C_MUTED,
-                      selectcolor=self.C_BG, activebackground=self.C_BG).pack(pady=(5,0))
+                      selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left", padx=10)
         dual_var = tk.BooleanVar(dlg, value=False)
-        tk.Checkbutton(bottom_frame, text="🛡 双模型验证（慢一倍，更准）",
+        tk.Checkbutton(opt_row, text="🛡 双模型验证（慢一倍，更准）",
                       variable=dual_var, font=(self.FONT[0], 8),
                       bg=self.C_BG, fg=self.C_MUTED,
-                      selectcolor=self.C_BG, activebackground=self.C_BG).pack(pady=(2,0))
+                      selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left", padx=10)
         
         # 地区勾选列表（可滚动，占剩余空间）
         canvas = tk.Canvas(dlg, bg=self.C_SURFACE, highlightthickness=0)
