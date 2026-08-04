@@ -1589,10 +1589,12 @@ class App(SettingsUIMixin):
                 # 3.5 省份切换验证：粘贴+回车后确认筛选栏省份已切换为目标省份。
                 # 页面省份没变 = 切换失败（下拉框没选上/粘贴失败）。旧版第5步只做像素
                 # 变化检测，省份没变也照走，等于摆设——这里直接读回筛选栏值比对，
-                # 不一致则重新走一遍「定位下拉框 → 粘贴省份 → 回车」。
+                # 不一致则重新走一遍「定位下拉框 → 清空 → 粘贴省份 → 回车」。
                 from ocr import strip_region_suffix as _strip_region
                 from vision import ai_read_selected_province as _read_province
                 province_ok = False
+                _last_sel = None
+                _same_twice = False
                 for _p_attempt in range(3):
                     _vshot = os.path.join(get_base_dir(), 'output', f'_wait_{i}_prov.png')
                     ss(_vshot)
@@ -1601,7 +1603,19 @@ class App(SettingsUIMixin):
                         province_ok = True
                         dlog(f"3.✓ 省份已切换为「{_sel}」")
                         break
-                    dlog(f"3.⚠ 省份验证失败（显示:{_sel or '无法识别'}，期望:{reg}），重新定位下拉框并重选...")
+                    dlog(f"3.⚠ 省份验证失败（第{_p_attempt+1}次，显示:{_sel or '无法识别'}，期望:{reg}）")
+                    # 连续两次显示值相同且未变化 → 重选机制无效，别浪费第 3 次
+                    if _sel and _sel == _last_sel:
+                        _same_twice = True
+                        dlog("3.⚠ 显示值连续两次相同，重选无效，提前放弃")
+                        break
+                    _last_sel = _sel
+                    # 保留失败现场截图（_prov_fail_ 前缀不走批量清理），供人工排查真因
+                    try:
+                        import shutil as _sh
+                        _sh.copyfile(_vshot, os.path.join(get_base_dir(), 'output', f'_prov_fail_{i}_{_p_attempt}.png'))
+                    except Exception:
+                        pass
                     _p2 = locate_element(_vshot, 'region_dropdown', method='template', threshold=0.80)
                     if _p2:
                         _dx2, _dy2 = _p2[0] + int(90 * sw / 1920), _p2[1]
@@ -1611,11 +1625,17 @@ class App(SettingsUIMixin):
                         dlog("3.✗ 重新定位下拉框失败，跳过")
                         break
                     try:
-                        pyautogui.click(_dx2, _dy2); time.sleep(0.3); pyautogui.click(_dx2, _dy2); time.sleep(0.2)
+                        # 重选加固：先 ESC 收起可能展开的列表，再点下拉框，全选清空旧文本后粘贴
+                        pyautogui.press('esc'); time.sleep(0.3)
+                        pyautogui.click(_dx2, _dy2); time.sleep(0.3)
+                        pyautogui.click(_dx2, _dy2); time.sleep(0.2)
+                        pyautogui.hotkey('ctrl', 'a'); time.sleep(0.1)
+                        pyautogui.press('delete'); time.sleep(0.2)
                         pyperclip.copy(full)
-                        pyautogui.tripleClick(_dx2, _dy2); time.sleep(0.15)
                         pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
+                        dlog(f"  重选: 粘贴'{full}'")
                         pyautogui.press('enter'); time.sleep(1.0)
+                        dlog("  重选: 回车确认")
                     except Exception as ex:
                         dlog(f"  省份重选失败: {ex}")
                         break
