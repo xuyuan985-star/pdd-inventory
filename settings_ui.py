@@ -536,15 +536,34 @@ class SettingsUIMixin:
         def do_ai_locate():
             ai_status_lbl.configure(text="正在智能识别页面元素...")
             self.win.update()
+            minimized = False
             try:
                 import pyautogui as pg
                 from vision import ai_locate_elements
+                # 先最小化设置窗口再截图：ai_locate_elements 是全屏截图，
+                # 设置窗口开着会遮挡商家后台，导致定位到错误坐标
+                try:
+                    self.win.iconify()
+                    self.win.update()
+                    minimized = True
+                    _time.sleep(1.0)  # 等窗口真正消失
+                except Exception:
+                    pass
                 result = ai_locate_elements()
                 if not result:
+                    if minimized:
+                        try:
+                            self.win.deiconify(); self.win.lift()
+                        except Exception:
+                            pass
                     ai_status_lbl.configure(text="定位失败：API 返回空或校验不通过")
                     _refresh_cards()
                     return
-
+                if minimized:
+                    try:
+                        self.win.deiconify(); self.win.lift()
+                    except Exception:
+                        pass
                 screen_w, screen_h = pg.size()
                 cal['ai'] = {
                     'last_time': _time.time(),
@@ -561,6 +580,11 @@ class SettingsUIMixin:
                 ai_status_lbl.configure(text="✅ 定位完成")
                 self.status_text.set("AI 智能定位完成")
             except Exception as e:
+                if minimized:
+                    try:
+                        self.win.deiconify(); self.win.lift()
+                    except Exception:
+                        pass
                 ai_status_lbl.configure(text=f"定位失败: {str(e)[:50]}")
             _refresh_cards()
 
