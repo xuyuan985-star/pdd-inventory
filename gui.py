@@ -1447,39 +1447,35 @@ class App(SettingsUIMixin):
                     _cal = {}  # 畸形 calibrate 归一化，防后续 .get 崩
         except Exception: pass
 
-        # AI 自动定位：AI 模式下，批量识别启动时实时定位按钮坐标
+        # AI 自动定位：AI 模式下，批量识别启动时每次实时定位按钮坐标
+        # （窗口位置/分辨率随时可能变化，坐标必须最新；定位失败时下方静默回退旧坐标）
         if _cal_mode == 'ai':
-            _ai_raw = _cal.get('ai')
-            ai_data = _ai_raw if isinstance(_ai_raw, dict) else {}
-            last_time = ai_data.get('last_time', 0)
             now = time.time()
-            # 5 分钟内有缓存直接复用
-            if not last_time or (now - last_time > 300):
-                dlog("AI 自动定位页面元素...")
-                try:
-                    from vision import ai_locate_elements
-                    result = ai_locate_elements()
-                    if result:
-                        _cal['ai'] = {
-                            'last_time': now,
-                            'dropdown': result['dropdown'],
-                            'query': result['query'],
-                            'confidence': result['confidence'],
-                            'screen_width': result['screen_width'],
-                            'screen_height': result['screen_height'],
-                        }
-                        _cal['mode'] = 'ai'
-                        # 原子写回 settings.json，持久化 AI 定位结果（下次启动直接复用缓存）
-                        try:
-                            from utils import Config as _Cfg
-                            _full = _Cfg.load() or {}
-                            _full['calibrate'] = _cal
-                            _Cfg.save(_full)
-                        except Exception:
-                            pass
-                        dlog(f"AI 定位完成 置信度:{result['confidence']:.0%}")
-                except Exception:
-                    pass  # 失败静默回退，用旧坐标继续
+            dlog("AI 自动定位页面元素...")
+            try:
+                from vision import ai_locate_elements
+                result = ai_locate_elements()
+                if result:
+                    _cal['ai'] = {
+                        'last_time': now,
+                        'dropdown': result['dropdown'],
+                        'query': result['query'],
+                        'confidence': result['confidence'],
+                        'screen_width': result['screen_width'],
+                        'screen_height': result['screen_height'],
+                    }
+                    _cal['mode'] = 'ai'
+                    # 原子写回 settings.json，持久化 AI 定位结果（下次启动直接复用缓存）
+                    try:
+                        from utils import Config as _Cfg
+                        _full = _Cfg.load() or {}
+                        _full['calibrate'] = _cal
+                        _Cfg.save(_full)
+                    except Exception:
+                        pass
+                    dlog(f"AI 定位完成 置信度:{result['confidence']:.0%}")
+            except Exception:
+                pass  # 失败静默回退，用旧坐标继续
 
         # 获取有效坐标（v1.4 起只保留 AI 定位；绝对坐标模式已移除）
         def _get_coords():
