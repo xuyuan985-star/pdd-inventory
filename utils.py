@@ -74,12 +74,34 @@ def save_ocr_columns(all_cols: list = None, selected: list = None, mapping: dict
     """持久化识别列配置到 settings.json（原子写入）。"""
     s = Config.load()
     cur = s.get('ocr_columns') or {}
+    if not isinstance(cur, dict):
+        cur = {}
     if all_cols is not None:
         cur['all'] = list(all_cols)
     if selected is not None:
         cur['selected'] = list(selected)
     if mapping is not None:
         cur['mapping'] = dict(mapping)
+    s['ocr_columns'] = cur
+    Config.save(s)
+
+
+def get_secondary_model() -> str:
+    """读取双模型验证的副模型，默认 glm-4v-flash。"""
+    s = Config.load()
+    cfg = s.get('ocr_columns') or {}
+    if not isinstance(cfg, dict):
+        return 'glm-4v-flash'
+    return cfg.get('secondary_model') or 'glm-4v-flash'
+
+
+def save_secondary_model(name: str):
+    """保存双模型验证的副模型（原子写入）。"""
+    s = Config.load()
+    cur = s.get('ocr_columns') or {}
+    if not isinstance(cur, dict):
+        cur = {}
+    cur['secondary_model'] = name
     s['ocr_columns'] = cur
     Config.save(s)
 

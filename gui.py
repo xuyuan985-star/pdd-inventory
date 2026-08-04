@@ -1855,9 +1855,11 @@ class App(SettingsUIMixin):
             sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
         if dual_verify:
             from ocr import ocr_dual_verify_generic
+            from utils import get_secondary_model
             return ocr_dual_verify_generic(image_path, columns=sel,
                                            mapping=cfg.get('mapping') or {},
-                                           table_bbox=table_bbox)
+                                           table_bbox=table_bbox,
+                                           secondary_model=get_secondary_model())
         result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
         rows = result.get('rows') or []
         return parse_items_generic(rows, cfg.get('mapping') or {})
