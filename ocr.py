@@ -417,13 +417,15 @@ def strip_tail_noise(value) -> str:
 def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
     """按 sku_id 权威去重（无 ID 回退 name），返回去重后的新条目；就地更新三个 seen 集合。
 
-    滚动加载多轮截图时，同一商品会反复出现；商品名又有 OCR 单字波动（结→丝），
-    所以 sku_id 是唯一稳定锚点。覆盖场景：
-      A 同名不同ID(都有ID) → 各自保留（ID 不同）
-      B 先无ID后有ID(同商品) → 拦截（无ID已登记 name）
-      C 先有ID后无ID(同商品) → 拦截（有ID已登记 name）
-      D 无ID同名 → 去重（name 相同）
-      ★ 同ID名字波动（滚动重识别 + OCR 单字错）→ 按 ID 去重，不再重复输出
+    滚动加载多轮截图时，同一商品会反复出现；商品名有 OCR 单字波动（结→丝），
+    **sku_id 长数字串每轮也可能错 1~2 位**（实测 96622588033→966225988033、984387564986→284337564986）。
+    所以：
+      - ID 精确命中 → 同商品去重；
+      - ID 未精确命中但**已见 ID 编辑距离≤2 且 name 前 6 字相同 + 总距离≤6** → 视为同一商品（OCR 数字错位/尾部描述词波动）去重；
+        （真实相邻商品 name 前缀通常不同——"盐渍鞭炮笋"vs"盐渍海带结"，不会被误并；同商品核心名稳定、尾部描述词乱）
+      - 无 ID → name 精确去重。
+    覆盖场景：同名不同ID保留 / 先无ID后有ID拦截 / 先有ID后无ID拦截 / 无ID同名去重 / 同ID名字波动 / **同商品ID错位波动**。
+    seen_sku 为 dict {sku_id: name}（模糊匹配需要名字佐证）。
     """
     out = []
     for it in items:
@@ -434,7 +436,16 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
         if sku:
             if sku in seen_sku:
                 continue
-            seen_sku.add(sku)
+            # 模糊兜底：ID 错位 1~2 位 + name 相似 → 同商品（OCR 数字串波动）
+            hit = False
+            for _s, _n in seen_sku.items():
+                if abs(len(_s) - len(sku)) <= 2 and _lev(_s, sku) <= 2:
+                    if _n[:6] == nm[:6] and _lev(_n, nm) <= 6:
+                        hit = True
+                        break
+            if hit:
+                continue
+            seen_sku[sku] = nm
             if nm in seen_name_no_sku:
                 continue
             seen_name_with_id.add(nm)
