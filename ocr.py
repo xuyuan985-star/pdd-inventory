@@ -218,13 +218,14 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
         # 根据 endpoint 判断 API 类型，而非模型名
         use_responses = ('responses' in endpoint.lower())
         if use_responses:
-            # 模型名优先；custom_endpoint（ep-xxx 推理接入点）仅当未填模型名时兜底，
-            # 避免过期的接入点 ID 顶掉用户配置的模型名
+            # Doubao 的 model 名（如 Doubao-Seed-2.1-pro）在 ark 不一定是有效推理 ID，
+            # 实测直调报 InvalidEndpointOrModel.NotFound → 一直 fallback 到 glm-4v-flash（精度差）。
+            # custom_endpoint（ep-xxx 推理接入点）才是有效 ID，必须优先使用。
             custom_ep = provider.get('custom_endpoint', '')
-            fallback = model_name or custom_ep
+            fallback = custom_ep or model_name
             models = _dedup_models(fallback, 'glm-4v-flash')
         else:
-            models = _dedup_models(model_name, 'glm-4v-flash')
+            models = _dedup_models(provider.get('custom_endpoint', '') or model_name, 'glm-4v-flash')
     elif active == 'qwen':
         if not endpoint:
             endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
