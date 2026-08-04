@@ -444,7 +444,7 @@ class App(SettingsUIMixin):
         self.wh_combo.pack(side="left")
         self.wh_combo.bind('<<ComboboxSelected>>', toggle_wh_filter)
         
-        for col, w in zip(columns, [260, 80, 80, 80, 100, 70]):
+        for col, w in zip(columns, [260, 110, 110, 110, 100, 90]):
             self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
             self.tree.column(col, width=w, anchor="center")
         
@@ -1102,7 +1102,8 @@ class App(SettingsUIMixin):
         try:
             self.tree.configure(columns=display_cols)
             for col in display_cols:
-                width = 260 if col in ('商品名称', '商品') or '名称' in col else 80
+                # 数字/状态列加宽到 110，防"1109份"被截断成"110份"误导；名称列 260
+                width = 260 if col in ('商品名称', '商品') or '名称' in col else 110
                 self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
                 self.tree.column(col, width=width, anchor="center")
         except Exception:
