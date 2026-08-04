@@ -204,7 +204,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
                 ]}],
                 'temperature': 0.0, 'stream': False,
                 'max_output_tokens': max_tokens,
-            }, timeout=timeout)
+            }, timeout=(5, timeout))
         data = resp.json()
         if 'output' not in data:
             raise RuntimeError(f'API 返回异常: {data}')
@@ -222,7 +222,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     }
     resp = _req.post(endpoint,
         headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
-        json=payload, timeout=timeout)
+        json=payload, timeout=(5, timeout))
     data = resp.json()
     if 'choices' not in data:
         raise RuntimeError(f'API 返回异常: {data}')

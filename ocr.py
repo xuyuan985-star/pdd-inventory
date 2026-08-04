@@ -278,7 +278,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                         # Responses API 规范的输出长度限制参数（区别于 Chat Completions 的 max_tokens）
                         'max_output_tokens': cur_max_tok,
                         'stream': False
-                    }, timeout=60)
+                    }, timeout=(10, 30))
                 data = resp.json()
                 if 'output' not in data:
                     raise RuntimeError(f"OCR失败（{mdl}）: {data}")
@@ -299,7 +299,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                 }
                 resp = requests.post(cur_endpoint,
                         headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
-                    json=cc_payload, timeout=60)
+                    json=cc_payload, timeout=(10, 30))
                 data = resp.json()
                 if 'choices' not in data:
                     raise RuntimeError(f"OCR失败（{mdl}）: {data}")
