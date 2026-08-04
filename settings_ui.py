@@ -6,7 +6,7 @@ import os, json
 from tkinter import messagebox, ttk
 import tkinter as tk
 
-from config import THEMES, RESOLUTION_PRESETS, save_theme_pref, load_resolution_pref, save_resolution_pref
+from config import THEMES, save_theme_pref
 from utils import get_base_dir, get_api_config
 
 
@@ -54,25 +54,8 @@ class SettingsUIMixin:
         tk.Button(content, text='保存', command=lambda: self._save_settings(None), font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
-        # ── 屏幕分辨率预设（原 _build_resolution_tab，并入通用页恢复入口）──
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
-        tk.Label(content, text='屏幕分辨率设置', font=self.FONT_HEADING).pack(pady=(5,2))
-        tk.Label(content, text="选择与您电脑匹配的分辨率，批量识别将使用预设坐标",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-        res_var = tk.StringVar(self.win, value=load_resolution_pref())
-        res_frame = tk.Frame(content); res_frame.pack(pady=8)
-        for name, preset in RESOLUTION_PRESETS.items():
-            tk.Radiobutton(res_frame, text=f"{name}  —  下拉({preset['dropdown_x']:.0%},{preset['dropdown_y']:.0%})  查询({preset['query_x']:.0%},{preset['query_y']:.0%})",
-                           variable=res_var, value=name, font=self.FONT,
-                           bg=self.C_SURFACE, fg=self.C_TEXT,
-                           selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE,
-                           anchor="w").pack(fill="x", pady=2)
-        def save_res():
-            save_resolution_pref(res_var.get())
-            self.status_text.set(f"分辨率已设为 {res_var.get()}")
-            messagebox.showinfo("已保存", f"分辨率预设已保存\n批量识别将使用对应坐标")
-        tk.Button(content, text='保存分辨率', command=save_res,
-                  font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
+        # ── 通用页以下无更多模块（AI 定位取代分辨率预设/截图裁剪）──
 
         # ── 识别列配置（v1.3 通用列：客户自主选择要识别的列）──
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
