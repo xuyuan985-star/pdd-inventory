@@ -185,7 +185,9 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
 
     import requests as _req
     use_responses = 'responses' in endpoint.lower()  # 大小写不敏感，与 ocr.py 一致
-    mdl = provider.get('model', 'Doubao-Seed-2.1-pro')
+    # custom_endpoint（ep-xxx 推理接入点 ID）优先：ark 上 Doubao-Seed-2.1-pro 等产品名
+    # 不是有效模型 ID（实测 404 InvalidEndpointOrModel.NotFound），与 ocr.py 逻辑一致
+    mdl = provider.get('custom_endpoint', '') or provider.get('model', 'Doubao-Seed-2.1-pro')
     mdl_l = (mdl or '').lower()
     is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
     # glm-4v-flash 输出上限 1024；glm-4.6v 等有 reasoning 需要更大预算
