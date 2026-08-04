@@ -347,6 +347,18 @@ _TAIL_DATETIME_RE = r'(?:[ \t\u3000\r\n]*)(?:(?:\d{4}[-/年]\d{1,2}[-/月]\d{1,2
 _TAIL_NUM_RE = r'(?:\A|[ \t\u3000\r\n])\d+(?:[.,，、]\d+)*[ \t\u3000\r\n]*$'
 
 
+def _ocr_dlog(msg: str):
+    """轻量诊断日志：写入 get_base_dir()/output/ocr_dlog.txt（output/ 已 gitignore）。"""
+    try:
+        import os
+        _p = os.path.join(get_base_dir(), 'output', 'ocr_dlog.txt')
+        os.makedirs(os.path.dirname(_p), exist_ok=True)
+        with open(_p, 'a', encoding='utf-8') as _f:
+            _f.write(msg + '\n')
+    except Exception:
+        pass
+
+
 def _lev(a, b) -> int:
     """编辑距离（Levenshtein），简单 DP。"""
     if len(a) < len(b):
@@ -722,13 +734,15 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     if not primary:
         return primary
 
-    # 副模型（失败回退主模型结果）
+    # 副模型（失败回退主模型结果，但如实提示）
     try:
         sec_result = ocr_table(image_path, columns=sel, forced_model=secondary_model, table_bbox=table_bbox)
         secondary = parse_items_generic(sec_result.get('rows') or [], mapping)
-    except Exception:
+    except Exception as e:
+        _ocr_dlog(f"⚠ 副模型({secondary_model})识别失败，已用主模型结果：{str(e)[:120]}")
         return primary
     if not secondary:
+        _ocr_dlog(f"⚠ 副模型({secondary_model})无有效结果，已用主模型结果")
         return primary
 
     def _norm(n):
