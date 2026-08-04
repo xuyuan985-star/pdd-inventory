@@ -1621,6 +1621,7 @@ class App(SettingsUIMixin):
                 # 6. 截图 → AI 定位表格（bbox + has_more）→ OCR → 滚动循环
                 table_bbox = None
                 scroll_round = 0
+                _total_hint = None        # 页面统计总条数（首轮 AI 定位顺带读取，结束后对比识别量）
                 seen_sku = {}            # 已见 sku_id → name（权威去重：滚动重识别/名字波动/ID错位都拦）
                 seen_name_no_sku = set()    # 无 ID 商品登记过的 name
                 seen_name_with_id = set()   # 有 ID 商品登记过的 name
@@ -1639,15 +1640,21 @@ class App(SettingsUIMixin):
                     # （滚动加载可能改变表格容器高度，且需刷新 has_more 状态）
                     ai_has_more = None  # None=AI定位失败未知, True=还有更多, False=已到底
                     if scroll_round == 0 or table_bbox is None or scroll_round % 3 == 0:
-                        from vision import ai_locate_table
+                        from vision import ai_locate_table, ai_read_total_count
                         loc = ai_locate_table(sp2)
                         if loc:
                             table_bbox = loc.get('table')
                             ai_has_more = bool(loc.get('has_more', False))
+                            _total_hint = loc.get('total_count')
                             if ai_has_more:
                                 dlog(f"6.AI检测到还有更多商品，自动滚动加载...")
                             elif scroll_round > 0 and ai_has_more is not None:
                                 dlog(f"6.AI确认滚动后已到底")
+                        else:
+                            # 定位失败（如商品少表格过矮校验不过）也尽量读页面总数，供结束后对比
+                            _total_hint = ai_read_total_count(sp2)
+                        if _total_hint:
+                            dlog(f"6.📋 页面共约{_total_hint}个商品（识别量将与此对比）")
                     dlog(f"6.{'首屏' if scroll_round == 0 else f'滚动{scroll_round}'}OCR识别中({'双模型' if dual_verify else '单模型'})...")
                     items = None
                     for retry in range(3):
@@ -1737,6 +1744,12 @@ class App(SettingsUIMixin):
                     except Exception as ex:
                         dlog(f"  滚动失败: {ex}")
                         break
+                # 页面总数对比：确认开始前读到的总条数与实际识别量一致，防假数据虚增/漏识别
+                if _total_hint and round_items:
+                    _diff = '' if len(round_items) == _total_hint else '（数量不一致，请核对）'
+                    dlog(f"6.✓ 页面共{_total_hint}个商品，识别到{len(round_items)}个{_diff}")
+                elif _total_hint and not round_items:
+                    dlog(f"6.⚠ 页面显示{_total_hint}个商品，但未识别到任何数据")
                 if round_items:
                     result_queue.put(round_items)
                     success += 1; total_items += len(round_items)
