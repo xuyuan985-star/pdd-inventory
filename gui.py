@@ -126,6 +126,7 @@ class App(SettingsUIMixin):
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
         self._filter_warning_only = False  # 结果表"仅显示预警"筛选
+        self._wh_filter = '全部仓库'       # 结果表"仓库筛选"（来自 OCR 仓库信息列）
         self._suppress_auto_append = False  # 清空输入时临时禁用自动加行
         self._batch_stop = threading.Event()  # 紧急停止信号
         self.status_text = tk.StringVar(self.win, value="就绪 — 输入库存和预估销量后点计算")
@@ -420,6 +421,19 @@ class App(SettingsUIMixin):
                        activebackground=self.C_SURFACE).pack(side="left")
         tk.Label(filter_frame, text="商品过多时可筛选，减少渲染量",
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=8)
+        # 仓库筛选（v1.3：识别全部商品后按 OCR 仓库信息列过滤展示）
+        self._wh_filter_var = tk.StringVar(self.win, value='全部仓库')
+        def toggle_wh_filter(*_a):
+            self._wh_filter = self._wh_filter_var.get()
+            if self.plans:
+                self._render_tree(self.plans)
+        tk.Label(filter_frame, text="仓库:", font=(self.FONT[0], 8), bg=self.C_SURFACE,
+                 fg=self.C_TEXT).pack(side="left", padx=(14, 2))
+        self.wh_combo = ttk.Combobox(filter_frame, textvariable=self._wh_filter_var,
+                                     values=('全部仓库',), state='readonly', width=14,
+                                     font=(self.FONT[0], 8))
+        self.wh_combo.pack(side="left")
+        self.wh_combo.bind('<<ComboboxSelected>>', toggle_wh_filter)
         
         for col, w in zip(columns, [260, 80, 80, 80, 100, 70]):
             self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
@@ -1088,9 +1102,24 @@ class App(SettingsUIMixin):
         except Exception:
             pass
         self.tree.delete(*self.tree.get_children())
+        # 仓库筛选选项：从当前 plans 收集去重（每次渲染刷新，地区切换后自动更新）
+        try:
+            _whs = sorted({p.get('warehouse', '') for p in plans if p.get('warehouse')})
+            _cur_wh = self._wh_filter_var.get() if hasattr(self, '_wh_filter_var') else '全部仓库'
+            if _cur_wh not in ('全部仓库', *_whs):
+                _cur_wh = '全部仓库'
+                self._wh_filter = '全部仓库'
+                self._wh_filter_var.set('全部仓库')
+            self.wh_combo.configure(values=('全部仓库', *_whs))
+        except Exception:
+            pass
         # 筛选：仅显示预警（红/黄行）
         if getattr(self, '_filter_warning_only', False):
             plans = [p for p in plans if p.get('color') in ('red', 'yellow')]
+        # 筛选：仓库（OCR 仓库信息列）
+        _wf = getattr(self, '_wh_filter', '全部仓库')
+        if _wf and _wf != '全部仓库':
+            plans = [p for p in plans if (p.get('warehouse') or '') == _wf]
         for p in plans:
             tags = ()
             if p['color'] == 'red': tags = ('urgent',)
@@ -1255,17 +1284,9 @@ class App(SettingsUIMixin):
                 bg=self.C_BG, fg=self.C_MUTED).pack()
         
         # 底部控制区（先pack确保不被挤掉）
-        bottom_frame = tk.Frame(dlg, height=170)
+        bottom_frame = tk.Frame(dlg, height=130)
         bottom_frame.pack(side="bottom", fill="x", padx=20, pady=(5,10))
         bottom_frame.pack_propagate(False)
-
-        # ── 分仓库输入（可选）──
-        wh_label = tk.Label(bottom_frame, text="分仓库（可选，格式：省份=仓库1,仓库2）",
-                            font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT)
-        wh_label.pack(pady=(6,2))
-        wh_entry = tk.Entry(bottom_frame, font=(self.FONT[0], 8), width=36)
-        wh_entry.pack(pady=(0,4))
-        wh_entry.insert(0, "")
 
         # 选项横排（测试模式 + 双模型），避免纵向堆叠把按钮挤出可视区
         opt_row = tk.Frame(bottom_frame, bg=self.C_BG)
@@ -1327,40 +1348,14 @@ class App(SettingsUIMixin):
                 hud_text.insert('end', '🔍 测试模式启动\n')
                 hud_text.see('end')
             # 先缓存所有 UI 值再销毁对话框（destroy 后访问控件会 TclError）
-            _wh_raw = wh_entry.get().strip()
             _dual_mode = dual_var.get()
             dlg.destroy()
-            # 解析分仓库映射：格式 "省份=仓库1,仓库2; 省份2=仓库A,仓库B"
-            # 支持全角分号/逗号/等号/冒号容错；省份名自动去「省/市/自治区/特别行政区」后缀
-            warehouse_map = {}
-            if _wh_raw:
-                for _part in _wh_raw.replace('；', ';').replace('，', ',').replace('＝', '=').split(';'):
-                    _part = _part.strip()
-                    if not _part:
-                        continue
-                    if '=' in _part:
-                        _reg, _whs = _part.split('=', 1)
-                    elif '：' in _part:
-                        _reg, _whs = _part.split('：', 1)
-                    else:
-                        continue
-                    _reg = _reg.strip()
-                    from ocr import strip_region_suffix
-                    _reg = strip_region_suffix(_reg)
-                    _wh_list = [w.strip() for w in _whs.split(',') if w.strip()]
-                    if _reg and _wh_list:
-                        # 去重（同一仓库重复输入 → 只识别一次，避免重复任务）
-                        cur = warehouse_map.setdefault(_reg, [])
-                        for _w in _wh_list:
-                            if _w not in cur:
-                                cur.append(_w)
             # 禁用操作按钮防止并发
             for btn in [self.export_btn]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
             threading.Thread(target=self._run_batch_sequence,
-                             args=(selected, hud, hud_text, _dual_mode),
-                             kwargs={'warehouse_map': warehouse_map}, daemon=True).start()
+                             args=(selected, hud, hud_text, _dual_mode), daemon=True).start()
         
         tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
                   font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF",
@@ -1369,11 +1364,10 @@ class App(SettingsUIMixin):
         dlg.transient(self.win)
         dlg.grab_set()
     
-    def _run_batch_sequence(self, regions, hud=None, hud_text=None, dual_verify=False,
-                            warehouse_map=None):
-        """批量识别：1.点文本框 2.粘贴省份 3.(可选)填仓库 4.回车 5.点查询 6.等刷新
-        7.截图识别（AI 定位表格 + 滚动加载循环，直到无更多商品）
-        warehouse_map: {省份: [仓库名, ...]}，None/空表示该省份不填仓库（识别全部商品）"""
+    def _run_batch_sequence(self, regions, hud=None, hud_text=None, dual_verify=False):
+        """批量识别：1.点文本框 2.粘贴省份 3.回车 4.点查询 5.等刷新
+        6.截图识别（AI 定位表格 + 滚动加载循环，直到无更多商品）
+        不填仓库：依赖滚动检测识别该省份全部商品，仓库信息来自 OCR「仓库信息」列。"""
         import time, threading, queue
         result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
         try:
@@ -1398,18 +1392,8 @@ class App(SettingsUIMixin):
         
         self.win.after(0, self.win.iconify); time.sleep(1.5)
         self._batch_stop.clear()
-        # 展开任务列表：(省份, 仓库) 组合；未配置仓库 → 仓库为 None
-        tasks = []
-        seen_task = set()
-        for reg in regions:
-            whs = (warehouse_map or {}).get(reg) or [None]
-            for wh in whs:
-                _key = (reg, wh)
-                if _key in seen_task:
-                    dlog(f"⚠ 跳过重复任务 {reg}/{wh}")
-                    continue
-                seen_task.add(_key)
-                tasks.append(_key)
+        # 任务列表：每个省份一个任务（不填仓库，滚动加载识别全部商品，仓库信息来自 OCR 仓库列）
+        tasks = list(regions)
         total = len(tasks); success = 0; total_items = 0
         from utils import capture_pdd_screenshot
         win_pos = {}  # 记录浏览器窗口左上角（全屏坐标），滚动换算用
@@ -1502,9 +1486,9 @@ class App(SettingsUIMixin):
         
         # 滚动加载保险丝：最多 16 轮 OCR（实际滚动 15 次 × 2 格 = 30 格覆盖，防 API 误判死循环）
         MAX_SCROLL_ROUNDS = 16
-        for i, (reg, warehouse) in enumerate(tasks):
+        for i, reg in enumerate(tasks):
             if self._batch_stop.is_set(): dlog("⏹ 停止"); break
-            label = f"{reg}" + (f"/{warehouse}" if warehouse else "")
+            label = reg
             dlog(f"── [{label}] ({i+1}/{total}) ──")
             try:
                 # 1. 截图 → 找文本框 → 优先校准坐标
@@ -1552,28 +1536,6 @@ class App(SettingsUIMixin):
                             dlog(f"操作失败(剪贴板/按键): {ex}")
                 if not op_ok:
                     continue
-
-                # 3.5 填仓库（分仓库模式）：AI 定位的仓库下拉框 → 粘贴仓库名 → 回车
-                # 单次定位（samples=1）：只取 warehouse_dropdown 粗略坐标，不采样省 API
-                if warehouse:
-                    wh_pos = None
-                    try:
-                        from vision import ai_locate_table as _alt
-                        _loc = _alt(sp, samples=1)
-                        if _loc and _loc.get('warehouse_dropdown'):
-                            wh_pos = _loc['warehouse_dropdown']
-                    except Exception:
-                        wh_pos = None
-                    if not wh_pos:
-                        # 兜底：仓库下拉框通常在省份框下方约 45px（比例制适配分辨率）
-                        wh_pos = {'x': dx, 'y': dy + int(45 * sh / 1080)}
-                    pyautogui.click(wh_pos['x'], wh_pos['y']); time.sleep(0.3)
-                    pyautogui.click(wh_pos['x'], wh_pos['y']); time.sleep(0.2)
-                    pyperclip.copy(warehouse)
-                    pyautogui.tripleClick(wh_pos['x'], wh_pos['y']); time.sleep(0.15)
-                    pyautogui.hotkey('ctrl', 'v'); time.sleep(0.2)
-                    pyautogui.press('enter'); time.sleep(1.0)
-                    dlog(f"3.5填仓库'{warehouse}'")
 
                 # 4. 找查询按钮
                 if qq_coord:
@@ -1655,7 +1617,7 @@ class App(SettingsUIMixin):
                         from ocr import dedup_items
                         for it in dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
                             it['region'] = reg
-                            it['warehouse'] = warehouse
+                            # warehouse 保留 OCR 识别值（仓库信息列），不再手动覆盖
                             round_items.append(it)
                             new_in_round += 1
                     if items:
