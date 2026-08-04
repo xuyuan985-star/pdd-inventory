@@ -337,17 +337,57 @@ def strip_region_suffix(region: str) -> str:
 
 
 # 词条噪音：后台单元格下方/旁边的链接文字（「查看地址」「查看」）会被 OCR 连进单元格值。
-# 识别不稳定：有时带空格、有时换行、有时粘连、有时只识别出半截，按尾部词条统一剥离。
+# 识别不稳定：有时带空格、有时换行、有时粘连、有时只识别出半截、偶尔单字误识别
+# （实测「查看地址」→「竞看地址」），所以按尾部词条做编辑距离容差剥离。
 # 长词在前：先剥「查看地址」再剥「查看」，避免只剥「查看」留下「地址」残片。
 TAIL_NOISE_WORDS = ('查看地址', '查看')
 
 
-def strip_tail_noise(value) -> str:
-    """剥离值尾部的词条噪音，只删词条形态、不误伤名称。
+def _lev(a, b) -> int:
+    """编辑距离（Levenshtein），简单 DP。"""
+    if len(a) < len(b):
+        a, b = b, a
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
 
-    例：'烟台1仓 查看地址' → '烟台1仓'，'128份查看' → '128份'，
-        '烟台1仓\\n查看地址 ' → '烟台1仓'，'查看地址' → ''。
-    词条前/后可带空白或换行；名称中非尾部的「查看」（如"查看库存"）不受影响。
+
+def _match_tail_noise(s: str, word: str):
+    """检查 s 尾部是否近似词条 word；返回剥离起点（词条起始 index），无则 None。
+
+    容差：尾部窗口长度与词条差 ≤1 且编辑距离 ≤1——
+    覆盖 OCR 单字误识别（查→竞/香/茶）、粘连（无空白）、少字/多字。
+    多个候选取 (距离, 长度) 最优：距离小的优先（精确词条优先于近似），
+    同距离取更长窗口（连前导空白一起剥干净），避免「份查看」被误判成近似词条。
+    """
+    n = len(s)
+    wlen = len(word)
+    best = None
+    for L in range(max(1, wlen - 1), min(n, wlen + 1) + 1):
+        start = n - L
+        cand = s[start:].strip()
+        if not cand:
+            continue
+        if abs(len(cand) - wlen) > 1:
+            continue
+        dist = _lev(cand, word)
+        if dist <= 1 and (best is None or dist < best[0] or (dist == best[0] and L > best[1])):
+            best = (dist, L, start)
+    return best[2] if best else None
+
+
+def strip_tail_noise(value) -> str:
+    """剥离值尾部的词条噪音，只删词条形态、不误伤名称（含 OCR 单字误识别容差）。
+
+    例：'128份 查看' → '128份'，'128份查看' → '128份'，
+        '烟台1仓查看地址' → '烟台1仓'，'烟台1仓 竞看地址' → '烟台1仓'（查→竞），
+        '查看地址' → ''；名称中非尾部的「查看」（如"查看库存"）不受影响。
     """
     if value is None:
         return ''
@@ -357,9 +397,9 @@ def strip_tail_noise(value) -> str:
     while changed:
         changed = False
         for word in TAIL_NOISE_WORDS:
-            m = _re.search(r'(?:[ \t\u3000\r\n]*)' + _re.escape(word) + r'[ \t\u3000\r\n]*$', s)
-            if m:
-                s = s[:m.start()].rstrip()
+            start = _match_tail_noise(s, word)
+            if start is not None:
+                s = s[:start].rstrip()
                 changed = True
     return _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
 
