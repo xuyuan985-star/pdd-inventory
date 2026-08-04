@@ -1278,7 +1278,15 @@ class App(SettingsUIMixin):
                 for _field, _val in (('stock', stock), ('sales', sales)):
                     _col = _mapping.get(_field)
                     if _col:
-                        _raw[_col] = str(_val)
+                        _old = str(_raw.get(_col, ''))
+                        # 保留原值单位（'85份' → 用户改 90 → '90份'），
+                        # 且避免纯数字值被 strip_tail_noise 的尾部数字规则误剥
+                        import re as _re2
+                        _unit = ''
+                        _m2 = _re2.search(r'[^\d\s.,，、]+$', _old)
+                        if _m2:
+                            _unit = _m2.group(0)
+                        _raw[_col] = str(_val) + _unit
                 # 从 _raw 提取仓库（勾选列值可能带「查看地址」噪音），供仓库筛选/显示
                 from ocr import strip_warehouse_noise
                 _wh_col = _mapping.get('warehouse')
