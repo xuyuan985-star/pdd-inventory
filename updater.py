@@ -8,8 +8,8 @@ from urllib.request import urlopen, Request
 REPO = "xuyuan985-star/pdd-inventory"
 # 内联常量：不要 from utils import EXE_NAME——utils.py 顶层引用了 PIL/pyautogui 等
 # 大依赖，会让更新器打包时把整个视觉依赖链收进 exe（~7MB 虚胖到 68MB）。
-# 与 utils.VERSION 保持同步（当前 v1.3）；GUI 调用更新器时始终传 --target，此值仅作默认。
-EXE_NAME = "PDD EZ v1.3.exe"
+# 与 utils.VERSION 保持同步（当前 v1.4）；GUI 调用更新器时始终传 --target，此值仅作默认。
+EXE_NAME = "PDD EZ v1.4.exe"
 
 def get_latest_release():
     """从 GitHub API 获取最新 release 信息"""

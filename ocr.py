@@ -715,6 +715,81 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 
 
 
+def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
+                        row_bboxes: list = None, group_size: int = 6,
+                        forced_model: str = None) -> dict:
+    """
+    行级切分识别（v1.4，借鉴 surya 行级 bbox 思路）：按 row_bboxes 把表格裁成
+    多组小图，每组独立识别。组内行数少 → 模型只能抄图中内容，防整表乱编。
+
+    row_bboxes = [(top, bottom) 像素坐标, ...]（相对原图，含表头行）。
+    返回 {'columns': columns, 'rows': [{列名: 值}, ...]}；
+    任何一步失败抛 RuntimeError（调用方 fallback 整表 ocr_table）。
+    """
+    from PIL import Image as PILImg
+    import io as _io
+    if not columns or not row_bboxes:
+        raise RuntimeError('row_split 缺少 columns/row_bboxes')
+    _img = PILImg.open(image_path).convert('RGB')
+    _W, _H = _img.size
+    _l, _t, _r, _b = 0, 0, _W, _H
+    if isinstance(table_bbox, dict):
+        _l = int(table_bbox.get('left', 0)); _t = int(table_bbox.get('top', 0))
+        _r = int(table_bbox.get('right', _W)); _b = int(table_bbox.get('bottom', _H))
+    _tbl_img = _img.crop((_l, _t, _r, _b))
+    # row_bboxes 相对原图 → 相对表格图
+    _rows = []
+    for (_rt, _rb) in (row_bboxes or []):
+        _rt2 = max(0, int(_rt) - _t)
+        _rb2 = min(_b, int(_rb)) - _t
+        if 0 <= _rt2 < _rb2 <= (_b - _t):
+            _rows.append((_rt2, _rb2))
+    if len(_rows) < 2:
+        raise RuntimeError('row_bboxes 无效')
+    _groups = [_rows[i:i + group_size] for i in range(0, len(_rows), group_size)]
+    _cols_txt = '、'.join(str(c) for c in columns)
+    _ex_col = columns[0]
+    all_rows = []
+    for _gi, _grp in enumerate(_groups):
+        _gt = _grp[0][0]; _gb = _grp[-1][1]
+        _gimg = _tbl_img.crop((0, _gt, _tbl_img.width, _gb))
+        _w2, _h2 = _gimg.size
+        _r2 = 1280.0 / max(_w2, _h2)
+        if _r2 < 1:
+            _gimg = _gimg.resize((int(_w2 * _r2), int(_h2 * _r2)), PILImg.LANCZOS)
+        _buf = _io.BytesIO()
+        _gimg.save(_buf, format='JPEG', quality=80)
+        _b64 = base64.b64encode(_buf.getvalue()).decode()
+        _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
+只识别以下列（严格按这些列名作为 JSON key，列名原样）：{_cols_txt}
+输出严格 JSON：{{"rows": [{{"{_ex_col}": "值", ...}}, ...]}}
+要求：
+1. 按图中从上到下顺序逐行输出，一行不漏、不重复、不合并
+2. 每行 key 用上面列名原样；缺某列的值填 null，**不要编造图中没有的内容**
+3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
+4. 只输出 JSON，不要解释"""
+        try:
+            content, _ = _ocr_api_call(_b64, _prompt, max_tok=2048, forced_model=forced_model)
+        except Exception as e:
+            raise RuntimeError(f'行组{_gi + 1}识别失败: {e}')
+        _text = content.strip()
+        if '```' in _text:
+            for _p in _text.split('```'):
+                _p = _p.strip()
+                if _p.startswith('json'):
+                    _p = _p[4:].strip()
+                if _p.startswith('{') or _p.startswith('['):
+                    _text = _p
+                    break
+        if _text.startswith('{'):
+            _data = json.loads(_text)
+            _rws = _data.get('rows') or _data.get('items') or []
+            for _r in _rws:
+                if isinstance(_r, dict) and _r:
+                    all_rows.append(_r)
+    return {'columns': columns, 'rows': all_rows}
+
+
 def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict = None,
                             table_bbox: dict = None, secondary_model: str = 'glm-4v-flash') -> list:
     """
