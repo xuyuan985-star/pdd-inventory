@@ -336,6 +336,25 @@ def strip_region_suffix(region: str) -> str:
     return r
 
 
+# 仓库单元格常见词条噪音（链接/按钮文字被 OCR 连进单元格值）
+WAREHOUSE_NOISE_WORDS = ('查看地址',)
+
+
+def strip_warehouse_noise(warehouse: str) -> str:
+    """仓库信息去词条噪音：后台仓库单元格下方常带「查看地址」链接词，OCR 会连进去。
+
+    例：'烟台1仓 查看地址' → '烟台1仓'，'烟台1仓\\n查看地址' → '烟台1仓'。
+    保留仓库名本身的空白结构（压缩连续空白为单个空格）。
+    """
+    if not warehouse:
+        return ''
+    w = str(warehouse).strip()
+    for word in WAREHOUSE_NOISE_WORDS:
+        w = w.replace(word, '')
+    import re as _re
+    return _re.sub(r'\s+', ' ', w).strip()
+
+
 def normalize_col_name(name) -> str:
     """
     列名归一化：去空白/全角空格，用于客户勾选列与模型返回列名匹配。
@@ -419,6 +438,7 @@ def parse_items_generic(rows: list, mapping: dict) -> list:
         mapped['stock'] = _parse_num_text(mapped.get('stock', ''))
         mapped['sales'] = _parse_num_text(mapped.get('sales', ''))
         mapped['region'] = strip_region_suffix(mapped.get('region', ''))
+        mapped['warehouse'] = strip_warehouse_noise(mapped.get('warehouse', ''))
         items.append(mapped)
     return items
 
