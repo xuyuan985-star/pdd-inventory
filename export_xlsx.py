@@ -119,10 +119,13 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
         for p in plans:
             raw = p.get('_raw') or {}
             vals = [_sanitize_cell(region), _sanitize_cell(p.get('warehouse', ''))]
+            from ocr import strip_tail_noise  # 去「查看地址/查看」词条噪音（OCR 识别不稳定，导出层统一清）
             for col in sel_cols:
                 v = raw.get(col)
                 if v is None or v == '':
                     v = p.get(col, '')
+                if isinstance(v, str):
+                    v = strip_tail_noise(v)
                 vals.append(_sanitize_cell(v))
             vals += [p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
             for ci, v in enumerate(vals, 1):
