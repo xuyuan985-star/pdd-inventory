@@ -560,6 +560,11 @@ def parse_items_generic(rows: list, mapping: dict) -> list:
         name = mapped.get('name', '').strip()
         if not name:
             continue  # 无商品名 → 跳过该行（映射未配商品名列时可能全空）
+        if not mapped.get('sku_id'):
+            # 无商品 ID 直接过滤：实测真实行 100% 带 ID（如 '盐渍鞭炮笋500g/袋 ID:96622588033'），
+            # 无 ID = 模型乱编名字 / 漏识别 ID（豆包常见），放行会污染结果表
+            _ocr_dlog(f"⏭ 无商品ID已过滤: {name[:40]}")
+            continue
         mapped['stock'] = _parse_num_text(mapped.get('stock', ''))
         mapped['sales'] = _parse_num_text(mapped.get('sales', ''))
         mapped['region'] = strip_region_suffix(mapped.get('region', ''))

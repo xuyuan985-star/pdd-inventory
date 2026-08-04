@@ -358,6 +358,27 @@ def _locate_elements_once(screenshot_path: str = None) -> dict:
     }
 
 
+def ai_read_total_count(screenshot_path: str = None) -> int:
+    """读页面统计信息里的商品总条数（如 '共 3 条' → 3），失败返回 None。
+
+    用于省份开始前确认应有商品数量，滚动结束后与实际识别量对比
+    （防豆包乱编导致数量虚增 / 漏识别）。单次调用，成本低。
+    """
+    img_b64, _, _ = _load_screenshot_b64(screenshot_path)
+    if not img_b64:
+        return None
+    prompt = ('识别这张PDD商家后台「订货管理」页面底部统计信息里的商品总条数'
+              '（如 "共 3 条" → 3，"共 128 条" → 128）。只输出数字，找不到输出 0。')
+    try:
+        content = _call_vision_api(img_b64, prompt, max_tokens=16)
+        import re as _re
+        m = _re.search(r'\d+', content or '')
+        n = int(m.group(0)) if m else 0
+        return n if n > 0 else None
+    except Exception:
+        return None
+
+
 def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
     """
     AI 智能表格定位：截图 → Vision API → 返回商品表格区域 bbox、是否还有更多商品、
@@ -401,6 +422,10 @@ def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
             }
         else:
             out[key] = None
+    # 页面总条数：多采样取中位数（无有效值时 None）
+    _totals = [s.get('total_count') for s in results
+               if isinstance(s.get('total_count'), int) and s['total_count'] > 0]
+    out['total_count'] = _median(_totals) if _totals else None
     return out
 
 
@@ -415,7 +440,8 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
 3. dropdown：省份/地区下拉选择框的中心点
 4. warehouse_dropdown：城市仓下拉选择框的中心点（若页面上没有该元素则填 null）
 5. query："查询"按钮的中心点
-输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "warehouse_dropdown": {"x": 0.XX, "y": 0.YY} 或 null, "query": {"x": 0.XX, "y": 0.YY}, "confidence": 0.XX}"""
+6. total_count：页面统计信息里显示的商品总条数（如 "共 3 条" / "共 128 条"），找不到则填 null
+输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "warehouse_dropdown": {"x": 0.XX, "y": 0.YY} 或 null, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "confidence": 0.XX}"""
     content = _call_vision_api(img_b64, prompt, max_tokens=2048)
     result = _parse_json_obj(content)
     if not result:
@@ -451,6 +477,12 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
         'screen_width': screen_w,
         'screen_height': screen_h,
     }
+    # 页面总条数（“共 X 条”统计，供滚动结束后对比识别数量，防假数据/漏识别）
+    try:
+        total = int(float(result.get('total_count')))
+        out['total_count'] = total if total > 0 else None
+    except (TypeError, ValueError):
+        out['total_count'] = None
     # 下拉框/查询按钮：可选字段，逐个校验（无则 None，调用方走模板/校准坐标）
     for key, dim in (('dropdown', (screen_w, screen_h)),
                      ('warehouse_dropdown', (screen_w, screen_h)),
