@@ -170,27 +170,10 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
     在全屏坐标系中的位置）。滚动/点击坐标换算时用窗口位置还原全屏偏移，
     避免窗口未最大化时坐标错位（如 1920 窗口在 4K 屏上）。
     """
-    import os as _os, json as _json, time as _time
+    import os as _os, time as _time
     _os.makedirs(_os.path.dirname(output_path) or '.', exist_ok=True)
 
-    # 读裁剪比例（与默认值合并，缺字段时用默认，避免 KeyError）
-    # 强制 float：settings.json 被手改坏（如字符串 "abc"）时回退默认，避免 int() TypeError
-    crop_cfg = {'left': 0.11, 'top': 0.40}
-    try:
-        sf = _os.path.join(get_base_dir(), 'settings.json')
-        if _os.path.exists(sf):
-            with open(sf, 'r', encoding='utf-8') as f:
-                saved = _json.load(f).get('crop') or {}
-                if isinstance(saved, dict):
-                    crop_cfg = {**crop_cfg, **saved}
-    except Exception:
-        pass
-    try:
-        crop_left = float(crop_cfg.get('left', 0.11))
-        crop_top = float(crop_cfg.get('top', 0.40))
-    except (TypeError, ValueError):
-        crop_left, crop_top = 0.11, 0.40
-
+    # AI 自动定位表格后不再需要手动裁剪比例；截图全图交给 AI bbox 定位
     import pyautogui as pg
     from PIL import Image as PILImage
 
@@ -229,13 +212,7 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
             out_window_pos['height'] = int(img.size[1])
 
     w, h = img.size
-    sidebar = int(w * crop_left)
-    # 裁剪参数合法性校验：防止 left 过大导致宽度为 0，进而 resize 除零崩溃
-    sidebar = max(0, min(sidebar, w - 1))
-    top = int(h * crop_top)
-    top = max(0, min(top, h - 1))
-    img = img.crop((sidebar, top, w, h))
-    cw, ch = img.size  # 裁剪后尺寸
+    cw, ch = w, h  # AI 定位表格自行 bbox，不再按比例预裁剪
     if cw > 2560:
         img = img.resize((2560, int(ch * 2560 / cw)), PILImage.LANCZOS)
     img.save(output_path)
