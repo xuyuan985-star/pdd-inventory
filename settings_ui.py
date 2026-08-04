@@ -534,64 +534,53 @@ class SettingsUIMixin:
         ai_btn_frame.pack(pady=8)
 
         def do_ai_locate():
-            minimized = False
+            """手动定位：锁定商家后台窗口截图（自动前置该窗口），AI 识别坐标后转全屏坐标保存。
+            失败一律弹窗提示，绝不静默。"""
             try:
+                import tempfile
                 import pyautogui as pg
                 from vision import ai_locate_elements
-                # 手动定位是全屏截图，必须先保证商家后台在前台且无遮挡。
-                # 给用户 3 秒倒计时去切换窗口，再最小化本窗口截图。
-                ai_status_lbl.configure(text="请将拼多多商家后台切到前台，3 秒后开始定位...")
+                from utils import capture_pdd_screenshot, Config as _CfgA
+                ai_status_lbl.configure(text="正在定位商家后台窗口...")
                 self.win.update()
-                for _left in (3, 2, 1):
-                    _time.sleep(1.0)
-                    ai_status_lbl.configure(text=f"请将商家后台切到前台，{_left} 秒后开始定位...")
-                    self.win.update()
-                # 最小化主窗口再截图：ai_locate_elements 是全屏截图，
-                # 本窗口开着会遮挡商家后台，导致定位到错误坐标
-                try:
-                    self.win.iconify()
-                    self.win.update()
-                    minimized = True
-                    _time.sleep(1.0)  # 等窗口真正消失
-                except Exception:
-                    pass
-                result = ai_locate_elements()
+                shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_manual.png')
+                pos = {}
+                # 窗口截图：找到拼多多/浏览器窗口 → 只截该窗口并返回左上角偏移；
+                # 找不到 → fallback 全屏截图（pos 全 0）
+                capture_pdd_screenshot(shot, pos)
+                result = ai_locate_elements(shot)
                 if not result:
-                    if minimized:
-                        try:
-                            self.win.deiconify(); self.win.lift()
-                        except Exception:
-                            pass
-                    ai_status_lbl.configure(text="定位失败：未识别到后台元素。请确认商家后台在前台、页面已加载且未被其他窗口遮挡")
+                    messagebox.showwarning(
+                        "定位失败",
+                        "未识别到商家后台的元素。\n请确认：\n1. 拼多多商家后台页面已打开并加载完成\n2. 页面显示的是商品列表（有省份下拉框和查询按钮）",
+                    )
+                    ai_status_lbl.configure(text="定位失败：未识别到后台元素")
                     _refresh_cards()
                     return
-                if minimized:
-                    try:
-                        self.win.deiconify(); self.win.lift()
-                    except Exception:
-                        pass
+                ox, oy = pos.get('left', 0), pos.get('top', 0)
+                # AI 返回的是截图内坐标；窗口截图要加窗口左上角偏移转回全屏坐标
+                dd = {'x': int(result['dropdown']['x']) + ox, 'y': int(result['dropdown']['y']) + oy}
+                qq = {'x': int(result['query']['x']) + ox, 'y': int(result['query']['y']) + oy}
                 screen_w, screen_h = pg.size()
                 cal['ai'] = {
                     'last_time': _time.time(),
-                    'dropdown': result['dropdown'],
-                    'query': result['query'],
+                    'dropdown': dd,
+                    'query': qq,
                     'confidence': result['confidence'],
-                    'screen_width': result['screen_width'],
-                    'screen_height': result['screen_height'],
+                    'screen_width': screen_w,
+                    'screen_height': screen_h,
                 }
                 cal['mode'] = 'ai'
                 s['calibrate'] = cal
-                from utils import Config as _CfgA
                 _CfgA.save(s)  # 原子写入
                 ai_status_lbl.configure(text="✅ 定位完成")
                 self.status_text.set("AI 智能定位完成")
             except Exception as e:
-                if minimized:
-                    try:
-                        self.win.deiconify(); self.win.lift()
-                    except Exception:
-                        pass
-                ai_status_lbl.configure(text=f"定位失败: {str(e)[:50]}")
+                try:
+                    messagebox.showwarning("定位失败", str(e)[:300])
+                except Exception:
+                    pass
+                ai_status_lbl.configure(text=f"定位失败: {str(e)[:60]}")
             _refresh_cards()
 
         tk.Button(ai_btn_frame, text="立即定位", command=do_ai_locate,
