@@ -651,11 +651,12 @@ class App(SettingsUIMixin):
                 data = json.load(f)
         except:
             return {}
-        # 兼容旧格式：值如果是数字，转为空 dict（运输天数走默认 3）
+        # 兼容旧格式：值如果是数字（旧 {region: days}），存到 "" 键保留默认天数，
+        # 新格式 product 名优先，无匹配回退 ""（旧默认），再回退全局默认 3
         result = {}
         for region, val in data.items():
             if isinstance(val, (int, float)):
-                result[region] = {}
+                result[region] = {"": val}
             elif isinstance(val, dict):
                 result[region] = val
             else:
@@ -1002,7 +1003,8 @@ class App(SettingsUIMixin):
         """获取某个地区某个商品的运输天数，未设置则默认 3 天"""
         region_data = self.regions.get(region, {})
         if isinstance(region_data, dict):
-            return region_data.get(product_name, 3)
+            # product 名优先，回退旧格式默认天数（"" 键），再回退全局默认 3
+            return region_data.get(product_name, region_data.get('', 3))
         return 3  # 兼容旧格式
     
     def _calc_from_items(self, items):
