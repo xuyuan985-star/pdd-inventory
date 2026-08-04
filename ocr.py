@@ -543,14 +543,26 @@ def parse_items_generic(rows: list, mapping: dict) -> list:
 
 
 def _write_ocr_debug(cols, rows, note=''):
-    """调试：把模型返回的表头与行样本写到可写目录，用于排查列错位。
+    """调试：把模型返回的表头与行样本**累积**写到可写目录，排查列错位/滚动重复。
+    滚动多轮每次 OCR 都追加一条（保留最近 40 条，带时间戳），可对比每轮 sku_id 是否稳定。
     源码运行 → output/_ocr_debug.json；打包后 → %APPDATA%/PDD补货助手/output/_ocr_debug.json。"""
     try:
         _d = os.path.join(get_base_dir(), 'output')
         os.makedirs(_d, exist_ok=True)
-        with open(os.path.join(_d, '_ocr_debug.json'), 'w', encoding='utf-8') as _f:
-            json.dump({'note': note, 'columns': cols,
-                       'rows_sample': rows[:5]}, _f, ensure_ascii=False, indent=1)
+        import time as _t
+        _rec = {'ts': _t.strftime('%H:%M:%S'), 'note': note, 'columns': cols,
+                'rows_sample': rows[:5]}
+        _p = os.path.join(_d, '_ocr_debug.json')
+        try:
+            with open(_p, 'r', encoding='utf-8') as _f:
+                _hist = json.load(_f)
+            if not isinstance(_hist, list):
+                _hist = [_hist]
+        except Exception:
+            _hist = []
+        _hist.append(_rec)
+        with open(_p, 'w', encoding='utf-8') as _f:
+            json.dump(_hist[-40:], _f, ensure_ascii=False, indent=1)
     except Exception:
         pass
 
@@ -584,7 +596,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 2. 每行输出一个 JSON 对象，key 用上面给的列名原样（缺某列的值填 null，不要编造）
 3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
 4. 值为 0 是真实业务数据，该行必须保留，绝不能跳过
-5. 商品信息类列（如「商品信息」「商品名称」）包含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分——商品ID用于区分重名商品。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null
+5. 商品信息类列（如「商品信息」「商品名称」）包含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分——商品ID用于区分重名商品。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null。**ID 是纯数字串（ID: 后跟一串数字），必须逐位核对，数字识别不清时宁可省略 ID 也不要编造/改位**
 6. 整张截图没有有效表格时只输出 []
 7. 只输出 JSON 数组，不要任何解释文字
 
@@ -606,7 +618,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 - columns 与表头完全一致（顺序、文字原样）
 - rows 每行一个对象，key 必须与 columns 完全一致
 - 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄
-- 商品信息类列（如「商品信息」）含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null
+- 商品信息类列（如「商品信息」）含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null。**ID 是纯数字串，必须逐位核对，数字识别不清时宁可省略 ID 也不要编造/改位**
 - 值为 0 是真实业务数据，必须保留该行
 - 无法识别的单元格填 null，不要编造
 - 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
