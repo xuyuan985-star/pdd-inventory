@@ -379,6 +379,26 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
         return None
 
 
+def ai_read_selected_province(screenshot_path: str = None) -> str:
+    """读筛选栏省份/地区下拉框当前显示的省份名（如 '云南'/'云南省'），失败返回 None。
+
+    用于切换省份后验证筛选是否生效：粘贴省份+回车后读回当前值，
+    与目标省份不一致说明切换失败（下拉框没选上/粘贴失败），需重新走 AI 定位+选择。
+    """
+    img_b64, _, _ = _load_screenshot_b64(screenshot_path)
+    if not img_b64:
+        return None
+    prompt = ('识别这张PDD商家后台「订货管理」页面顶部筛选栏的省份/地区下拉框'
+              '当前显示的省份名。只输出省份名（如 "云南" "广东省"），'
+              '如果显示 "全部"/"所有地区" 或无法识别，输出空字符串。')
+    try:
+        content = _call_vision_api(img_b64, prompt, max_tokens=32)
+        content = (content or '').strip().strip('"').strip("'").strip()
+        return content or None
+    except Exception:
+        return None
+
+
 def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
     """
     AI 智能表格定位：截图 → Vision API → 返回商品表格区域 bbox、是否还有更多商品、
