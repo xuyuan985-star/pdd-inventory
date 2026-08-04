@@ -1266,11 +1266,31 @@ class App(SettingsUIMixin):
                 sales = int(sales_s) if sales_s else 0
             except ValueError:
                 sales = 0
+            _raw = dict(r.get('_raw') or {})
+            if _raw:
+                # OCR 行：保留原始列（仓库信息/仓库销售库存等勾选列），
+                # 仅用输入框当前值覆盖库存/销量列（用户可能改过）
+                try:
+                    from utils import get_ocr_columns
+                    _mapping = (get_ocr_columns().get('mapping') or {})
+                except Exception:
+                    _mapping = {}
+                for _field, _val in (('stock', stock), ('sales', sales)):
+                    _col = _mapping.get(_field)
+                    if _col:
+                        _raw[_col] = str(_val)
+                # 从 _raw 提取仓库（勾选列值可能带「查看地址」噪音），供仓库筛选/显示
+                from ocr import strip_warehouse_noise
+                _wh_col = _mapping.get('warehouse')
+                warehouse = strip_warehouse_noise(str(_raw.get(_wh_col, ''))) if _wh_col else ''
+            else:
+                # 纯手动行：按列配置补全（仓库无输入源，留空）
+                _raw = self._build_raw_from_fields(name, stock, sales,
+                                                   region=self.region_var.get())
+                warehouse = ''
             items.append({'name': name, 'stock': stock, 'sales': sales,
                          'region': self.region_var.get(),
-                         # 手动输入路径也要带 _raw，否则动态列渲染空白（与 OCR 路径一致）
-                         '_raw': self._build_raw_from_fields(name, stock, sales,
-                                                             region=self.region_var.get())})
+                         'warehouse': warehouse, '_raw': _raw})
         if not items:
             messagebox.showwarning("无数据", "请至少输入一个商品")
             return
@@ -2037,6 +2057,9 @@ class App(SettingsUIMixin):
             r['name'].set(name_disp)
             r['stock'].set(str(item.get('stock', '')))
             r['sales'].set(str(item.get('sales', '')))
+            # 保留 OCR 原始列（仓库信息/仓库销售库存等勾选列），
+            # 否则刷新计算时 _recalc_from_rows 只能回填 name/stock/sales，其他列全空白
+            r['_raw'] = item.get('_raw') or {}
             region = item.get('region', '')
             if region:
                 from ocr import strip_region_suffix
