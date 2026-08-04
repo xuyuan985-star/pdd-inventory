@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-# v1.3 单文件版：双击即开（onefile），运行时可写目录在 %APPDATA%/PDD补货助手
+# v1.3 目录版（onedir）：依赖在 _internal/ 目录，支持增量更新包
+# （onefile 会把依赖打进单个 exe，更新只能全量下载 78MB，增量机制失效）
 
 a = Analysis(
     ['gui.py'],
@@ -19,9 +20,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='PDD EZ v1.3',
     debug=False,
     bootloader_ignore_signals=False,
@@ -36,4 +36,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico',
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='PDD EZ v1.3',
 )
