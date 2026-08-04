@@ -552,7 +552,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 2. 每行输出一个 JSON 对象，key 用上面给的列名原样（缺某列的值填 null，不要编造）
 3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
 4. 值为 0 是真实业务数据，该行必须保留，绝不能跳过
-5. 商品信息类列（如「商品信息」「商品名称」）包含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分——商品ID用于区分重名商品
+5. 商品信息类列（如「商品信息」「商品名称」）包含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分——商品ID用于区分重名商品。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null
 6. 整张截图没有有效表格时只输出 []
 7. 只输出 JSON 数组，不要任何解释文字
 
@@ -574,7 +574,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 - columns 与表头完全一致（顺序、文字原样）
 - rows 每行一个对象，key 必须与 columns 完全一致
 - 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄
-- 商品信息类列（如「商品信息」）含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分
+- 商品信息类列（如「商品信息」）含商品名和商品ID（如"盐渍鞭炮笋500g/袋 ID:96622588033"），必须完整原样抄写，不得去掉 ID 部分。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null
 - 值为 0 是真实业务数据，必须保留该行
 - 无法识别的单元格填 null，不要编造
 - 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
@@ -682,9 +682,19 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
             sec_by_name[key] = it
 
     for item in primary:
-        match = sec_by_name.get(_norm(item.get('name')))
+        pn = _norm(item.get('name'))
+        match = sec_by_name.get(pn) if pn else None
+        # 主模型 name 单字误识别（如 结→丝）时精确匹配不上：
+        # 用编辑距离≤1 做近似配对，配对后标记低置信度提示用户复核
+        if not match and pn:
+            for skey, sit in sec_by_name.items():
+                if abs(len(skey) - len(pn)) <= 1 and _lev(skey, pn) <= 1:
+                    match = sit
+                    break
         if not match:
             continue
+        if match and _norm(match.get('name')) != pn:
+            item['_low_confidence'] = True
         for field in ('stock', 'sales'):
             a, b = item.get(field, 0), match.get(field, 0)
             denom = max(b, 1)
