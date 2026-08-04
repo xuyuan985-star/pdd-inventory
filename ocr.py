@@ -194,8 +194,9 @@ def _dedup_models(*names) -> list:
 def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                   forced_model: str = None) -> tuple:
     """
-    通用视觉 API 调用：按 settings 提供商配置选端点/模型，自动 fallback 到 glm-4v-flash。
-    返回 (content_text, model_used)；全部模型失败抛 RuntimeError。
+    通用视觉 API 调用：按 settings 提供商配置选端点/模型。
+    识别失败如实抛出错误，不偷偷 fallback 到其他模型（v1.3：一切如实）。
+    返回 (content_text, model_used)；失败抛 RuntimeError。
     """
     api_cfg = get_api_config()
     active = api_cfg.get('active_provider', 'doubao')
@@ -219,21 +220,19 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
         use_responses = ('responses' in endpoint.lower())
         if use_responses:
             # Doubao 的 model 名（如 Doubao-Seed-2.1-pro）在 ark 不一定是有效推理 ID，
-            # 实测直调报 InvalidEndpointOrModel.NotFound → 一直 fallback 到 glm-4v-flash（精度差）。
-            # custom_endpoint（ep-xxx 推理接入点）才是有效 ID，必须优先使用。
+            # 实测直调报 InvalidEndpointOrModel.NotFound。custom_endpoint（ep-xxx）才是有效 ID。
             custom_ep = provider.get('custom_endpoint', '')
-            fallback = custom_ep or model_name
-            models = _dedup_models(fallback, 'glm-4v-flash')
+            models = _dedup_models(custom_ep or model_name)
         else:
-            models = _dedup_models(provider.get('custom_endpoint', '') or model_name, 'glm-4v-flash')
+            models = _dedup_models(provider.get('custom_endpoint', '') or model_name)
     elif active == 'qwen':
         if not endpoint:
             endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-        models = _dedup_models(model_name, 'glm-4v-flash') if model_name else ['qwen3.5-omni-flash', 'glm-4v-flash']
+        models = [model_name or 'qwen3.5-omni-flash']
     else:  # glm
         if not endpoint:
             endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-        models = _dedup_models(model_name, 'glm-4v-flash') if model_name else ['glm-4v-flash']
+        models = [model_name or 'glm-4v-flash']
 
     for attempt, mdl in enumerate(models):
         mdl = mdl.strip()  # 用户可能输入带前后空格的模型名，发送前清理
@@ -282,9 +281,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                     }, timeout=60)
                 data = resp.json()
                 if 'output' not in data:
-                    if attempt == 0:
-                        continue
-                    raise RuntimeError(f"OCR失败: {data}")
+                    raise RuntimeError(f"OCR失败（{mdl}）: {data}")
                 # output[-1] = 最后一条消息（跳过 reasoning）
                 content = data['output'][-1]['content'][0]['text']
             else:
@@ -305,20 +302,17 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                     json=cc_payload, timeout=60)
                 data = resp.json()
                 if 'choices' not in data:
-                    if attempt == 0:
-                        continue
-                    raise RuntimeError(f"OCR失败: {data}")
+                    raise RuntimeError(f"OCR失败（{mdl}）: {data}")
                 content = data['choices'][0]['message']['content']
             return content, mdl
-        except json.JSONDecodeError:
-            if attempt == 0:
-                continue
-        except Exception as e:
-            if attempt == 0:
-                continue
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"模型返回无法解析的内容（{mdl}）：{e}")
+        except RuntimeError:
             raise
+        except Exception as e:
+            raise RuntimeError(f"模型调用失败（{mdl}）：{e}")
 
-    raise RuntimeError("无法从截图中提取有效数据，请确保截图中包含PDD订货管理表格")
+    raise RuntimeError(f"没有可用的识别模型（active={active}）")
 
 
 # 行政后缀，按长度降序（先匹配长后缀，避免「壮族自治区」只被「自治区」截断）
