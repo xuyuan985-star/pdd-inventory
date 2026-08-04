@@ -414,6 +414,38 @@ def strip_tail_noise(value) -> str:
     return _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
 
 
+def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
+    """按 sku_id 权威去重（无 ID 回退 name），返回去重后的新条目；就地更新三个 seen 集合。
+
+    滚动加载多轮截图时，同一商品会反复出现；商品名又有 OCR 单字波动（结→丝），
+    所以 sku_id 是唯一稳定锚点。覆盖场景：
+      A 同名不同ID(都有ID) → 各自保留（ID 不同）
+      B 先无ID后有ID(同商品) → 拦截（无ID已登记 name）
+      C 先有ID后无ID(同商品) → 拦截（有ID已登记 name）
+      D 无ID同名 → 去重（name 相同）
+      ★ 同ID名字波动（滚动重识别 + OCR 单字错）→ 按 ID 去重，不再重复输出
+    """
+    out = []
+    for it in items:
+        nm = it.get('name', '')
+        sku = it.get('sku_id', '')
+        if not nm:
+            continue
+        if sku:
+            if sku in seen_sku:
+                continue
+            seen_sku.add(sku)
+            if nm in seen_name_no_sku:
+                continue
+            seen_name_with_id.add(nm)
+        else:
+            if nm in seen_name_no_sku or nm in seen_name_with_id:
+                continue
+            seen_name_no_sku.add(nm)
+        out.append(it)
+    return out
+
+
 def strip_warehouse_noise(warehouse: str) -> str:
     """仓库信息去词条噪音（兼容别名，走通用 strip_tail_noise）。
 

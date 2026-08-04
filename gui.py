@@ -1604,7 +1604,9 @@ class App(SettingsUIMixin):
                 # 6. 截图 → AI 定位表格（bbox + has_more）→ OCR → 滚动循环
                 table_bbox = None
                 scroll_round = 0
-                seen_name2sku = {}      # 该 (省份,仓库) 组合去重表 {name: sku_id}（覆盖漏ID/重名四场景）
+                seen_sku = set()            # 已见 sku_id（权威去重：滚动重识别/商品名OCR波动都拦）
+                seen_name_no_sku = set()    # 无 ID 商品登记过的 name
+                seen_name_with_id = set()   # 有 ID 商品登记过的 name
                 round_items = []        # 该组合全部轮次的识别结果
                 while scroll_round < MAX_SCROLL_ROUNDS:
                     if self._batch_stop.is_set(): break
@@ -1641,41 +1643,11 @@ class App(SettingsUIMixin):
                         except Exception as ex:
                             dlog(f"  OCR异常: {ex}")
                             time.sleep(2)
-                    # 合并：同仓库内去重（有 sku_id 用 ID 区分重名，无 ID 回退 name），跨仓库保留
-                    # 去重表 seen_name2sku: {name: sku_id}，覆盖四场景：
-                    #  A 同名不同ID(都有ID) → 各自保留（name 相同但 sku 不同）
-                    #  B 先无ID后有ID(同商品) → 拦截（name 已登记）
-                    #  C 先有ID后无ID(同商品) → 拦截（name 已登记，且原 sku 匹配）
-                    #  D 无ID同名 → 去重（name 相同）
+                    # 合并：同仓库内去重（sku_id 为权威锚点，无 ID 回退 name），跨仓库保留
                     new_in_round = 0
                     if items:
-                        for it in items:
-                            nm = it.get('name', '')
-                            sku = it.get('sku_id', '')
-                            if not nm:
-                                continue
-                            has_prev = nm in seen_name2sku
-                            prev_sku = seen_name2sku.get(nm)
-                            if sku:
-                                # 有 ID：name 首次出现，或已有 ID 与本次不同 → 视为不同商品保留
-                                if not has_prev:
-                                    seen_name2sku[nm] = sku
-                                elif prev_sku and prev_sku != sku:
-                                    # 同名不同 ID（场景 A）：靠 ID 区分，各自保留
-                                    # 复合键 nm\x00sku 只登记不查询会导致重复出现时无条件重 append，
-                                    # 需检查复合键是否已存在
-                                    _compound = nm + '\x00' + sku
-                                    if _compound in seen_name2sku:
-                                        continue
-                                    seen_name2sku[_compound] = sku
-                                else:
-                                    # 同名同 ID，或此前无 ID（场景 B 补全）→ 视为同商品，去重
-                                    continue
-                            else:
-                                # 无 ID：name 已登记过（含之前有 ID 的场景 C）→ 拦截
-                                if nm in seen_name2sku:
-                                    continue
-                                seen_name2sku[nm] = ''
+                        from ocr import dedup_items
+                        for it in dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
                             it['region'] = reg
                             it['warehouse'] = warehouse
                             round_items.append(it)
