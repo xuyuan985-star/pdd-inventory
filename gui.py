@@ -1606,6 +1606,7 @@ class App(SettingsUIMixin):
                 seen_sku = {}            # 已见 sku_id → name（权威去重：滚动重识别/名字波动/ID错位都拦）
                 seen_name_no_sku = set()    # 无 ID 商品登记过的 name
                 seen_name_with_id = set()   # 有 ID 商品登记过的 name
+                _fps = []               # 滚动内容指纹（每轮 stock 集合，滚动到底后稳定）
                 round_items = []        # 该组合全部轮次的识别结果
                 while scroll_round < MAX_SCROLL_ROUNDS:
                     if self._batch_stop.is_set(): break
@@ -1655,6 +1656,10 @@ class App(SettingsUIMixin):
                         dlog(f"6.✓ 本轮{len(items)}个，新增{new_in_round}个")
                     else:
                         dlog("6.无数据")
+                    # 内容指纹：本轮识别商品的仓库总库存值集合（模型可能乱编名字/ID，
+                    # 但总库存列相对稳定；滚动到底后集合不再变化 → 提前结束，防无限空转）
+                    _fp = tuple(sorted(str(it.get('stock', '')) for it in (items or []) if it.get('stock') is not None))
+                    _fps.append(_fp)
                     # 滚动决策：
                     # - 首轮：AI has_more=True → 滚；AI 定位失败(未知)且本轮有商品 → 滚一次确认；AI 明确 False → 不滚
                     # - 后续轮：本轮有新商品 → 继续滚；连续无新增 → 结束（保险）
@@ -1667,6 +1672,10 @@ class App(SettingsUIMixin):
                         should_scroll = new_in_round > 0
                         if not should_scroll:
                             dlog(f"6.⏹ 滚动{scroll_round}轮后无新增，结束")
+                            break
+                        # 连续3轮页面内容无变化 → 已到底，结束（doubao 等模型每轮"新增"可能永远>0）
+                        if len(_fps) >= 3 and _fps[-1] == _fps[-2] == _fps[-3]:
+                            dlog("6.⏹ 连续3轮页面内容无变化，结束滚动")
                             break
                         # 周期性重新定位后 AI 明确到底 → 提前结束（防跳屏漏商品后空转）
                         if ai_has_more is False and scroll_round % 3 == 0:
