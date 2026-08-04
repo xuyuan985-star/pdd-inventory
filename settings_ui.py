@@ -14,7 +14,7 @@ class SettingsUIMixin:
     """混入 App 类，提供所有设置页面构建方法。"""
 
     def _build_general_page(self):
-        """通用设置：导出路径 + API配置 + 截图裁剪"""
+        """通用设置：导出路径 + API配置"""
         canvas = tk.Canvas(self.page_general, highlightthickness=0)
         scroll = ttk.Scrollbar(self.page_general, orient='vertical', command=canvas.yview)
         content = tk.Frame(canvas)
@@ -53,34 +53,6 @@ class SettingsUIMixin:
         tk.Button(pf, text='打开文件夹', command=open_export_dir, font=(self.FONT[0], 8)).pack(side='left', padx=5)
         tk.Button(content, text='保存', command=lambda: self._save_settings(None), font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
-
-        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
-        tk.Label(content, text='截图裁剪', font=self.FONT_HEADING).pack(pady=(5,2))
-        cf = tk.Frame(content); cf.pack(pady=5)
-        # 回显已保存的裁剪配置（缺省 0.11 / 0.40）
-        try:
-            from utils import Config as _Cfg
-            _saved_crop = (_Cfg.load().get('crop') or {})
-            _cur_left = str(_saved_crop.get('left', 0.11))
-            _cur_top = str(_saved_crop.get('top', 0.40))
-        except Exception:
-            _cur_left, _cur_top = '0.11', '0.40'
-        tk.Label(cf, text='左:', font=(self.FONT[0], 8), fg=self.C_TEXT).pack(side='left')
-        left_var = tk.StringVar(self.win, value=_cur_left)
-        tk.Entry(cf, textvariable=left_var, font=(self.FONT[0], 8), width=5).pack(side='left', padx=3)
-        tk.Label(cf, text='上:', font=(self.FONT[0], 8), fg=self.C_TEXT).pack(side='left', padx=(10,0))
-        top_var = tk.StringVar(self.win, value=_cur_top)
-        tk.Entry(cf, textvariable=top_var, font=(self.FONT[0], 8), width=5).pack(side='left', padx=3)
-        def save_crop():
-            import json
-            from utils import Config as _Cfg2
-            s = _Cfg2.load()  # 安全回退：文件损坏返回 {}，不抛异常不清空
-            try: s['crop'] = {'left': float(left_var.get()), 'top': float(top_var.get())}
-            except: s['crop'] = {'left': 0.11, 'top': 0.40}
-            
-            from utils import Config
-            Config.save(s)  # 原子写入，防止崩溃截断配置
-        tk.Button(cf, text='保存', command=save_crop, font=(self.FONT[0], 7)).pack(side='left', padx=10)
 
         # ── 屏幕分辨率预设（原 _build_resolution_tab，并入通用页恢复入口）──
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
