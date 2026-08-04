@@ -1453,16 +1453,26 @@ class App(SettingsUIMixin):
             now = time.time()
             dlog("AI 自动定位页面元素...")
             try:
+                import tempfile
                 from vision import ai_locate_elements
-                result = ai_locate_elements()
+                from utils import capture_pdd_screenshot
+                # 窗口截图定位：锁定商家后台窗口截图（自动前置），坐标加窗口偏移转全屏；
+                # 找不到后台窗口 → fallback 全屏（偏移 0），保持兼容
+                _shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_batch.png')
+                _pos = {}
+                capture_pdd_screenshot(_shot, _pos)
+                result = ai_locate_elements(_shot)
                 if result:
+                    _ox, _oy = _pos.get('left', 0), _pos.get('top', 0)
+                    import pyautogui as _pg_batch
+                    _sw, _sh = _pg_batch.size()
                     _cal['ai'] = {
                         'last_time': now,
-                        'dropdown': result['dropdown'],
-                        'query': result['query'],
+                        'dropdown': {'x': int(result['dropdown']['x']) + _ox, 'y': int(result['dropdown']['y']) + _oy},
+                        'query': {'x': int(result['query']['x']) + _ox, 'y': int(result['query']['y']) + _oy},
                         'confidence': result['confidence'],
-                        'screen_width': result['screen_width'],
-                        'screen_height': result['screen_height'],
+                        'screen_width': _sw,
+                        'screen_height': _sh,
                     }
                     _cal['mode'] = 'ai'
                     # 原子写回 settings.json，持久化 AI 定位结果（下次启动直接复用缓存）
