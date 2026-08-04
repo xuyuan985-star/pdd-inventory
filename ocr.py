@@ -500,6 +500,19 @@ def parse_items_generic(rows: list, mapping: dict) -> list:
     return items
 
 
+def _write_ocr_debug(cols, rows, note=''):
+    """调试：把模型返回的表头与行样本写到可写目录，用于排查列错位。
+    源码运行 → output/_ocr_debug.json；打包后 → %APPDATA%/PDD补货助手/output/_ocr_debug.json。"""
+    try:
+        _d = os.path.join(get_base_dir(), 'output')
+        os.makedirs(_d, exist_ok=True)
+        with open(os.path.join(_d, '_ocr_debug.json'), 'w', encoding='utf-8') as _f:
+            json.dump({'note': note, 'columns': cols,
+                       'rows_sample': rows[:5]}, _f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
 def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
               table_bbox: dict = None) -> dict:
     """
@@ -571,6 +584,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
                 text = p
                 break
     try:
+        _dbg_note = ''
         if text.startswith('{'):
             data = json.loads(text)
             cols = data.get('columns') or []
@@ -584,12 +598,28 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
                         return dict(zip(cols, (r + [None] * _n)[:_n]))
                     return r
                 rows = [_norm_row(r) for r in rows]
+            # 表头/数据对齐校验：模型 columns 声明可能与行对象 key 不一致
+            # （漏列/多列/错序/列名近似），行数据标注更接近视觉 → 以行 key 多数票为准
+            dict_rows = [r for r in rows if isinstance(r, dict) and r]
+            if dict_rows:
+                from collections import Counter as _C
+                _kc = _C(tuple(r.keys()) for r in dict_rows)
+                _top_keys = list(_kc.most_common(1)[0][0])
+                if set(cols) != set(_top_keys):
+                    _dbg_note = f"columns_rebased: {cols} -> {_top_keys}"
+                    cols = _top_keys
+                elif list(cols) != _top_keys:
+                    _dbg_note = f"columns_reordered: {cols} -> {_top_keys}"
+                    cols = _top_keys
+            _write_ocr_debug(cols, rows, _dbg_note)
             return {'columns': list(cols), 'rows': list(rows)}
         # 纯数组：从第一行推断列名（无表头信息，尽力而为）
         rows = json.loads(text)
         if rows and isinstance(rows[0], dict):
             cols = list(rows[0].keys())
+            _write_ocr_debug(cols, rows)
             return {'columns': cols, 'rows': rows}
+        _write_ocr_debug([], rows, 'no_columns')
         return {'columns': [], 'rows': []}
     except json.JSONDecodeError:
         raise RuntimeError("模型返回无法解析的 JSON")
