@@ -1400,10 +1400,16 @@ class App(SettingsUIMixin):
         self._batch_stop.clear()
         # 展开任务列表：(省份, 仓库) 组合；未配置仓库 → 仓库为 None
         tasks = []
+        seen_task = set()
         for reg in regions:
             whs = (warehouse_map or {}).get(reg) or [None]
             for wh in whs:
-                tasks.append((reg, wh))
+                _key = (reg, wh)
+                if _key in seen_task:
+                    dlog(f"⚠ 跳过重复任务 {reg}/{wh}")
+                    continue
+                seen_task.add(_key)
+                tasks.append(_key)
         total = len(tasks); success = 0; total_items = 0
         from utils import capture_pdd_screenshot
         win_pos = {}  # 记录浏览器窗口左上角（全屏坐标），滚动换算用
