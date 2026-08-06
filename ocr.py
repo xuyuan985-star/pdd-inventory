@@ -801,12 +801,15 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
 
 
 def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict = None,
-                            table_bbox: dict = None, secondary_model: str = 'glm-4v-flash') -> list:
+                            table_bbox: dict = None, secondary_model: str = 'glm-4v-flash',
+                            row_bboxes: list = None) -> list:
     """
     双模型交叉验证（v1.3 通用列版）：主模型 + 副模型双路通用识别，
     按 name 匹配比较 stock/sales，差异 >30% 标记 _low_confidence=True，
     stock/sales 取保守较大值。返回主模型结果（含 _raw 与 _low_confidence 标记）。
     副模型失败回退主模型结果。
+    row_bboxes（v1.4）：表格行级边界，传入时主/副模型优先行切分（防整表乱编），
+    行切分失败自动回退整表——与单模型路径一致。
     """
     from utils import get_ocr_columns
     cfg = get_ocr_columns() if mapping is None else {'mapping': mapping, 'selected': columns}
@@ -815,10 +818,22 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     if not sel:
         sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
 
+    def _one(forced_model=None):
+        """单模型识别：行切分优先，失败回退整表（v1.4 与单模型路径一致）"""
+        if row_bboxes:
+            try:
+                _r = ocr_table_row_split(image_path, columns=sel, table_bbox=table_bbox,
+                                         row_bboxes=row_bboxes, forced_model=forced_model)
+                return parse_items_generic(_r.get('rows') or [], mapping)
+            except Exception:
+                pass  # 行切分失败回退整表
+        result = ocr_table(image_path, columns=sel, table_bbox=table_bbox,
+                           forced_model=forced_model)
+        return parse_items_generic(result.get('rows') or [], mapping)
+
     # 主模型
     try:
-        primary_result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
-        primary = parse_items_generic(primary_result.get('rows') or [], mapping)
+        primary = _one(forced_model=None)
     except Exception:
         raise  # 主模型失败直接抛（与单模型路径一致，调用方会提示）
 
@@ -827,8 +842,7 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
 
     # 副模型（失败回退主模型结果，但如实提示）
     try:
-        sec_result = ocr_table(image_path, columns=sel, forced_model=secondary_model, table_bbox=table_bbox)
-        secondary = parse_items_generic(sec_result.get('rows') or [], mapping)
+        secondary = _one(forced_model=secondary_model)
     except Exception as e:
         _ocr_dlog(f"⚠ 副模型({secondary_model})识别失败，已用主模型结果：{str(e)[:120]}")
         for _it in primary:
