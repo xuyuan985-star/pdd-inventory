@@ -556,12 +556,12 @@ class App(SettingsUIMixin):
         self.content_frame = tk.Frame(self.main_paned)
         self.main_paned.add(self.content_frame, stretch="always")
         # 页面帧
-        self.page_home = tk.Frame(self.content_frame)
-        self.page_general = tk.Frame(self.content_frame)
-        self.page_products = tk.Frame(self.content_frame)
-        self.page_theme = tk.Frame(self.content_frame)
-        self.page_backend = tk.Frame(self.content_frame)
-        self.page_api = tk.Frame(self.content_frame)
+        self.page_home = tk.Frame(self.content_frame, bg=self.C_BG)
+        self.page_general = tk.Frame(self.content_frame, bg=self.C_BG)
+        self.page_products = tk.Frame(self.content_frame, bg=self.C_BG)
+        self.page_theme = tk.Frame(self.content_frame, bg=self.C_BG)
+        self.page_backend = tk.Frame(self.content_frame, bg=self.C_BG)
+        self.page_api = tk.Frame(self.content_frame, bg=self.C_BG)
         self._current_page = self.page_home
         
         # ── 数据容器（隐藏：识别结果表承载显示与编辑，rows 仅存数据对象）──

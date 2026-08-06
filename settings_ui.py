@@ -13,6 +13,15 @@ from utils import get_base_dir, get_api_config
 class SettingsUIMixin:
     """混入 App 类，提供所有设置页面构建方法。"""
 
+    def _lbl(self, parent, *args, **kwargs):
+        """Label 创建 helper：未显式指定 bg 时继承父容器背景色，杜绝异色文字块"""
+        if 'bg' not in kwargs:
+            try:
+                kwargs['bg'] = parent.cget('bg')
+            except Exception:
+                kwargs['bg'] = self.C_BG
+        return tk.Label(parent, *args, **kwargs)
+
     def _build_general_page(self):
         """通用设置：导出路径 + API配置"""
         canvas = tk.Canvas(self.page_general, highlightthickness=0, bg=self.C_BG)
@@ -31,9 +40,9 @@ class SettingsUIMixin:
         # ── 导出路径模块（浅灰白卡片容器）──
         _m1 = tk.Frame(content, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
         _m1.pack(fill="x", padx=20, pady=8)
-        tk.Label(_m1, text='导出路径', font=self.FONT_HEADING, bg=self.C_SURFACE,
+        self._lbl(_m1, text='导出路径', font=self.FONT_HEADING, bg=self.C_SURFACE,
                  fg=self.C_SECONDARY).pack(pady=(12,2))
-        tk.Label(_m1, text="Excel 导出文件的保存位置", font=(self.FONT[0], 8),
+        self._lbl(_m1, text="Excel 导出文件的保存位置", font=(self.FONT[0], 8),
                  fg=self.C_MUTED, bg=self.C_SURFACE).pack()
         pf = tk.Frame(_m1, bg=self.C_SURFACE); pf.pack(pady=8, padx=20, fill='x')
         self.export_path_var = tk.StringVar(self.win, value=self._get_export_path())
@@ -71,22 +80,22 @@ class SettingsUIMixin:
         # ── 识别列配置模块（浅灰白卡片容器）──
         _m3 = tk.Frame(content, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
         _m3.pack(fill="x", padx=20, pady=8)
-        tk.Label(_m3, text='识别列配置', font=self.FONT_HEADING, bg=self.C_SURFACE,
+        self._lbl(_m3, text='识别列配置', font=self.FONT_HEADING, bg=self.C_SURFACE,
                  fg=self.C_SECONDARY).pack(pady=(12,2))
         self.col_status_var = tk.StringVar(self.win, value='')
-        tk.Label(_m3, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
+        self._lbl(_m3, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE).pack()
         col_btn_row = tk.Frame(_m3, bg=self.C_SURFACE); col_btn_row.pack(pady=8)
         self._mk_btn(col_btn_row, '🔍 探测全部列', self._probe_columns, kind='dark',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
         self._mk_btn(col_btn_row, '⚙ 配置识别列', self._config_columns, kind='dark',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
-        tk.Label(_m3, textvariable=self.col_status_var,
+        self._lbl(_m3, textvariable=self.col_status_var,
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE).pack(pady=(0,10))
 
         # ── 副模型（双模型验证用，🛡 勾选时生效）──
-        sec_row = tk.Frame(content); sec_row.pack(pady=(4,2))
-        tk.Label(sec_row, text="副模型（双模型验证）:", font=(self.FONT[0], 8),
+        sec_row = tk.Frame(content, bg=self.C_BG); sec_row.pack(pady=(4,2))
+        self._lbl(sec_row, text="副模型（双模型验证）:", font=(self.FONT[0], 8),
                  fg=self.C_TEXT).pack(side="left")
         from utils import get_secondary_model, save_secondary_model
         sec_var = tk.StringVar(self.win, value=get_secondary_model())
@@ -101,7 +110,7 @@ class SettingsUIMixin:
             self.status_text.set(f"副模型已保存：{_v}")
         self._mk_btn(sec_row, '保存', _save_sec, kind='primary',
                   font=(self.FONT[0], 7)).pack(side="left")
-        tk.Label(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
+        self._lbl(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
 
     def _probe_columns(self):
@@ -157,9 +166,9 @@ class SettingsUIMixin:
         dlg.title("配置识别列")
         dlg.geometry("480x560")
         dlg.configure(bg=self.C_BG)
-        tk.Label(dlg, text="勾选要识别的列", font=self.FONT_HEADING,
+        self._lbl(dlg, text="勾选要识别的列", font=self.FONT_HEADING,
                  bg=self.C_BG, fg=self.C_TEXT).pack(pady=(10,2))
-        tk.Label(dlg, text="库存/销量列为补货计算必需，取消后计算列将为空",
+        self._lbl(dlg, text="库存/销量列为补货计算必需，取消后计算列将为空",
                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack()
 
         # 列勾选（可滚动）
@@ -185,7 +194,7 @@ class SettingsUIMixin:
         # 核心列映射
         map_frame = tk.Frame(dlg, bg=self.C_BG)
         map_frame.pack(fill="x", padx=15, pady=(8,2))
-        tk.Label(map_frame, text="核心列映射（后台列名变化时修改）",
+        self._lbl(map_frame, text="核心列映射（后台列名变化时修改）",
                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(anchor="w")
         mapping = cfg['mapping']
         map_vars = {}
@@ -193,7 +202,7 @@ class SettingsUIMixin:
                              ('sales', '销量列'), ('region', '销售区域列'), ('warehouse', '仓库信息列')]:
             row = tk.Frame(map_frame, bg=self.C_BG)
             row.pack(fill="x", pady=1)
-            tk.Label(row, text=label, font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+            self._lbl(row, text=label, font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
                      width=10, anchor="w").pack(side="left")
             var = tk.StringVar(dlg, value=mapping.get(field, ''))
             map_vars[field] = var
@@ -274,13 +283,13 @@ class SettingsUIMixin:
 
     def _build_product_region_tab(self, parent, dlg=None):
         """商品运输时效设置：选地区 → 显示商品列表 → 逐商品调运输天数"""
-        tk.Label(parent, text="商品运输时效设置", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="不同商品发往不同地区，运输时间可能不同", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
+        self._lbl(parent, text="商品运输时效设置", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="不同商品发往不同地区，运输时间可能不同", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         # 地区选择
-        sel_frame = tk.Frame(parent)
+        sel_frame = tk.Frame(parent, bg=self.C_BG)
         sel_frame.pack(fill="x", padx=20, pady=(12,5))
-        tk.Label(sel_frame, text="选择地区:", font=self.FONT).pack(side="left")
+        self._lbl(sel_frame, text="选择地区:", font=self.FONT).pack(side="left")
         region_names = sorted(self.cache.keys()) if self.cache else sorted(self.regions.keys())
         if not region_names:
             region_names = ['（暂无识别数据）']
@@ -307,7 +316,7 @@ class SettingsUIMixin:
             self._settings_region_var.set(new_names[0])
             for w in self._settings_list_frame.winfo_children():
                 w.destroy()
-            tk.Label(self._settings_list_frame, text="地区已删除",
+            self._lbl(self._settings_list_frame, text="地区已删除",
                      font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=20)
             self._update_tabs()
             self.status_text.set(f"地区「{region}」已删除")
@@ -316,12 +325,12 @@ class SettingsUIMixin:
                   font=(self.FONT[0], 8)).pack(side="left", padx=5)
 
         # 商品列表区（可滚动）
-        canvas_frame = tk.Frame(parent)
+        canvas_frame = tk.Frame(parent, bg=self.C_BG)
         canvas_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
         canvas = tk.Canvas(canvas_frame, height=220, highlightthickness=0)
         scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
-        self._settings_list_frame = tk.Frame(canvas)
+        self._settings_list_frame = tk.Frame(canvas, bg=self.C_BG)
 
         self._settings_list_frame.bind("<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -336,7 +345,7 @@ class SettingsUIMixin:
                 w.destroy()
             region = self._settings_region_var.get()
             if not region or region.startswith('（'):
-                tk.Label(self._settings_list_frame, text="暂无识别数据，请先截图识别",
+                self._lbl(self._settings_list_frame, text="暂无识别数据，请先截图识别",
                          font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=20)
                 return
 
@@ -348,14 +357,14 @@ class SettingsUIMixin:
                         products.append(name)
 
             if not products:
-                tk.Label(self._settings_list_frame, text="该地区暂无商品，请先截图识别",
+                self._lbl(self._settings_list_frame, text="该地区暂无商品，请先截图识别",
                          font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=20)
                 return
 
-            hdr = tk.Frame(self._settings_list_frame)
+            hdr = tk.Frame(self._settings_list_frame, bg=self.C_BG)
             hdr.pack(fill="x", pady=(0,4))
-            tk.Label(hdr, text="商品名称", font=self.FONT_BOLD, width=22, anchor="w").pack(side="left")
-            tk.Label(hdr, text="运输天数", font=self.FONT_BOLD, width=10).pack(side="left", padx=5)
+            self._lbl(hdr, text="商品名称", font=self.FONT_BOLD, width=22, anchor="w").pack(side="left")
+            self._lbl(hdr, text="运输天数", font=self.FONT_BOLD, width=10).pack(side="left", padx=5)
 
             spinboxes = {}
             current_settings = self.regions.get(region, {})
@@ -363,9 +372,9 @@ class SettingsUIMixin:
                 current_settings = {}
 
             for prod in products:
-                row = tk.Frame(self._settings_list_frame)
+                row = tk.Frame(self._settings_list_frame, bg=self.C_BG)
                 row.pack(fill="x", pady=1)
-                tk.Label(row, text=prod, font=self.FONT, width=22, anchor="w").pack(side="left")
+                self._lbl(row, text=prod, font=self.FONT, width=22, anchor="w").pack(side="left")
                 spin = tk.Spinbox(row, from_=1, to=30, width=8, font=self.FONT)
                 spin.delete(0, "end")
                 spin.insert(0, str(current_settings.get(prod, 3)))
@@ -396,7 +405,7 @@ class SettingsUIMixin:
             if region == self.region_var.get() and region in self.cache:
                 self._calc_from_items(self.cache[region]['items'])
 
-        btn_frame = tk.Frame(parent)
+        btn_frame = tk.Frame(parent, bg=self.C_BG)
         btn_frame.pack(pady=10)
         self._mk_btn(btn_frame, "保存时效设置", save_all, kind='primary',
                   font=self.FONT_BOLD).pack(side="left", padx=5)
@@ -422,10 +431,10 @@ class SettingsUIMixin:
 
     def _build_skin_tab(self, parent):
         """主题选择：四套主题 2×2 网格，点击预览卡即切换"""
-        tk.Label(parent, text="选择界面主题", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="点击卡片即时切换，自动保存偏好", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
+        self._lbl(parent, text="选择界面主题", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="点击卡片即时切换，自动保存偏好", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
-        cards_frame = tk.Frame(parent)
+        cards_frame = tk.Frame(parent, bg=self.C_BG)
         cards_frame.pack(fill="x", padx=15, pady=10)
 
         def select_theme(name):
@@ -459,12 +468,12 @@ class SettingsUIMixin:
 
             info = tk.Frame(card, bg="#FFFFFF")
             info.pack(fill="x", padx=12, pady=(16, 12))
-            tk.Label(info, text=theme_data['label'], font=self.FONT_TITLE,
+            self._lbl(info, text=theme_data['label'], font=self.FONT_TITLE,
                     bg="#FFFFFF", fg="#1E293B").pack(anchor="w")
-            tk.Label(info, text=theme_data['desc'], font=(self.FONT[0], 8),
+            self._lbl(info, text=theme_data['desc'], font=(self.FONT[0], 8),
                     bg="#FFFFFF", fg="#94A3B8").pack(anchor="w", pady=(3, 8))
             if is_sel:
-                tk.Label(info, text="✓ 当前", font=(self.FONT[0], 9, 'bold'),
+                self._lbl(info, text="✓ 当前", font=(self.FONT[0], 9, 'bold'),
                         bg="#FFFFFF", fg=ac).pack(anchor="w")
 
             for w in [card, info] + list(card.winfo_children()):
@@ -478,7 +487,7 @@ class SettingsUIMixin:
         import json, time as _time
         from datetime import datetime
 
-        tk.Label(parent, text="定位校准", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="定位校准", font=self.FONT_HEADING).pack(pady=(15,2))
 
         from utils import Config as _Cfg3
         s = _Cfg3.load()  # 安全回退
@@ -489,13 +498,13 @@ class SettingsUIMixin:
         # ── AI 模式卡片（v1.4 起唯一模式，无模式选择器）──
         ai_card = tk.Frame(parent, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
 
-        ai_status_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_SURFACE)
+        ai_status_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_SURFACE)
         ai_status_lbl.pack(pady=5)
-        ai_coords_lbl = tk.Label(ai_card, text="", font=self.FONT, fg=self.C_PRIMARY, bg=self.C_SURFACE)
+        ai_coords_lbl = self._lbl(ai_card, text="", font=self.FONT, fg=self.C_PRIMARY, bg=self.C_SURFACE)
         ai_coords_lbl.pack(pady=2)
-        ai_conf_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
+        ai_conf_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
         ai_conf_lbl.pack(pady=2)
-        ai_res_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
+        ai_res_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
         ai_res_lbl.pack(pady=2)
 
         ai_btn_frame = tk.Frame(ai_card, bg=self.C_SURFACE)
@@ -589,20 +598,20 @@ class SettingsUIMixin:
 
     def _build_backend_tab(self, parent, dlg=None):
         """配置拼多多商家后台链接和登录凭据"""
-        tk.Label(parent, text="商家后台快捷入口", font=self.FONT_HEADING).pack(pady=(15,2))
-        tk.Label(parent, text="设置后可通过主页「🏪 商家后台」按钮一键打开", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
+        self._lbl(parent, text="商家后台快捷入口", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="设置后可通过主页「🏪 商家后台」按钮一键打开", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         config = self._get_backend_config()
 
-        url_frame = tk.Frame(parent)
+        url_frame = tk.Frame(parent, bg=self.C_BG)
         url_frame.pack(fill="x", padx=20, pady=(15,5))
-        tk.Label(url_frame, text="后台地址:", font=self.FONT, width=10, anchor="e").pack(side="left")
+        self._lbl(url_frame, text="后台地址:", font=self.FONT, width=10, anchor="e").pack(side="left")
         url_var = tk.StringVar(self.win, value=config.get('url', 'https://mms.pinduoduo.com/'))
         tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40).pack(side="left", padx=5)
 
-        acc_frame = tk.Frame(parent)
+        acc_frame = tk.Frame(parent, bg=self.C_BG)
         acc_frame.pack(fill="x", padx=20, pady=5)
-        tk.Label(acc_frame, text="登录账号:", font=self.FONT, width=10, anchor="e").pack(side="left")
+        self._lbl(acc_frame, text="登录账号:", font=self.FONT, width=10, anchor="e").pack(side="left")
         acc_var = tk.StringVar(self.win, value=config.get('account', ''))
         acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED)
         acc_entry.pack(side="left", padx=5)
@@ -625,9 +634,9 @@ class SettingsUIMixin:
                 entry.configure(fg=self.C_TEXT)
         _ph_entry(acc_entry, '输入手机号', acc_var)
 
-        pwd_frame = tk.Frame(parent)
+        pwd_frame = tk.Frame(parent, bg=self.C_BG)
         pwd_frame.pack(fill="x", padx=20, pady=5)
-        tk.Label(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
+        self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
         pwd_var = tk.StringVar(self.win, value=config.get('password', ''))
         pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*" if config.get('password') else "")
         pwd_entry.pack(side="left", padx=5)
@@ -646,9 +655,10 @@ class SettingsUIMixin:
         def toggle_pwd():
             pwd_entry.configure(show="" if show_var.get() else "*")
         tk.Checkbutton(pwd_frame, text="显示", variable=show_var, command=toggle_pwd,
-                       font=(self.FONT[0], 8)).pack(side="left")
+                       font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left")
 
-        tk.Label(parent, text="⚠ 密码以明文存储在本机配置文件，请确保电脑安全",
+        self._lbl(parent, text="⚠ 密码以明文存储在本机配置文件，请确保电脑安全",
                  font=(self.FONT[0], 7), fg=self.C_MUTED).pack(pady=(10,0))
 
         def save_backend():
@@ -685,14 +695,14 @@ class SettingsUIMixin:
             'glm':     {'name': '智谱清言（GLM）',   'endpoint': 'https://open.bigmodel.cn/api/paas/v4/chat/completions'},
         }
 
-        tk.Label(parent, text="API 提供商管理", font=self.FONT_TITLE, bg=self.C_BG, fg=self.C_TEXT).pack(pady=(18,2))
-        tk.Label(parent, text="每个提供商独立配置 Key 和模型名，数据仅保存在本机",
+        self._lbl(parent, text="API 提供商管理", font=self.FONT_TITLE, bg=self.C_BG, fg=self.C_TEXT).pack(pady=(18,2))
+        self._lbl(parent, text="每个提供商独立配置 Key 和模型名，数据仅保存在本机",
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack()
 
         # 活跃提供商选择（机能单选：选中圆点填充亮黄）
         active_frame = tk.Frame(parent, bg=self.C_BG)
         active_frame.pack(fill="x", padx=24, pady=(14,6))
-        tk.Label(active_frame, text="当前使用:", font=self.FONT_BOLD, bg=self.C_BG, fg=self.C_TEXT).pack(side="left", padx=(0,8))
+        self._lbl(active_frame, text="当前使用:", font=self.FONT_BOLD, bg=self.C_BG, fg=self.C_TEXT).pack(side="left", padx=(0,8))
         active_var = tk.StringVar(self.win, value=active)
         for key, info in PRESET_PROVIDERS.items():
             tk.Radiobutton(active_frame, text=info['name'], variable=active_var,
@@ -734,13 +744,13 @@ class SettingsUIMixin:
             card = tk.Frame(cards_frame, bg=self.C_SURFACE, highlightthickness=1,
                             highlightbackground="#EAEAEA", bd=0)
             card.pack(fill="x", padx=4, pady=8)
-            tk.Label(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
+            self._lbl(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
                      bg=self.C_SURFACE, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))
 
             # API Key 行
             kf = tk.Frame(card, bg=self.C_SURFACE)
             kf.pack(fill="x", padx=12, pady=4)
-            tk.Label(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
+            self._lbl(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
             kv = tk.StringVar(self.win, value=cfg.get('api_key', ''))
             ke = _api_entry(kf, kv, show='*')
@@ -769,7 +779,7 @@ class SettingsUIMixin:
 
             mf = tk.Frame(card, bg=self.C_SURFACE)
             mf.pack(fill="x", padx=12, pady=4)
-            tk.Label(mf, text="模型名称:", font=self.FONT, width=9, anchor="e",
+            self._lbl(mf, text="模型名称:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
             mv = tk.StringVar(self.win, value=cfg.get('model', ''))
             combo = ttk.Combobox(mf, textvariable=mv, values=history, font=(self.FONT[0], 8), width=47)
@@ -781,7 +791,7 @@ class SettingsUIMixin:
             # Endpoint 行（预填，可改，完全由用户控制）
             ef = tk.Frame(card, bg=self.C_SURFACE)
             ef.pack(fill="x", padx=12, pady=4)
-            tk.Label(ef, text="Endpoint:", font=self.FONT, width=9, anchor="e",
+            self._lbl(ef, text="Endpoint:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
             ev = tk.StringVar(self.win, value=cfg.get('endpoint', info['endpoint']))
             _api_entry(ef, ev).pack(side="left", padx=6)
@@ -791,12 +801,12 @@ class SettingsUIMixin:
             if key == 'doubao':
                 cef = tk.Frame(card, bg=self.C_SURFACE)
                 cef.pack(fill="x", padx=12, pady=4)
-                tk.Label(cef, text="推理接入点:", font=self.FONT, width=9, anchor="e",
+                self._lbl(cef, text="推理接入点:", font=self.FONT, width=9, anchor="e",
                          bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
                 cev = tk.StringVar(self.win, value=cfg.get('custom_endpoint', ''))
                 _api_entry(cef, cev).pack(side="left", padx=6)
                 setattr(self, f'_api_ce_{key}', cev)
-                tk.Label(cef, text="如 ep-xxx，留空则用默认", font=(self.FONT[0], 7),
+                self._lbl(cef, text="如 ep-xxx，留空则用默认", font=(self.FONT[0], 7),
                          fg=self.C_MUTED, bg=self.C_SURFACE).pack(side="left")
 
         def save_all():
