@@ -433,14 +433,16 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
     """按 sku_id 权威去重（无 ID 回退 name），返回去重后的新条目；就地更新三个 seen 集合。
 
     滚动加载多轮截图时，同一商品会反复出现；商品名有 OCR 单字波动（结→丝），
-    **sku_id 长数字串每轮也可能错 1~2 位**（实测 96622588033→966225988033、984387564986→284337564986）。
-    所以：
+    **sku_id 长数字串每轮也可能错 1~2 位**（实测 96622588033→966225988033、984387564986→284337564986），
+    极端时整段错位（939262347672→984387564986，编辑距离远超 2）。所以：
       - ID 精确命中 → 同商品去重；
-      - ID 未精确命中但**已见 ID 编辑距离≤2 且 name 前 6 字相同 + 总距离≤6** → 视为同一商品（OCR 数字错位/尾部描述词波动）去重；
-        （真实相邻商品 name 前缀通常不同——"盐渍鞭炮笋"vs"盐渍海带结"，不会被误并；同商品核心名稳定、尾部描述词乱）
+      - ID 近匹配（编辑距离≤2）且 name 前 6 字相同 + 总距离≤6 → 同商品（OCR 数字错位）；
+      - **OR name 强相似（前 6 字相同 + 总距离≤6）→ 同商品**（sku 整段错位时靠 name 兜底；
+        商品名比 sku 稳定——同商品核心名稳定、尾部描述词乱，相邻商品前缀通常不同不会误并）；
       - 无 ID → name 精确去重。
-    覆盖场景：同名不同ID保留 / 先无ID后有ID拦截 / 先有ID后无ID拦截 / 无ID同名去重 / 同ID名字波动 / **同商品ID错位波动**。
-    seen_sku 为 dict {sku_id: name}（模糊匹配需要名字佐证）。
+    覆盖场景：同名不同ID保留 / 先无ID后有ID拦截 / 先有ID后无ID拦截 / 无ID同名去重 / 同ID名字波动 /
+    **同商品ID错位波动** / **同商品sku整段错位但name相似**。
+    seen_sku 为 dict {sku_id: name}（name 佐证）。
     """
     out = []
     for it in items:
@@ -451,13 +453,22 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
         if sku:
             if sku in seen_sku:
                 continue
-            # 模糊兜底：ID 错位 1~2 位 + name 相似 → 同商品（OCR 数字串波动）
+            # 模糊兜底：同商品三路判断——
+            #  1. ID 精确命中 → 同商品（sku 权威锚点）
+            #  2. ID 近匹配(≤2) 且 name 前6字相同 → 同商品（OCR 数字错位；相邻商品 ID 虽近但
+            #     name 前缀不同，不误并——防"盐渍鞭炮笋/9662...033"vs"盐渍海带结/9662...034"）
+            #  3. ID 不近 但 name 强相似（前6字相同 + 总距离≤6 且 name 非完全相同）→ 同商品
+            #     （sku 整段错位时靠 name 兜底；name 完全相同 ≠ 同商品：同名不同规格必须保留）
             hit = False
             for _s, _n in seen_sku.items():
-                if abs(len(_s) - len(sku)) <= 2 and _lev(_s, sku) <= 2:
-                    if _n[:6] == nm[:6] and _lev(_n, nm) <= 6:
-                        hit = True
-                        break
+                _id_near = abs(len(_s) - len(sku)) <= 2 and _lev(_s, sku) <= 2
+                _name_prefix = _n[:6] == nm[:6]
+                if _id_near and _name_prefix:
+                    hit = True
+                    break
+                if not _id_near and _n != nm and _name_prefix and _lev(_n, nm) <= 6:
+                    hit = True
+                    break
             if hit:
                 continue
             seen_sku[sku] = nm
