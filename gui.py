@@ -135,12 +135,22 @@ class _CanvasBtn:
     def _click(self, e):
         if self._state != 'disabled' and self._command:
             # 防重入：Canvas 按钮同时绑了 item 级 tag_bind + widget 级 bind，
-            # 一次点击会触发 2 次；250ms 内只执行一次（防批量识别弹双对话框等）
+            # 一次点击会触发 2~3 次；双重防护：
+            #  1) 250ms 时间窗（常规快速连点）
+            #  2) _executing 执行中标志（模态对话框场景：askopenfilename/弹窗等
+            #     会阻塞主线程，用户关对话框时已远超 250ms，时间戳失效——
+            #     但只要 _command 未返回就拦截，彻底防住「关掉又弹一遍」）
             now = time.time()
+            if getattr(self, '_executing', False):
+                return
             if now - getattr(self, '_last_click_ts', 0.0) < 0.25:
                 return
             self._last_click_ts = now
-            self._command()
+            self._executing = True
+            try:
+                self._command()
+            finally:
+                self._executing = False
 
     def _hover(self, e):
         if self._state == 'disabled':
