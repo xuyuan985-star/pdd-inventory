@@ -97,11 +97,32 @@ class SettingsUIMixin:
         sec_row = tk.Frame(content, bg=self.C_BG); sec_row.pack(pady=(4,2))
         self._lbl(sec_row, text="副模型（双模型验证）:", font=(self.FONT[0], 8),
                  fg=self.C_TEXT).pack(side="left")
-        from utils import get_secondary_model, save_secondary_model
+        from utils import get_secondary_model, save_secondary_model, get_api_config
         sec_var = tk.StringVar(self.win, value=get_secondary_model())
+        # 副模型下拉框动态生成：从 providers 配置收集所有模型（model/custom_endpoint/history），
+        # 合并常用默认去重——供应商新增模型（如 qwen3.5-ocr/qwen-vl-ocr 系列）自动同步，
+        # 不再硬编码列表导致新模型选不到（v1.4 修复）
+        _sec_models = ['glm-4v-flash', 'glm-4.6v', 'Doubao-Seed-2.1-pro',
+                       'qwen3-omni-flash', 'qwen3.5-omni-flash', 'qwen3.5-ocr',
+                       'qwen-vl-ocr', 'qwen-vl-ocr-latest']
+        try:
+            _acfg = get_api_config()
+            _provs = (_acfg.get('providers') or {}) if isinstance(_acfg.get('providers'), dict) else {}
+            for _pn, _pp in _provs.items():
+                if not isinstance(_pp, dict):
+                    continue
+                for _k in ('model', 'custom_endpoint'):
+                    _v = str(_pp.get(_k, '') or '').strip()
+                    if _v and _v not in _sec_models:
+                        _sec_models.append(_v)
+                for _v in (_pp.get('model_history') or []):
+                    _v = str(_v).strip()
+                    if _v and _v not in _sec_models:
+                        _sec_models.append(_v)
+        except Exception:
+            pass
         ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=22,
-                     values=['glm-4v-flash', 'glm-4.6v', 'Doubao-Seed-2.1-pro',
-                             'qwen3-omni-flash', 'qwen3.5-omni-flash'],
+                     values=_sec_models,
                      font=(self.FONT[0], 8)).pack(side="left", padx=8)
         def _save_sec():
             _v = sec_var.get().strip() or 'glm-4v-flash'
