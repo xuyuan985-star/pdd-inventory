@@ -204,10 +204,14 @@ class App(SettingsUIMixin):
             canvas.bind('<Enter>', btn._hover)
             canvas.bind('<Leave>', btn._leave)
         else:
-            # 微小圆角（smooth 把斜角平滑成微弧，参考站"微微削角"柔和版）
+            # 微小圆角矩形：每角 2 控制点 + smooth → 1/4 圆弧，只弯角不弯边
+            r = max(2, int(self.tc('btn.corner', 3)))  # 圆角半径（微小）
             poly = canvas.create_polygon(
-                c, 0, w - c, 0, w, c, w, h - c, w - c, h, c, h, 0, h - c, 0, c,
-                smooth=True, splinesteps=10,
+                0, r, r, 0,
+                w - r, 0, w, r,
+                w, h - r, w - r, h,
+                r, h, 0, h - r,
+                smooth=True, splinesteps=12,
                 fill=colors.get('bg', '#FFE600'), outline=colors.get('edge', colors.get('bg', '#111111')),
                 width=1)
             fnt = font or (self.FONT_BOLD if kind in ('tag',) else self.FONT)
@@ -505,9 +509,9 @@ class App(SettingsUIMixin):
                          highlightthickness=0, bd=0)
         _tcv._skip_theme = True
         _tcv.pack(side="left", padx=(0, 8), pady=2)
-        _tcv.create_polygon(5, 0, 39, 0, 44, 5, 44, 15, 39, 20, 5, 20, 0, 15, 0, 5,
+        _tcv.create_polygon(0, 2, 2, 0, 42, 0, 44, 2, 44, 18, 42, 20, 2, 20, 0, 18,
                             fill=tag_bg, outline=_pill_cfg.get('edge', '#111111'), width=1,
-                            smooth=True, splinesteps=8)
+                            smooth=True, splinesteps=10)
         _tcv.create_text(22, 10, text=tag_text, fill=tag_fg,
                          font=(self.FONT[0], 7, 'bold'))
         self.pill_tag = _CanvasBtn(_tcv, None, None, tag_text, None, 'tag',
