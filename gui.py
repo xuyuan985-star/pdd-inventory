@@ -426,9 +426,9 @@ class App(SettingsUIMixin):
         _deco.pack(fill="x")
         _deco._skip_theme = True  # 黄通栏是设计元素，主题切换不刷白
         # 黑色粗体大标题（左侧固定）
-        _deco.create_text(22, 18, text="PDD EZ", anchor='w', fill='#111111',
-                          font=(self.FONT[0], 26, 'bold'))
-        _deco.create_text(23, 50, text="补货排期助手  ·  智能识别  ·  自动计算", anchor='w',
+        _deco.create_text(22, 16, text="PDD EZ", anchor='w', fill='#111111',
+                          font=(self.FONT[0], 28, 'bold'))
+        _deco.create_text(23, 50, text="补货助手 ｜ 自动计算", anchor='w',
                           fill='#333333', font=(self.FONT[0], 9))
         # 右侧斜切几何块 + 页码角标：按窗口实际宽度动态绘制
         def _redraw_deco(e):
@@ -493,7 +493,7 @@ class App(SettingsUIMixin):
         self.pill_tag.text_item = list(_tcv.find_all())[1]
         self._mk_btn(tool_bar, "🏪 商家后台", self._open_backend, kind='ghost',
                      pack_side="right", padx=5)
-        self._mk_btn(tool_bar, "🔄 更新", self._run_updater, kind='primary',
+        self._mk_btn(tool_bar, "🔄 更新", self._run_updater, kind='ghost',
                      pack_side="right", padx=5)
         
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
@@ -584,12 +584,14 @@ class App(SettingsUIMixin):
         
         # ── 导出按钮 ──
         # ── 主操作区：唯一一级主按钮（页面第一视觉落点）──
+        tk.Frame(self.page_home, bg="#E0E0E0", height=1).pack(fill="x", padx=15, pady=(2, 0))
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
                   kind='primary', font=(self.FONT[0], 14, 'bold'), width=24, height=3,
                   pack_side=None)
         self.export_btn.pack(pady=(14, 2))
-        tk.Label(self.page_home, text="确认数据后点击导出", font=(self.FONT[0], 8),
-                 fg=self.C_MUTED).pack(pady=(0, 4))
+        tk.Label(self.page_home, text="确认数据后再导出", font=(self.FONT[0], 7),
+                 fg="#9E9E9E").pack(pady=(0, 4))
+        tk.Frame(self.page_home, bg="#E0E0E0", height=1).pack(fill="x", padx=15, pady=(0, 2))
         
         # ── 状态栏 ──
         tk.Label(self.page_home, textvariable=self.status_text,
@@ -1186,13 +1188,13 @@ class App(SettingsUIMixin):
             troughcolor=theme['C_BG'],
             arrowcolor=theme['C_BG'],
             borderwidth=0, relief='flat',
-            arrowsize=10, width=10)
+            arrowsize=8, width=8)
         style.configure('Horizontal.TScrollbar',
             background=theme['C_PRIMARY'],
             troughcolor=theme['C_BG'],
             arrowcolor=theme['C_BG'],
             borderwidth=0, relief='flat',
-            arrowsize=10, width=10)
+            arrowsize=8, width=8)
         
         # Frame / Label
         style.configure('TFrame', background=theme['C_BG'])
