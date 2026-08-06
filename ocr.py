@@ -32,6 +32,22 @@ def _crop_bbox(image_path: str, bbox: dict):
         return None
 
 
+def _is_qwen_ocr(mdl) -> bool:
+    """判断是否为 Qwen OCR 专用模型（阿里百炼 Qwen-OCR 系列）。
+    这些模型专为文字提取优化：max_tokens 默认 4096（可到 8192）、支持大图保留小字细节。
+    列表覆盖 qwen3.5-ocr / qwen-vl-ocr / qwen-vl-ocr-latest / qwen-vl-ocr-2025-11-20 /
+    qwen-vl-ocr-2025-08-28 / qwen-vl-ocr-2025-04-13 / qwen-vl-ocr-1028 等。
+    """
+    if not mdl:
+        return False
+    s = str(mdl).strip().lower()
+    if s.startswith('qwen3.5-ocr') or s == 'qwen3.5-ocr':
+        return True
+    if s.startswith('qwen-vl-ocr') or s == 'qwen-vl-ocr':
+        return True
+    return False
+
+
 def _prep_image_b64(image_path: str, max_side: int = 1280, quality: int = 80,
                     table_bbox: dict = None) -> str:
     """
@@ -620,7 +636,19 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
     返回 {'columns': [列名...], 'rows': [{列名: 单元格原文, ...}, ...]}
     失败/无数据抛 RuntimeError（调用方处理）。
     """
-    img_b64 = _prep_image_b64(image_path, table_bbox=table_bbox)
+    # Qwen OCR 专用模型：支持大图保留小字细节 + 默认 4096 token（识别表格更长更稳）。
+    # 检测 forced_model 或当前 provider model 是否为 qwen*-ocr 系列。
+    _is_ocr = False
+    try:
+        from utils import get_api_config as _gac
+        _acfg = _gac()
+        _ap = _acfg.get('active_provider', '')
+        _pm = ((_acfg.get('providers') or {}).get(_ap, {}) or {}).get('model', '')
+        _is_ocr = _is_qwen_ocr(forced_model) or _is_qwen_ocr(_pm)
+    except Exception:
+        _is_ocr = False
+    img_b64 = _prep_image_b64(image_path, table_bbox=table_bbox,
+                              max_side=2560 if _is_ocr else 1280)
 
     if columns:
         cols_txt = '、'.join(str(c) for c in columns)
@@ -644,8 +672,12 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 
 示例（仅示意格式）：
 [{_example_json}]"""
-        # 列多时按列数放大 token，但设 8192 上限防止过度消耗 API 额度
-        max_tok = min(max(1024, 512 * max(1, len(columns))), 8192)
+        # 列多时按列数放大 token，但设 8192 上限防止过度消耗 API 额度；
+        # Qwen OCR 专用模型默认支持 4096+，直接吃满输出预算（表格识别更长更稳）
+        if _is_ocr:
+            max_tok = 4096
+        else:
+            max_tok = min(max(1024, 512 * max(1, len(columns))), 8192)
     else:
         prompt = """你是数据录入员，识别图中 PDD 后台表格。表格为竖向列表，每行一条数据。
 
@@ -664,7 +696,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 - 值为 0 是真实业务数据，必须保留该行
 - 无法识别的单元格填 null，不要编造
 - 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
-        max_tok = 2048  # glm-4.6v 有 reasoning 需更大预算；glm-4v-flash 由 _ocr_api_call 自动钳制到 1024
+        max_tok = 4096 if _is_ocr else 2048  # glm-4.6v 有 reasoning 需更大预算；glm-4v-flash 由 _ocr_api_call 自动钳制到 1024；Qwen OCR 系列 4096
 
     content, _mdl = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model)
 
@@ -770,6 +802,17 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
         _buf = _io.BytesIO()
         _gimg.save(_buf, format='JPEG', quality=80)
         _b64 = base64.b64encode(_buf.getvalue()).decode()
+        # Qwen OCR 专用模型：行切分每组小图，同样吃满 4096 token（输出更长更稳）
+        _is_ocr = _is_qwen_ocr(forced_model)
+        if not _is_ocr:
+            try:
+                from utils import get_api_config as _gac
+                _acfg = _gac()
+                _ap = _acfg.get('active_provider', '')
+                _is_ocr = _is_qwen_ocr(((_acfg.get('providers') or {}).get(_ap, {}) or {}).get('model', ''))
+            except Exception:
+                _is_ocr = False
+        _row_max_tok = 4096 if _is_ocr else 2048
         _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
 只识别以下列（严格按这些列名作为 JSON key，列名原样）：{_cols_txt}
 输出严格 JSON：{{"rows": [{{"{_ex_col}": "值", ...}}, ...]}}
@@ -779,7 +822,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
 3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
 4. 只输出 JSON，不要解释"""
         try:
-            content, _ = _ocr_api_call(_b64, _prompt, max_tok=2048, forced_model=forced_model)
+            content, _ = _ocr_api_call(_b64, _prompt, max_tok=_row_max_tok, forced_model=forced_model)
         except Exception as e:
             raise RuntimeError(f'行组{_gi + 1}识别失败: {e}')
         _text = content.strip()
