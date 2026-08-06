@@ -1039,7 +1039,7 @@ class App(SettingsUIMixin):
 
     def _apply_theme(self, name):
         """应用皮肤：更新类属性 + 递归刷新所有控件颜色 + 重绘注册元素"""
-        theme = THEMES.get(name, THEMES['机能黄白黑'])
+        theme = THEMES.get(name, THEMES['终末地'])
         self._theme_name = name
         self._theme_spec = _merge_theme(theme)
         

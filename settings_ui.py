@@ -437,15 +437,7 @@ class SettingsUIMixin:
                                     gcc.configure(text='')
 
         for i, (name, theme_data) in enumerate(THEMES.items()):
-            p = theme_data['C_PRIMARY']
-            s = theme_data['C_SECONDARY']
-            bg = theme_data['C_BG']
-            sf = theme_data['C_SURFACE']
             ac = theme_data['C_ACCENT']
-            tx = theme_data['C_TEXT']
-            _tb = (theme_data.get('decor') or {}).get('topbar', {})
-            _topbar_bg = _tb.get('bg', p)
-            _topbar_fg = _tb.get('title_fg', '#FFFFFF')
 
             is_sel = name == self._theme_name
             card = tk.Frame(cards_frame, bg="#FFFFFF",
@@ -455,58 +447,17 @@ class SettingsUIMixin:
             card._skin_name = name
             card._skip_theme = True
 
-            mock = tk.Frame(card, bg="#FFFFFF", height=110)
-            mock.pack(fill="x", padx=1, pady=1)
-            mock.pack_propagate(False)
-
-            bar = tk.Frame(mock, bg=_topbar_bg, height=22)
-            bar.pack(fill="x")
-            bar.pack_propagate(False)
-            tk.Label(bar, text="PDD", font=("Microsoft YaHei UI", 7, "bold"),
-                    bg=_topbar_bg, fg=_topbar_fg).place(x=8, y=2)
-
-            body = tk.Frame(mock, bg=bg)
-            body.pack(fill="both", expand=True)
-            sim_card = tk.Frame(body, bg=sf, height=28, highlightbackground=theme_data['C_BORDER'],
-                               highlightthickness=1)
-            sim_card.pack(fill="x", padx=10, pady=8)
-            sim_card.pack_propagate(False)
-            tk.Label(sim_card, text="库存 500  销量 50", font=("Microsoft YaHei UI", 6),
-                    bg=sf, fg=tx).place(x=6, y=4)
-            tag = tk.Frame(sim_card, bg=theme_data['C_YELLOW_BG'], width=28, height=12)
-            tag.place(x=130, y=6)
-            tag.pack_propagate(False)
-            btn = tk.Frame(body, bg=ac, width=50, height=12)
-            btn.place(x=15, y=50)
-            btn.pack_propagate(False)
-
             info = tk.Frame(card, bg="#FFFFFF")
-            info.pack(fill="x", padx=8, pady=(6,4))
-            tk.Label(info, text=theme_data['label'], font=self.FONT_BOLD,
+            info.pack(fill="x", padx=12, pady=(16, 12))
+            tk.Label(info, text=theme_data['label'], font=self.FONT_TITLE,
                     bg="#FFFFFF", fg="#1E293B").pack(anchor="w")
-            tk.Label(info, text=theme_data['desc'], font=(self.FONT[0], 7),
-                    bg="#FFFFFF", fg="#94A3B8").pack(anchor="w")
+            tk.Label(info, text=theme_data['desc'], font=(self.FONT[0], 8),
+                    bg="#FFFFFF", fg="#94A3B8").pack(anchor="w", pady=(3, 8))
             if is_sel:
-                tk.Label(info, text="✓ 当前", font=(self.FONT[0], 8, 'bold'),
+                tk.Label(info, text="✓ 当前", font=(self.FONT[0], 9, 'bold'),
                         bg="#FFFFFF", fg=ac).pack(anchor="w")
-            else:
-                tk.Label(info, text=" ", font=(self.FONT[0], 8),
-                        bg="#FFFFFF", fg="#FFFFFF").pack(anchor="w")
 
-            swatch = tk.Frame(card, bg="#FFFFFF", height=14)
-            swatch.pack(fill="x", padx=8, pady=(0,6))
-            swatch.pack_propagate(False)
-            for j, c in enumerate([p, s, ac, bg, sf]):
-                dot = tk.Frame(swatch, bg=c, width=14, height=14, highlightbackground="#E2E8F0",
-                              highlightthickness=1)
-                dot.place(x=j * 18, y=0)
-                dot.pack_propagate(False)
-            # 预览主按钮色（components token）
-            _pb = (theme_data.get('components') or {}).get('btn', {}).get('primary', {})
-            if _pb:
-                tk.Frame(body, bg=_pb.get('bg', ac), width=50, height=12).place(x=15, y=68)
-
-            for w in [card, mock, info, swatch] + list(card.winfo_children()):
+            for w in [card, info] + list(card.winfo_children()):
                 try:
                     w.bind("<Button-1>", lambda e, n=name: select_theme(n))
                 except:

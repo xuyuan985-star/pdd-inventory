@@ -117,9 +117,9 @@ THEMES = {
             "result": {"accent_line": "#D97706", "accent_line_h": 2},
         },
     },
-    "机能黄白黑": {
-        "label": "机能黄白黑",
-        "desc": "亮黄通栏·黑白分割·斜切机能",
+    "终末地": {
+        "label": "终末地",
+        "desc": "黄白机能·黑斜切·工业终端",
         "C_PRIMARY": "#111111",
         "C_SECONDARY": "#333333",
         "C_ACCENT": "#FFE600",
@@ -217,8 +217,8 @@ def _write_settings(s):
 
 def load_theme_pref() -> str:
     """读取皮肤偏好，返回主题名"""
-    name = _read_settings().get('theme', '机能黄白黑')
-    return name if name in THEMES else '机能黄白黑'
+    name = _read_settings().get('theme', '终末地')
+    return name if name in THEMES else '终末地'
 
 
 def save_theme_pref(name: str):
