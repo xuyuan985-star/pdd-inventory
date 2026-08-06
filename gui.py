@@ -529,7 +529,7 @@ class App(SettingsUIMixin):
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
         self.main_paned.pack(fill="both", expand=True, padx=15, pady=(2, 15))
         # 左侧导航栏
-        self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_SURFACE)
+        self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_BG)
         self.nav_frame._skip_theme = True  # 导航栏保持 C_SURFACE 区分色，主题切换不覆盖
         self.nav_frame.pack_propagate(False)
         self.nav_buttons = {}
@@ -546,14 +546,17 @@ class App(SettingsUIMixin):
         self._current_page = self.page_home
         
         # ── 输入表格 ──
-        table_frame = tk.Frame(self.page_home, bg=self.C_SURFACE, highlightthickness=1,
+        table_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR, highlightthickness=1,
                                highlightbackground=self.C_BORDER, highlightcolor=self.C_BORDER)
+        table_frame._skip_theme = True  # 深色卡片：_walk_force 不刷白，重绘表按 token 更新
         table_frame.pack(fill="x", padx=15, pady=5)
+        self._register_redraw(lambda f=table_frame: f.configure(bg=self.tc('table.header_bg', '#1F1F1F')))
         
         # 标题头
         # 标题头（炭黑表头 + 顶部细亮黄装饰线，终末地标志性细节）
         _ln = tk.Frame(table_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.accent_line", "#FFE600")))
         hdr_bg = tk.Frame(table_frame, bg=self.C_CARD_HDR, height=32)
+        hdr_bg._skip_theme = True  # 深色表头：_walk_force 不刷白
         hdr_bg.pack(fill="x")
         hdr_bg.pack_propagate(False)
         tk.Label(hdr_bg, text="1  输入数据", font=(self.FONT[0], 10, 'bold'),
@@ -561,22 +564,24 @@ class App(SettingsUIMixin):
         tk.Label(hdr_bg, text="—  照着 PDD 后台页面填写",
                  font=self.FONT, fg='#BDBDBD', bg=self.C_CARD_HDR).pack(side="left")
         
-        # 列头
-        col_hdr = tk.Frame(table_frame, bg=self.C_BG)
+        # 列头（深色卡片内：深灰底白字）
+        col_hdr = tk.Frame(table_frame, bg=self.C_CARD_HDR)
+        col_hdr._skip_theme = True
         col_hdr.pack(fill="x")
         col_hdr.grid_columnconfigure(0, weight=1)
         col_hdr.grid_columnconfigure(1, minsize=80)
         col_hdr.grid_columnconfigure(2, minsize=80)
-        _ln = tk.Frame(col_hdr, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.grid(row=1, column=0, columnspan=3, sticky="ew"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.col_sep", "#E0E0E0")))
-        tk.Label(col_hdr, text="商品名称", font=self.FONT_BOLD, bg=self.C_BG,
-                 fg=self.C_TEXT, anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=4)
-        tk.Label(col_hdr, text="总库存", font=self.FONT_BOLD, bg=self.C_BG,
-                 fg=self.C_TEXT).grid(row=0, column=1, padx=4, pady=4)
-        tk.Label(col_hdr, text="总销量", font=self.FONT_BOLD, bg=self.C_BG,
-                 fg=self.C_TEXT).grid(row=0, column=2, padx=4, pady=4)
+        _ln = tk.Frame(col_hdr, bg="#3A3A3A", height=1); _ln._skip_theme = True; _ln.grid(row=1, column=0, columnspan=3, sticky="ew"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.col_sep", "#3A3A3A")))
+        tk.Label(col_hdr, text="商品名称", font=self.FONT_BOLD, bg=self.C_CARD_HDR,
+                 fg="#E0E0E0", anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=4)
+        tk.Label(col_hdr, text="总库存", font=self.FONT_BOLD, bg=self.C_CARD_HDR,
+                 fg="#E0E0E0").grid(row=0, column=1, padx=4, pady=4)
+        tk.Label(col_hdr, text="总销量", font=self.FONT_BOLD, bg=self.C_CARD_HDR,
+                 fg="#E0E0E0").grid(row=0, column=2, padx=4, pady=4)
         
         # 数据行容器
-        self.table_area = tk.Frame(table_frame)
+        self.table_area = tk.Frame(table_frame, bg=self.C_CARD_HDR)
+        self.table_area._skip_theme = True  # 深色卡内：_walk_force 不刷白
         self.table_area.pack(fill="x")
         self.table_area.grid_columnconfigure(0, weight=1)
         self.table_area.grid_columnconfigure(1, minsize=80)
@@ -627,9 +632,11 @@ class App(SettingsUIMixin):
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(8,3))
         
         # ── 结果表 ──
-        self.result_frame = tk.Frame(self.page_home, bg=self.C_SURFACE, highlightthickness=1,
+        self.result_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR, highlightthickness=1,
                                 highlightbackground=self.C_BORDER)
+        self.result_frame._skip_theme = True  # 深色卡片：_walk_force 不刷白
         self.result_frame.pack(fill="both", expand=True, padx=15, pady=(5,15))
+        self._register_redraw(lambda f=self.result_frame: f.configure(bg=self.tc('table.header_bg', '#1F1F1F')))
         
         _ln = tk.Frame(self.result_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("result.accent_line", "#FFE600")))
         tk.Label(self.result_frame, text="2  计算结果", font=(self.FONT[0], 10, 'bold'),
@@ -639,13 +646,14 @@ class App(SettingsUIMixin):
         self.tab_frame = tk.Frame(self.result_frame)
         self.tab_frame.pack(fill="x", padx=3, pady=(5,2))
         
-        # 初始占位
+        # 初始占位（深色卡片内：浅灰文字）
         tk.Label(self.tab_frame, text="截图识别后此处显示地区标签",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
+                 font=(self.FONT[0], 8), fg="#A0A0A0", bg=self.C_CARD_HDR).pack(side="left")
         
         columns = ("商品", "库存", "预估销量", "可售卖天数", "状态", "补货量")
         # 结果表放入带滚动条的容器（勾选列多时右侧列不再被截断）
-        tree_frame = tk.Frame(self.result_frame)
+        tree_frame = tk.Frame(self.result_frame, bg=self.C_CARD_HDR)
+        tree_frame._skip_theme = True
         tree_frame.pack(fill="both", expand=True, padx=3, pady=3)
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=15)
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
@@ -738,14 +746,14 @@ class App(SettingsUIMixin):
             ("🔗 后台", self.page_backend),
         ]
         for text, page in items:
-            _nf = tk.Frame(self.nav_frame, bg=self.C_ACCENT, bd=0, highlightthickness=0)
+            _nf = tk.Frame(self.nav_frame, bg=self.C_BG, bd=0, highlightthickness=0)
             _nf._skip_theme = True
             _ni = tk.Frame(_nf, bg=self.C_BG, bd=0, highlightthickness=0)
             _ni._skip_theme = True
-            _ni.pack(side="left", padx=(2, 0), pady=0, fill="x", expand=True)
+            _ni.pack(side="left", padx=(0, 0), pady=0, fill="x", expand=True)
             btn = tk.Button(_ni, text=text, relief="flat",
                            font=(self.FONT[0], 9), anchor="w", padx=12, pady=6,
-                           bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_BLUE_LIGHT,
+                           bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_SURFACE,
                            bd=0, command=lambda p=page: self._show_page(p))
             btn._page = page
             btn._nf = _nf
@@ -757,7 +765,8 @@ class App(SettingsUIMixin):
     def _highlight_nav(self, page):
         for btn in self.nav_buttons.values():
             if getattr(btn, '_page', None) == page:
-                btn.configure(bg=self.C_SURFACE, fg=self.C_TEXT)
+                # 选中项：深炭黑背景高亮（参考站，不用黄竖线）
+                btn.configure(bg=self.C_CARD_HDR, fg="#FFFFFF")
             else:
                 btn.configure(bg=self.C_BG, fg=self.C_TEXT)
 
@@ -828,7 +837,8 @@ class App(SettingsUIMixin):
     
     def _add_row(self):
         row = {}
-        f = tk.Frame(self.table_area)
+        f = tk.Frame(self.table_area, bg=self.C_CARD_HDR)
+        f._skip_theme = True
         f.pack(fill="x", pady=1)
         f.grid_columnconfigure(0, weight=1)
         f.grid_columnconfigure(1, minsize=80)
