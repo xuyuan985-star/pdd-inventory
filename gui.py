@@ -2234,6 +2234,17 @@ class App(SettingsUIMixin):
         
         def task():
             import time, os
+            restored = False
+            def _restore():
+                """无论成功失败都恢复窗口（防卡在最小化）"""
+                nonlocal restored
+                if restored:
+                    return
+                restored = True
+                try:
+                    self.win.after(0, self.win.deiconify)
+                except Exception:
+                    pass
             try:
                 self.win.after(0, self.win.iconify)
                 time.sleep(0.5)
@@ -2245,14 +2256,15 @@ class App(SettingsUIMixin):
                 from utils import capture_pdd_screenshot
                 found_window = capture_pdd_screenshot(ss_path)
                 
+                # 截图完成立即恢复窗口（OCR 可能耗时数秒，不必等）
+                _restore()
+                
                 if not found_window:
-                    self.win.after(0, self.win.deiconify)
                     self.win.after(0, lambda: (
                         self.status_text.set('❌ 未找到浏览器窗口，请先打开 PDD 后台页面'),
                         messagebox.showwarning('截图失败', '未找到拼多多或浏览器窗口。\n请先打开 PDD 商家后台 -> 订货管理页面。')))
                     return
                 
-                self.win.after(0, self.win.deiconify)
                 self.win.after(0, lambda: self.status_text.set('OCR识别中...'))
                 
                 items = self._ocr_generic_to_items(ss_path, dual_verify=self._single_dual_var.get())
@@ -2263,8 +2275,10 @@ class App(SettingsUIMixin):
                 
                 self.win.after(0, lambda i=items: self._fill_from_ocr(i))
             except Exception as e:
-                self.win.after(0, self.win.deiconify)
+                _restore()
                 self.win.after(0, lambda err=str(e): self.status_text.set(f'识别失败: {err[:50]}'))
+            finally:
+                _restore()  # 兜底：任何分支遗漏都恢复窗口
         
         import threading
         threading.Thread(target=task, daemon=True).start()
