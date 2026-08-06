@@ -457,7 +457,7 @@ class App(SettingsUIMixin):
         # 工具条（白底 + 黑色细分割线，按钮行）
         tool_bar = tk.Frame(self.win, bg=self.C_BG)
         tool_bar.pack(fill="x", padx=15, pady=(8, 2))
-        tk.Frame(tool_bar, bg=self.C_BORDER, height=1).pack(fill="x", pady=(0, 6))
+        _ln = tk.Frame(tool_bar, bg=self.C_BORDER, height=1); _ln._skip_theme = True; _ln.pack(fill="x", pady=(0, 6))
         # ☰ 导航按钮（幽灵：白底黄边）
         self._mk_btn(tool_bar, "☰ 导航", self._toggle_nav, kind='ghost', pack_side="left")
         # 当前模型标签
@@ -523,7 +523,7 @@ class App(SettingsUIMixin):
         
         # 标题头
         # 标题头（炭黑表头 + 顶部细亮黄装饰线，终末地标志性细节）
-        tk.Frame(table_frame, bg=self.C_ACCENT, height=2).pack(fill="x")
+        _ln = tk.Frame(table_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x")
         hdr_bg = tk.Frame(table_frame, bg=self.C_CARD_HDR, height=32)
         hdr_bg.pack(fill="x")
         hdr_bg.pack_propagate(False)
@@ -538,7 +538,7 @@ class App(SettingsUIMixin):
         col_hdr.grid_columnconfigure(0, weight=1)
         col_hdr.grid_columnconfigure(1, minsize=80)
         col_hdr.grid_columnconfigure(2, minsize=80)
-        tk.Frame(col_hdr, bg="#E0E0E0", height=1).grid(row=1, column=0, columnspan=3, sticky="ew")
+        _ln = tk.Frame(col_hdr, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.grid(row=1, column=0, columnspan=3, sticky="ew")
         tk.Label(col_hdr, text="商品名称", font=self.FONT_BOLD, bg=self.C_BG,
                  fg=self.C_TEXT, anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=4)
         tk.Label(col_hdr, text="总库存", font=self.FONT_BOLD, bg=self.C_BG,
@@ -584,14 +584,14 @@ class App(SettingsUIMixin):
         
         # ── 导出按钮 ──
         # ── 主操作区：唯一一级主按钮（页面第一视觉落点）──
-        tk.Frame(self.page_home, bg="#E0E0E0", height=1).pack(fill="x", padx=15, pady=(2, 0))
+        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(2, 0))
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
                   kind='primary', font=(self.FONT[0], 14, 'bold'), width=24, height=3,
                   pack_side=None)
         self.export_btn.pack(pady=(14, 2))
         tk.Label(self.page_home, text="确认数据后再导出", font=(self.FONT[0], 7),
                  fg="#9E9E9E").pack(pady=(0, 4))
-        tk.Frame(self.page_home, bg="#E0E0E0", height=1).pack(fill="x", padx=15, pady=(0, 2))
+        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(0, 2))
         
         # ── 状态栏 ──
         tk.Label(self.page_home, textvariable=self.status_text,
@@ -602,7 +602,7 @@ class App(SettingsUIMixin):
                                 highlightbackground=self.C_BORDER)
         self.result_frame.pack(fill="both", expand=True, padx=15, pady=(5,15))
         
-        tk.Frame(self.result_frame, bg=self.C_ACCENT, height=2).pack(fill="x")
+        _ln = tk.Frame(self.result_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x")
         tk.Label(self.result_frame, text="2  计算结果", font=(self.FONT[0], 10, 'bold'),
                  bg=self.C_CARD_HDR, fg='#FFFFFF').pack(fill="x", pady=(0,0))
         
