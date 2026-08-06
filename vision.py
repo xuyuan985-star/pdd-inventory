@@ -99,53 +99,93 @@ def locate_element(screenshot_path, template_name, threshold=0.75):
     return result
 
 
+def _pick_vision_model():
+    """选择 vision 定位任务的模型配置。
+
+    返回 (active, provider, endpoint, key, mdl, use_responses)。
+
+    规则：
+    1. 主模型能定位（非 qwen*-ocr 纯文字模型）→ 用主模型。
+    2. 主模型是 OCR 专用 → 副模型（get_secondary_model）若属于已配置 provider 且非 OCR
+       型，则用副模型所在 provider 的配置（额度/权限归用户自己配的副模型，不硬编码）。
+    3. 主副都无法定位（都是 OCR 型/未配置）→ raise RuntimeError 明确提示，
+       绝不静默回退到硬编码模型。
+    """
+    from utils import get_api_config
+    from ocr import _is_qwen_ocr as _qocr
+
+    api_cfg = get_api_config()
+    active = api_cfg.get('active_provider', 'doubao')
+    providers = api_cfg.get('providers', {})
+    providers = providers if isinstance(providers, dict) else {}
+
+    def _resolve(prov_name, mdl_name):
+        """按 provider 解析 endpoint/key/model，返回 (endpoint, key, mdl, use_responses)"""
+        p = providers.get(prov_name, {}) or {}
+        if not isinstance(p, dict):
+            p = {}
+        endpoint = p.get('endpoint', '') or ''
+        if prov_name == 'doubao':
+            if not endpoint:
+                endpoint = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
+            default_mdl = 'Doubao-Seed-2.1-pro'
+        elif prov_name == 'qwen':
+            if not endpoint:
+                endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+            default_mdl = 'qwen3.5-omni-flash'
+        else:  # glm
+            if not endpoint:
+                endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+            default_mdl = 'glm-4v-flash'
+        mdl = p.get('custom_endpoint', '') or p.get('model', '') or mdl_name or default_mdl
+        key = p.get('api_key', '') or os.environ.get(
+            {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(prov_name, ''), '')
+        use_responses = 'responses' in endpoint.lower()
+        return endpoint, key, mdl, use_responses
+
+    # 主模型
+    _main_mdl = providers.get(active, {}).get('model', '') if isinstance(providers.get(active), dict) else ''
+    if not _qocr(_main_mdl):
+        endpoint, key, mdl, use_responses = _resolve(active, _main_mdl)
+        return active, providers.get(active, {}), endpoint, key, mdl, use_responses
+
+    # 主模型是 OCR 型 → 尝试副模型
+    from utils import get_secondary_model
+    _sec = get_secondary_model() or ''
+    _sec = str(_sec).strip()
+    _sec_prov = None
+    for _pn, _pp in providers.items():
+        if not isinstance(_pp, dict):
+            continue
+        _pm = _pp.get('model', '')
+        if _pm and str(_pm).strip().lower() == _sec.lower():
+            _sec_prov = _pn
+            break
+    if _sec_prov and not _qocr(_sec):
+        # 副模型是通用视觉且能找到 provider → 用副模型配置
+        endpoint, key, mdl, use_responses = _resolve(_sec_prov, _sec)
+        return _sec_prov, providers.get(_sec_prov, {}), endpoint, key, mdl, use_responses
+
+    # 主副都无法定位
+    raise RuntimeError(
+        f'视觉定位不可用：主模型 {_main_mdl or "(未配置)"} 是 Qwen OCR 专用模型（仅文字提取，不做定位），'
+        f'副模型 {_sec or "(未配置)"} 也无法定位。请在「API 管理」把主/副模型改为通用视觉模型'
+        f'（如 qwen3.5-omni-flash、glm-4.6v、Doubao-Seed-2.1-pro），或把 OCR 专用模型仅用于文字识别。')
+
+
 def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: int = 30) -> str:
     """
     调用配置的视觉 API（doubao responses / glm chat 两种格式），返回模型文本响应。
     失败抛异常（由调用方包装层兜底）。
+    定位类任务（表格 bbox/页面状态/元素定位）必须用通用视觉模型：
+    Qwen OCR 专用模型（qwen*-ocr）是纯文字提取模型，不做定位——若主模型是 OCR 型，
+    尝试用副模型（双模型验证配置里的通用视觉模型），两者都不可用则明确报错，
+    不静默回退到硬编码模型（额度/权限不可控）。
     """
-    from utils import get_api_config
-    api_cfg = get_api_config()
-    active = api_cfg.get('active_provider', 'doubao')
-    providers = api_cfg.get('providers', {})
-    provider = (providers.get(active, {}) or {}) if isinstance(providers, dict) else {}
-    # 与 ocr.py 一致：key 支持 provider 配置 + 环境变量回退
-    key = provider.get('api_key', '') or os.environ.get(
-        {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
+    active, provider, endpoint, key, mdl, use_responses = _pick_vision_model()
     if not key:
         raise RuntimeError('API Key 未设置')
-
     import requests as _req
-    endpoint = provider.get('endpoint', '')
-    # 与 ocr.py 一致的默认端点兜底（active 不同 provider 各自默认值）
-    if active == 'doubao':
-        if not endpoint:
-            endpoint = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
-    elif active == 'qwen':
-        if not endpoint:
-            endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-    else:  # glm
-        if not endpoint:
-            endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-    use_responses = 'responses' in endpoint.lower()  # 大小写不敏感，与 ocr.py 一致
-    # custom_endpoint（ep-xxx 推理接入点 ID）优先：ark 上 Doubao-Seed-2.1-pro 等产品名
-    # 不是有效模型 ID（实测 404 InvalidEndpointOrModel.NotFound），与 ocr.py 逻辑一致
-    mdl = provider.get('custom_endpoint', '') or provider.get('model',
-        {'doubao': 'Doubao-Seed-2.1-pro', 'qwen': 'qwen3.5-omni-flash', 'glm': 'glm-4v-flash'}.get(active, ''))
-    # Qwen OCR 专用模型（qwen3.5-ocr/qwen-vl-ocr 等）是纯文字提取模型，
-    # **不支持物体定位/表格 bbox/页面状态检测**——vision 的定位类任务必须用通用视觉模型。
-    # 若用户把 qwen model 配成 OCR 模型，这里回退 qwen3.5-omni-flash（通用视觉），
-    # 否则 ai_locate_table 等会收到乱码 JSON → 定位失败 → 批量识别"未检测到商品"。
-    try:
-        from ocr import _is_qwen_ocr as _qocr
-        if _qocr(mdl):
-            _q = (providers.get('qwen', {}) or {}) if isinstance(providers, dict) else {}
-            mdl = _q.get('model', 'qwen3.5-omni-flash')
-            if _qocr(mdl):  # 配置里也是 OCR 模型 → 直接回退默认通用视觉
-                mdl = 'qwen3.5-omni-flash'
-            mdl_l = (mdl or '').lower()
-    except Exception:
-        pass
     mdl_l = (mdl or '').lower()
     is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
     # 与 ocr.py 一致：模型是 glm 但 endpoint 是官方阿里/豆包端点时，自动切回智谱端点+key
@@ -153,7 +193,9 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     ep_l = endpoint.lower()
     if is_glm and ('dashscope.aliyuncs.com' in ep_l or 'ark.cn-beijing.volces.com' in ep_l):
         endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-        _glm = (providers.get('glm', {}) or {}) if isinstance(providers, dict) else {}
+        from utils import get_api_config as _gac
+        _providers = (_gac().get('providers') or {})
+        _glm = (_providers.get('glm', {}) or {}) if isinstance(_providers, dict) else {}
         _glm_key = _glm.get('api_key', '') or os.environ.get('ZHIPU_API_KEY', '')
         if not _glm_key:
             raise RuntimeError('GLM API Key 未设置（当前模型为 glm 但端点/Key 是阿里/豆包）')
