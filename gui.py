@@ -1311,7 +1311,10 @@ class App(SettingsUIMixin):
             stock = _to_int(item.get('stock', 0))
             daily = max(_to_int(item.get('sales', 0)), 0)
             calc_daily = daily if daily > 0 else 1  # 除法保护，显示保留原始值
-            shipping = self._get_shipping(region, name)  # 逐商品查运输时效
+            # 每商品用自己的地区查时效（批量识别多省份各行 region 不同），
+            # 无则回退当前地区——修复其他省份商品被按最后省份计算
+            _it_region = item.get('region') or region
+            shipping = self._get_shipping(_it_region, name)  # 逐商品查运输时效
             
             if daily <= 0:
                 # 无销量商品：不强制补货，标记观察（销量0可能数据未更新，交客户人工判断）
@@ -1572,6 +1575,19 @@ class App(SettingsUIMixin):
             except ValueError:
                 sales = 0
             _raw = dict(r.get('_raw') or {})
+            # 每行自己的地区：OCR 行从 _raw 的「销售区域」列取（批量识别多省份时各行不同），
+            # 手动行/取不到时回退当前地区——修复多省份批量全部按最后省份计算时效
+            _row_region = ''
+            try:
+                from utils import get_ocr_columns as _goc
+                _rmap = (_goc().get('mapping') or {})
+                _rc = _rmap.get('region')
+                if _rc:
+                    _row_region = strip_region_suffix(str(_raw.get(_rc, ''))) if _raw else ''
+            except Exception:
+                _row_region = ''
+            if not _row_region:
+                _row_region = self.region_var.get()
             if _raw:
                 # OCR 行：保留原始列（仓库信息/仓库销售库存等勾选列），
                 # 仅用输入框当前值覆盖库存/销量列（用户可能改过）
@@ -1599,10 +1615,10 @@ class App(SettingsUIMixin):
             else:
                 # 纯手动行：按列配置补全（仓库无输入源，留空）
                 _raw = self._build_raw_from_fields(name, stock, sales,
-                                                   region=self.region_var.get())
+                                                   region=_row_region)
                 warehouse = ''
             items.append({'name': name, 'stock': stock, 'sales': sales,
-                         'region': self.region_var.get(),
+                         'region': _row_region,
                          'warehouse': warehouse, '_raw': _raw})
         if not items:
             messagebox.showwarning("无数据", "请至少输入一个商品")
