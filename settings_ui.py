@@ -32,7 +32,7 @@ class SettingsUIMixin:
         pf = tk.Frame(content); pf.pack(pady=8, padx=20, fill='x')
         self.export_path_var = tk.StringVar(self.win, value=self._get_export_path())
         tk.Entry(pf, textvariable=self.export_path_var, font=self.FONT, width=50).pack(side='left')
-        tk.Button(pf, text='浏览', command=lambda: self._pick_export_path(None), font=(self.FONT[0], 8)).pack(side='left', padx=5)
+        self._mk_btn(pf, '浏览', lambda: self._pick_export_path(None), kind='ghost', font=(self.FONT[0], 8), pack_side='left', padx=5)
         def open_export_dir():
             """打开导出目录；不存在/不可写时给出明确提示"""
             import os as _os
@@ -50,8 +50,8 @@ class SettingsUIMixin:
                 _os.startfile(path)
             except OSError as e:
                 messagebox.showwarning("无法打开", f"打开文件夹失败：{e}", parent=self.win)
-        tk.Button(pf, text='打开文件夹', command=open_export_dir, font=(self.FONT[0], 8)).pack(side='left', padx=5)
-        tk.Button(content, text='保存', command=lambda: self._save_settings(None), font=(self.FONT[0], 8), bg=self.C_PRIMARY, fg='#FFFFFF').pack(pady=(5,10))
+        self._mk_btn(pf, '打开文件夹', open_export_dir, kind='ghost', font=(self.FONT[0], 8), pack_side='left', padx=5)
+        self._mk_btn(content, '保存', lambda: self._save_settings(None), kind='primary', font=(self.FONT[0], 9, 'bold'), width=12).pack_configure(pady=(5,10))
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
         # ── 定位校准（AI 智能定位，v1.3 起唯一模式）──
@@ -64,9 +64,9 @@ class SettingsUIMixin:
         tk.Label(content, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
         col_btn_row = tk.Frame(content); col_btn_row.pack(pady=8)
-        tk.Button(col_btn_row, text='🔍 探测全部列', command=self._probe_columns,
-                  font=(self.FONT[0], 8), bg=self.C_SECONDARY, fg='#FFFFFF').pack(side='left', padx=5)
-        tk.Button(col_btn_row, text='⚙ 配置识别列', command=self._config_columns,
+        self._mk_btn(col_btn_row, '🔍 探测全部列', self._probe_columns, kind='dark',
+                  font=(self.FONT[0], 8)).pack(side='left', padx=5)
+        self._mk_btn(col_btn_row, '⚙ 配置识别列', self._config_columns, kind='dark',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
         tk.Label(content, textvariable=self.col_status_var,
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
@@ -86,7 +86,7 @@ class SettingsUIMixin:
             save_secondary_model(_v)
             self.col_status_var.set(f"副模型已保存：{_v}")
             self.status_text.set(f"副模型已保存：{_v}")
-        tk.Button(sec_row, text='保存', command=_save_sec,
+        self._mk_btn(sec_row, '保存', _save_sec, kind='primary',
                   font=(self.FONT[0], 7)).pack(side="left")
         tk.Label(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
@@ -209,8 +209,8 @@ class SettingsUIMixin:
             self.status_text.set(f"识别列配置已保存 — {len(selected)} 列")
             dlg.destroy()
 
-        tk.Button(dlg, text="保存", command=save, font=self.FONT_BOLD,
-                  bg=self.C_PRIMARY, fg="#FFFFFF", width=14).pack(pady=(8,12))
+        self._mk_btn(dlg, "保存", save, kind='primary', font=self.FONT_BOLD,
+                  width=14).pack(pady=(8,12))
         dlg.transient(self.win)
         dlg.grab_set()
 
@@ -299,8 +299,8 @@ class SettingsUIMixin:
             self._update_tabs()
             self.status_text.set(f"地区「{region}」已删除")
 
-        tk.Button(sel_frame, text="删除地区", relief='flat', command=delete_region,
-                  font=(self.FONT[0], 8), fg=self.C_RED).pack(side="left", padx=5)
+        self._mk_btn(sel_frame, "删除地区", delete_region, kind='ghost',
+                  font=(self.FONT[0], 8)).pack(side="left", padx=5)
 
         # 商品列表区（可滚动）
         canvas_frame = tk.Frame(parent)
@@ -385,8 +385,8 @@ class SettingsUIMixin:
 
         btn_frame = tk.Frame(parent)
         btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="保存时效设置", command=save_all,
-                  bg="#4CAF50", fg="#FFFFFF", font=self.FONT_BOLD).pack(side="left", padx=5)
+        self._mk_btn(btn_frame, "保存时效设置", save_all, kind='primary',
+                  font=self.FONT_BOLD).pack(side="left", padx=5)
 
         # 一键全设（批量调运输天数，避免逐商品手调）
         def set_all_days(days):
@@ -402,9 +402,9 @@ class SettingsUIMixin:
                 spin.insert(0, str(days))
             self.status_text.set(f"已将所有商品运输时效设为 {days} 天（记得点保存）")
 
-        tk.Button(btn_frame, text="全部设为 3 天", command=lambda: set_all_days(3),
+        self._mk_btn(btn_frame, "全部设为 3 天", lambda: set_all_days(3), kind='ghost',
                   font=(self.FONT[0], 8)).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="全部设为 5 天", command=lambda: set_all_days(5),
+        self._mk_btn(btn_frame, "全部设为 5 天", lambda: set_all_days(5), kind='ghost',
                   font=(self.FONT[0], 8)).pack(side="left", padx=5)
 
     def _build_skin_tab(self, parent):
@@ -583,9 +583,9 @@ class SettingsUIMixin:
                 ai_status_lbl.configure(text=f"定位失败: {str(e)[:60]}")
             _refresh_cards()
 
-        tk.Button(ai_btn_frame, text="立即定位", command=do_ai_locate,
-                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=12).pack(side='left', padx=5)
-        tk.Button(ai_btn_frame, text="测试点击", command=lambda: _test_click(cal),
+        self._mk_btn(ai_btn_frame, "立即定位", do_ai_locate, kind='dark',
+                  font=self.FONT_BOLD, width=12).pack(side='left', padx=5)
+        self._mk_btn(ai_btn_frame, "测试点击", lambda: _test_click(cal), kind='ghost',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
 
         # ── 刷新显示 ──
@@ -700,8 +700,8 @@ class SettingsUIMixin:
                 return
             messagebox.showinfo("已保存", "商家后台配置已保存", parent=dlg)
 
-        tk.Button(parent, text="保存配置", command=save_backend,
-                  font=self.FONT_BOLD, bg="#4CAF50", fg="#FFFFFF", width=15).pack(pady=15)
+        self._mk_btn(parent, "保存配置", save_backend, kind='primary',
+                  font=self.FONT_BOLD, width=15).pack(pady=15)
 
     def _build_api_page(self, parent, dlg=None):
         """API 管理：三个提供商独立配置，用户自填 Key 和模型名，消除隐私隐患"""
@@ -852,5 +852,5 @@ class SettingsUIMixin:
             self._refresh_model_badge()
             self.status_text.set(f"API 配置已保存 — 当前: {PRESET_PROVIDERS[active_var.get()]['name']}")
 
-        tk.Button(parent, text="保存", command=save_all,
-                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF", width=18).pack(pady=12)
+        self._mk_btn(parent, "保存", save_all, kind='primary',
+                  font=self.FONT_BOLD, width=18).pack(pady=12)
