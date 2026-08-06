@@ -46,14 +46,21 @@ def _get_default_export_dir() -> str:
 
 
 def _unique_sheet_name(wb, base: str) -> str:
-    """Sheet 重名保护：base 已被占用时追加 _2、_3…"""
+    """Sheet 重名保护 + Excel 命名规则 sanitize：
+    非法字符（\\ / ? * [ ] :）替换为 _，超 31 字符截断，避免 create_sheet 抛异常。
+    base 已被占用时追加 _2、_3…"""
+    _ILLEGAL = set('\\/?*[]:')
+    base = ''.join('_' if ch in _ILLEGAL else ch for ch in str(base)).strip() or 'Sheet'
+    base = base[:31]
     existing = {ws.title for ws in wb.worksheets}
     if base not in existing:
         return base
     i = 2
-    while f"{base}_{i}" in existing:
+    while True:
+        cand = f"{base[:28]}_{i}"  # 保留重名后缀空间：_2 起最多到 _99，仍 ≤31 字符
+        if cand not in existing:
+            return cand
         i += 1
-    return f"{base}_{i}"
 
 
 def _sanitize_cell(v):

@@ -250,13 +250,12 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
         ep_l = cur_endpoint.lower()
         # 精确/前缀匹配智谱模型名，避免自定义模型名含 "glm" 子串被误判
         is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
-        if is_glm and 'dashscope' in ep_l:
-            cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-            cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
-            if not cur_key:
-                continue
-            cur_responses = False
-        elif is_glm and ('ark' in ep_l or 'responses' in ep_l):
+        # 自动切智谱端点只对官方默认端点生效（dashscope.aliyuncs.com / ark 官方域名），
+        # 自定义代理 endpoint 一律尊重用户配置——代理 URL 可能恰好含 'dashscope'/'ark'/
+        # 'responses' 子串，按子串判断会错换 endpoint+key 导致认证失败（v1.4 加固）
+        _is_official_ali = 'dashscope.aliyuncs.com' in ep_l
+        _is_official_ark = 'ark.cn-beijing.volces.com' in ep_l
+        if is_glm and (_is_official_ali or _is_official_ark):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
             if not cur_key:
@@ -821,9 +820,13 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
         secondary = parse_items_generic(sec_result.get('rows') or [], mapping)
     except Exception as e:
         _ocr_dlog(f"⚠ 副模型({secondary_model})识别失败，已用主模型结果：{str(e)[:120]}")
+        for _it in primary:
+            _it['_dual_degraded'] = True  # GUI 据此提示用户双模型未生效
         return primary
     if not secondary:
         _ocr_dlog(f"⚠ 副模型({secondary_model})无有效结果，已用主模型结果")
+        for _it in primary:
+            _it['_dual_degraded'] = True  # GUI 据此提示用户双模型未生效
         return primary
 
     def _norm(n):

@@ -53,7 +53,8 @@ def get_changed_files_since(tag: str) -> set:
     if not tag:
         return set()
     # git diff tag 比较到工作区（含 staged + unstaged）
-    out = _run(['git', 'diff', '--name-only', tag])
+    # core.quotepath=false：中文/特殊字符文件名不被转义成 \xxx，否则变更列表会错（漏包/多包）
+    out = _run(['git', '-c', 'core.quotepath=false', 'diff', '--name-only', tag])
     if not out:
         return set()
     return set(out.split('\n'))
