@@ -443,10 +443,13 @@ class SettingsUIMixin:
             sf = theme_data['C_SURFACE']
             ac = theme_data['C_ACCENT']
             tx = theme_data['C_TEXT']
+            _tb = (theme_data.get('decor') or {}).get('topbar', {})
+            _topbar_bg = _tb.get('bg', p)
+            _topbar_fg = _tb.get('title_fg', '#FFFFFF')
 
             is_sel = name == self._theme_name
             card = tk.Frame(cards_frame, bg="#FFFFFF",
-                           highlightbackground="#3B82F6" if is_sel else "#E2E8F0",
+                           highlightbackground=ac if is_sel else "#E2E8F0",
                            highlightthickness=2 if is_sel else 1)
             card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
             card._skin_name = name
@@ -456,11 +459,11 @@ class SettingsUIMixin:
             mock.pack(fill="x", padx=1, pady=1)
             mock.pack_propagate(False)
 
-            bar = tk.Frame(mock, bg=p, height=22)
+            bar = tk.Frame(mock, bg=_topbar_bg, height=22)
             bar.pack(fill="x")
             bar.pack_propagate(False)
             tk.Label(bar, text="PDD", font=("Microsoft YaHei UI", 7, "bold"),
-                    bg=p, fg="#FFFFFF").place(x=8, y=2)
+                    bg=_topbar_bg, fg=_topbar_fg).place(x=8, y=2)
 
             body = tk.Frame(mock, bg=bg)
             body.pack(fill="both", expand=True)
@@ -485,7 +488,7 @@ class SettingsUIMixin:
                     bg="#FFFFFF", fg="#94A3B8").pack(anchor="w")
             if is_sel:
                 tk.Label(info, text="✓ 当前", font=(self.FONT[0], 8, 'bold'),
-                        bg="#FFFFFF", fg="#3B82F6").pack(anchor="w")
+                        bg="#FFFFFF", fg=ac).pack(anchor="w")
             else:
                 tk.Label(info, text=" ", font=(self.FONT[0], 8),
                         bg="#FFFFFF", fg="#FFFFFF").pack(anchor="w")
@@ -498,6 +501,10 @@ class SettingsUIMixin:
                               highlightthickness=1)
                 dot.place(x=j * 18, y=0)
                 dot.pack_propagate(False)
+            # 预览主按钮色（components token）
+            _pb = (theme_data.get('components') or {}).get('btn', {}).get('primary', {})
+            if _pb:
+                tk.Frame(body, bg=_pb.get('bg', ac), width=50, height=12).place(x=15, y=68)
 
             for w in [card, mock, info, swatch] + list(card.winfo_children()):
                 try:
@@ -520,7 +527,6 @@ class SettingsUIMixin:
 
         # ── AI 模式卡片（v1.4 起唯一模式，无模式选择器）──
         ai_card = tk.Frame(parent, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
-        ai_card._skip_theme = True
 
         ai_status_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_SURFACE)
         ai_status_lbl.pack(pady=5)
@@ -766,7 +772,6 @@ class SettingsUIMixin:
             # 浅灰机能卡片（细黑边框 + 内边距）
             card = tk.Frame(cards_frame, bg=self.C_SURFACE, highlightthickness=1,
                             highlightbackground="#111111", bd=0)
-            card._skip_theme = True
             card.pack(fill="x", padx=4, pady=8)
             tk.Label(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
                      bg=self.C_SURFACE, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))

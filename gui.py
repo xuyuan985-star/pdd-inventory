@@ -32,7 +32,7 @@ except ImportError:
     sys.exit(1)
 
 
-from config import THEMES, load_theme_pref
+from config import THEMES, load_theme_pref, _merge_theme
 
 
 def _validate_num_entry(p) -> bool:
@@ -53,7 +53,7 @@ class _CanvasBtn:
     """Canvas 自绘切角按钮（终末地机能风）：几何微切角、完全扁平、无渐变无浮雕。
     模拟 tk.Button 的 config/configure/cget/pack/destroy 接口，兼容现有调用。"""
 
-    def __init__(self, canvas, poly, text_item, text, command, kind, colors):
+    def __init__(self, canvas, poly, text_item, text, command, kind, colors, owner=None):
         self.canvas = canvas
         self.poly = poly
         self.text_item = text_item
@@ -62,6 +62,16 @@ class _CanvasBtn:
         self._kind = kind
         self._colors = colors
         self._state = 'normal'
+        self.owner = owner
+
+    def retheme(self):
+        """主题切换时从 owner.tc() 重取配色并重绘"""
+        if self.owner is None or not self._kind:
+            return
+        c = self.owner.tc(f'btn.{self._kind}', None)
+        if c and isinstance(c, dict) and 'bg' in c:
+            self._colors = c
+            self._apply()
 
     def pack(self, *a, **kw):
         return self.canvas.pack(*a, **kw)
@@ -113,13 +123,14 @@ class _CanvasBtn:
             pass
 
     def _apply(self):
-        c = self._colors
+        c = self._colors or {}
         if self._state == 'disabled':
-            self.canvas.itemconfigure(self.poly, fill='#E8E8E3', outline='#C9C9C2')
-            self.canvas.itemconfigure(self.text_item, fill='#9E9E9E')
+            d = self.owner.tc('btn.disabled', {}) if self.owner else {}
+            self.canvas.itemconfigure(self.poly, fill=d.get('bg', '#E8E8E3'), outline=d.get('edge', '#C9C9C2'))
+            self.canvas.itemconfigure(self.text_item, fill=d.get('fg', '#9E9E9E'))
         else:
-            self.canvas.itemconfigure(self.poly, fill=c['bg'], outline=c.get('edge', c['bg']))
-            self.canvas.itemconfigure(self.text_item, fill=c['fg'])
+            self.canvas.itemconfigure(self.poly, fill=c.get('bg', '#FFE600'), outline=c.get('edge', c.get('bg', '#111111')))
+            self.canvas.itemconfigure(self.text_item, fill=c.get('fg', '#111111'))
 
     def _click(self, e):
         if self._state != 'disabled' and self._command:
@@ -168,24 +179,26 @@ class App(SettingsUIMixin):
         kind='text'    → 黑字 + 底部细黄下划线（文字型操作）
         kind='tag'     → 亮黄底黑粗字（角标标签）
         返回 _CanvasBtn（模拟 Button 接口）。"""
-        colors = self._btn_colors(kind)
+        colors = self.tc(f'btn.{kind}', {}) if kind != 'text' else self.tc(f'btn.{kind}', {})
         h = (height or 1) * 24 + 6  # height 按字符行高换算（24px/行）
         if width:
             w = width * 9
         else:
             fs = (font or self.FONT)[1]
             w = len(text) * (fs + 1) + padx * 2 + 22
-        c = 5  # 几何微切角（45° 斜切）
+        c = int(self.tc('btn.corner', 5))  # 几何微切角
         canvas = tk.Canvas(parent, width=w, height=h,
                            bg=parent.cget('bg') if parent.winfo_class() == 'Frame' else self.C_BG,
                            highlightthickness=0, bd=0)
         canvas._skip_theme = True
         if kind == 'text':
-            # 文字型操作：黑字 + 底部细黄下划线
-            txt = canvas.create_text(w // 2, h // 2 - 2, text=text, fill='#111111',
+            # 文字型操作：黑字 + 底部细黄下划线（下划线色随主题）
+            _ul = self.tc('btn.text.underline', '#FFE600')
+            txt = canvas.create_text(w // 2, h // 2 - 2, text=text,
+                                     fill=self.tc('btn.text.fg', '#111111'),
                                      font=font or self.FONT)
-            canvas.create_rectangle(4, h - 3, w - 4, h - 1, fill='#FFE600', outline='')
-            btn = _CanvasBtn(canvas, None, txt, text, command, kind, colors)
+            canvas.create_rectangle(4, h - 3, w - 4, h - 1, fill=_ul, outline='')
+            btn = _CanvasBtn(canvas, None, txt, text, command, kind, colors, owner=self)
             canvas.bind('<Button-1>', btn._click)
             canvas.tag_bind(txt, '<Button-1>', btn._click)
             canvas.bind('<Enter>', btn._hover)
@@ -193,35 +206,25 @@ class App(SettingsUIMixin):
         else:
             poly = canvas.create_polygon(
                 c, 0, w - c, 0, w, c, w, h - c, w - c, h, c, h, 0, h - c, 0, c,
-                fill=colors['bg'], outline=colors.get('edge', colors['bg']),
+                fill=colors.get('bg', '#FFE600'), outline=colors.get('edge', colors.get('bg', '#111111')),
                 width=1, smooth=False)
             fnt = font or (self.FONT_BOLD if kind in ('tag',) else self.FONT)
-            txt = canvas.create_text(w // 2, h // 2, text=text, fill=colors['fg'],
+            txt = canvas.create_text(w // 2, h // 2, text=text, fill=colors.get('fg', '#111111'),
                                      font=fnt)
-            btn = _CanvasBtn(canvas, poly, txt, text, command, kind, colors)
+            btn = _CanvasBtn(canvas, poly, txt, text, command, kind, colors, owner=self)
             canvas.bind('<Button-1>', btn._click)
             canvas.tag_bind(poly, '<Button-1>', btn._click)
             canvas.tag_bind(txt, '<Button-1>', btn._click)
             canvas.bind('<Enter>', btn._hover)
             canvas.bind('<Leave>', btn._leave)
         btn._canvas = canvas
+        if owner := getattr(self, '_register_redraw', None):
+            owner(btn.retheme)
         if pack_side is not None:
             canvas.pack(side=pack_side, **pack_kw)
         else:
             canvas.pack(**pack_kw)
         return btn
-
-    def _btn_colors(self, kind):
-        """切角按钮配色（终末地黄黑白，无蓝）"""
-        if kind == 'primary':
-            return {'bg': '#FFE600', 'fg': '#111111', 'edge': '#111111', 'bg_hover': '#F2D500'}
-        if kind == 'dark':
-            return {'bg': '#111111', 'fg': '#FFFFFF', 'edge': '#111111', 'bg_hover': '#262626'}
-        if kind == 'tag':
-            return {'bg': '#FFE600', 'fg': '#111111', 'edge': '#111111', 'bg_hover': '#F2D500'}
-        if kind == 'text':
-            return {'bg': self.C_BG, 'fg': '#111111', 'edge': self.C_BG}
-        return {'bg': '#FFFFFF', 'fg': '#111111', 'edge': '#111111', 'bg_hover': '#F5F5F0'}
 
     def __init__(self):
         # 任务栏图标：必须在 Tk() 之前设置，否则源码运行时显示 python 图标
@@ -276,6 +279,8 @@ class App(SettingsUIMixin):
         self._migrate_config()
         # 加载皮肤偏好
         self._theme_name = load_theme_pref()
+        self._theme_redraws = []  # 主题重绘注册表（Canvas 装饰/按钮）
+        self._theme_spec = {}
         self._apply_theme(self._theme_name)
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
@@ -421,43 +426,57 @@ class App(SettingsUIMixin):
         # ── 顶部：亮黄通栏（机能风）──
         top_bar = tk.Frame(self.win, bg=self.C_ACCENT)
         top_bar.pack(fill="x")
-        # 标题装饰区：大标题 + 斜切几何块 + 页码角标（机能风）
-        _deco = tk.Canvas(top_bar, height=66, bg=self.C_ACCENT, highlightthickness=0)
+        # 标题装饰区：大标题 + 斜切几何块 + 页码角标（随主题 token）
+        top_bar = tk.Frame(self.win, bg=self.tc('decor.topbar.bg', '#FFE600'))
+        top_bar.pack(fill="x")
+        top_bar._skip_theme = True  # 通栏色由重绘表按 decor.topbar 刷新，walk 不碰
+        _deco = tk.Canvas(top_bar, height=int(self.tc('decor.topbar.height', 66)),
+                          bg=self.tc('decor.topbar.bg', '#FFE600'), highlightthickness=0)
         _deco.pack(fill="x")
-        _deco._skip_theme = True  # 黄通栏是设计元素，主题切换不刷白
-        # 黑色粗体大标题（左侧固定）
-        _deco.create_text(22, 16, text="PDD EZ", anchor='w', fill='#111111',
+        _deco._skip_theme = True
+        self._deco = _deco
+        # 黑色粗体大标题（左侧固定，色随主题）
+        _deco.create_text(22, 16, text="PDD EZ", anchor='w',
+                          fill=self.tc('decor.topbar.title_fg', '#111111'),
                           font=(self.FONT[0], 28, 'bold'))
         _deco.create_text(23, 50, text="补货助手 ｜ 自动计算", anchor='w',
-                          fill='#333333', font=(self.FONT[0], 9))
-        # 右侧斜切几何块 + 页码角标：按窗口实际宽度动态绘制
-        def _redraw_deco(e):
+                          fill=self.tc('decor.topbar.sub_fg', '#333333'), font=(self.FONT[0], 9))
+        # 右侧斜切几何块 + 页码角标：按窗口实际宽度动态绘制（色随主题）
+        def _redraw_deco(e=None):
             try:
                 _deco.delete('deco')
             except Exception:
                 return
-            w = e.width
+            w = e.width if e is not None else _deco.winfo_width()
             if w < 200:
                 return
-            # 右侧斜切几何装饰块（黑 + 深灰双层，硬朗机能感）
-            _deco.create_polygon(w - 360, 0, w - 60, 0, w - 360, 66, fill='#111111',
+            tb = self.tc('decor.topbar', {})
+            _deco.create_polygon(w - 360, 0, w - 60, 0, w - 360, 66, fill=tb.get('block1', '#111111'),
                                  outline='', tags='deco')
-            _deco.create_polygon(w - 230, 0, w - 30, 0, w - 230, 66, fill='#333333',
+            _deco.create_polygon(w - 230, 0, w - 30, 0, w - 230, 66, fill=tb.get('block2', '#333333'),
                                  outline='', tags='deco')
-            # 黑色技术标线（细线，档案/终端感）
-            _deco.create_line(22, 44, 420, 44, fill='#111111', width=1, tags='deco')
-            _deco.create_line(22, 48, 260, 48, fill='#111111', width=1, tags='deco')
-            # 右上角版本号：小型切角黑底标签 + 亮黄字
+            _deco.create_line(22, 44, 420, 44, fill=tb.get('line', '#111111'), width=1, tags='deco')
+            _deco.create_line(22, 48, 260, 48, fill=tb.get('line', '#111111'), width=1, tags='deco')
             _deco.create_polygon(w - 190, 10, w - 96, 10, w - 82, 24, w - 82, 32,
                                  w - 88, 38, w - 190, 38, w - 190, 18,
-                                 fill='#111111', outline='#FFE600', width=1, tags='deco')
-            _deco.create_text(w - 135, 24, text="V" + VERSION.upper(), fill='#FFE600',
+                                 fill=tb.get('ver_bg', '#111111'), outline=tb.get('ver_edge', '#FFE600'),
+                                 width=1, tags='deco')
+            _deco.create_text(w - 135, 24, text="V" + VERSION.upper(), fill=tb.get('ver_fg', '#FFE600'),
                               font=(self.FONT[0], 9, 'bold'), tags='deco')
         _deco.bind('<Configure>', _redraw_deco)
+        def _retheme_topbar():
+            try:
+                _bg = self.tc('decor.topbar.bg', '#FFE600')
+                top_bar.configure(bg=_bg)
+                _deco.configure(bg=_bg)
+                _redraw_deco(None)
+            except Exception:
+                pass
+        self._register_redraw(_retheme_topbar)
         # 工具条（白底 + 黑色细分割线，按钮行）
         tool_bar = tk.Frame(self.win, bg=self.C_BG)
         tool_bar.pack(fill="x", padx=15, pady=(8, 2))
-        _ln = tk.Frame(tool_bar, bg=self.C_BORDER, height=1); _ln._skip_theme = True; _ln.pack(fill="x", pady=(0, 6))
+        _ln = tk.Frame(tool_bar, bg=self.C_BORDER, height=1); _ln._skip_theme = True; _ln.pack(fill="x", pady=(0, 6)); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
         # ☰ 导航按钮（幽灵：白底黄边）
         self._mk_btn(tool_bar, "☰ 导航", self._toggle_nav, kind='ghost', pack_side="left")
         # 当前模型标签
@@ -475,22 +494,32 @@ class App(SettingsUIMixin):
                                    fg=self.C_TEXT, bg=self.C_BG)
         self.pill_name.pack(side="left", padx=(10,4), pady=4)
         self.pill_name._skip_theme = True
-        tag_bg = "#111111" if is_free else "#FFE600"
         tag_text = "FREE" if is_free else "PRO"
-        tag_fg = "#FFE600" if is_free else "#111111"
-        # 切角角标（Canvas 多边形：左上/右下 45° 斜切）
+        _pill_cfg = self.tc('pill.free' if is_free else 'pill.pro', {'bg': '#FFE600', 'fg': '#111111'})
+        tag_bg = _pill_cfg.get('bg', '#FFE600')
+        tag_fg = _pill_cfg.get('fg', '#111111')
+        # 切角角标（Canvas 多边形：左上/右下 45° 斜切，色随主题 token）
         _tcv = tk.Canvas(self.pill_frame, width=44, height=20, bg=self.C_BG,
                          highlightthickness=0, bd=0)
         _tcv._skip_theme = True
         _tcv.pack(side="left", padx=(0, 8), pady=2)
         _tcv.create_polygon(5, 0, 39, 0, 44, 5, 44, 15, 39, 20, 5, 20, 0, 15, 0, 5,
-                            fill=tag_bg, outline='#111111', width=1)
+                            fill=tag_bg, outline=_pill_cfg.get('edge', '#111111'), width=1)
         _tcv.create_text(22, 10, text=tag_text, fill=tag_fg,
                          font=(self.FONT[0], 7, 'bold'))
         self.pill_tag = _CanvasBtn(_tcv, None, None, tag_text, None, 'tag',
-                                   {'bg': tag_bg, 'fg': tag_fg, 'edge': '#111111'})
+                                   _pill_cfg)
         self.pill_tag._canvas = _tcv
         self.pill_tag.text_item = list(_tcv.find_all())[1]
+        def _retheme_pill():
+            try:
+                _pf = self.tc('pill.free' if self._pill_is_free else 'pill.pro', {'bg': '#FFE600', 'fg': '#111111'})
+                _tcv.itemconfigure(list(_tcv.find_all())[0], fill=_pf.get('bg'), outline=_pf.get('edge', '#111111'))
+                _tcv.itemconfigure(self.pill_tag.text_item, fill=_pf.get('fg'))
+            except Exception:
+                pass
+        self._pill_is_free = is_free
+        self._register_redraw(_retheme_pill)
         self._mk_btn(tool_bar, "🏪 商家后台", self._open_backend, kind='ghost',
                      pack_side="right", padx=5)
         self._mk_btn(tool_bar, "🔄 更新", self._run_updater, kind='ghost',
@@ -523,7 +552,7 @@ class App(SettingsUIMixin):
         
         # 标题头
         # 标题头（炭黑表头 + 顶部细亮黄装饰线，终末地标志性细节）
-        _ln = tk.Frame(table_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x")
+        _ln = tk.Frame(table_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.accent_line", "#FFE600")))
         hdr_bg = tk.Frame(table_frame, bg=self.C_CARD_HDR, height=32)
         hdr_bg.pack(fill="x")
         hdr_bg.pack_propagate(False)
@@ -538,7 +567,7 @@ class App(SettingsUIMixin):
         col_hdr.grid_columnconfigure(0, weight=1)
         col_hdr.grid_columnconfigure(1, minsize=80)
         col_hdr.grid_columnconfigure(2, minsize=80)
-        _ln = tk.Frame(col_hdr, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.grid(row=1, column=0, columnspan=3, sticky="ew")
+        _ln = tk.Frame(col_hdr, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.grid(row=1, column=0, columnspan=3, sticky="ew"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.col_sep", "#E0E0E0")))
         tk.Label(col_hdr, text="商品名称", font=self.FONT_BOLD, bg=self.C_BG,
                  fg=self.C_TEXT, anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=4)
         tk.Label(col_hdr, text="总库存", font=self.FONT_BOLD, bg=self.C_BG,
@@ -584,14 +613,14 @@ class App(SettingsUIMixin):
         
         # ── 导出按钮 ──
         # ── 主操作区：唯一一级主按钮（页面第一视觉落点）──
-        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(2, 0))
+        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(2, 0)); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
                   kind='primary', font=(self.FONT[0], 14, 'bold'), width=24, height=3,
                   pack_side=None)
         self.export_btn.pack(pady=(14, 2))
         tk.Label(self.page_home, text="确认数据后再导出", font=(self.FONT[0], 7),
                  fg="#9E9E9E").pack(pady=(0, 4))
-        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(0, 2))
+        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(0, 2)); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
         
         # ── 状态栏 ──
         tk.Label(self.page_home, textvariable=self.status_text,
@@ -602,7 +631,7 @@ class App(SettingsUIMixin):
                                 highlightbackground=self.C_BORDER)
         self.result_frame.pack(fill="both", expand=True, padx=15, pady=(5,15))
         
-        _ln = tk.Frame(self.result_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x")
+        _ln = tk.Frame(self.result_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("result.accent_line", "#FFE600")))
         tk.Label(self.result_frame, text="2  计算结果", font=(self.FONT[0], 10, 'bold'),
                  bg=self.C_CARD_HDR, fg='#FFFFFF').pack(fill="x", pady=(0,0))
         
@@ -684,11 +713,12 @@ class App(SettingsUIMixin):
         provider = providers.get(active, {}) if isinstance(providers, dict) else {}
         model_name = provider.get('model', '') or active
         is_free = active == 'glm'
+        self._pill_is_free = is_free
         self.pill_frame.configure(bg=self.C_BG)
         self.pill_name.configure(text=model_name, bg=self.C_BG, fg=self.C_TEXT)
-        tag_bg = "#111111" if is_free else "#FFE600"
+        _pc = self.tc('pill.free' if is_free else 'pill.pro', {'bg': '#FFE600', 'fg': '#111111'})
         tag_text = "FREE" if is_free else "PRO"
-        self.pill_tag.configure(text=tag_text, bg=tag_bg, fg="#FFE600" if is_free else "#111111")
+        self.pill_tag.configure(text=tag_text, bg=_pc.get('bg', '#FFE600'), fg=_pc.get('fg', '#111111'))
 
     def _toggle_nav(self):
         if self.nav_frame.winfo_ismapped():
@@ -984,10 +1014,34 @@ class App(SettingsUIMixin):
         self._mk_btn(btn_frame, "稍后再说", dlg.destroy, kind='ghost',
                      font=self.FONT, width=12, pack_side="left", padx=5)
     
+    def tc(self, path, default=None):
+        """Token Resolver：读组件 token（'btn.primary.bg' → components.btn.primary.bg）、
+        装饰 token（'decor.topbar.bg' → decor.topbar.bg）或语义色（'C_BG'），缺省兜底"""
+        if path.startswith('C_'):
+            return getattr(self, path, default)
+        parts = path.split('.')
+        if parts and parts[0] == 'decor':
+            node = self._theme_spec.get('decor', {})
+            parts = parts[1:]
+        else:
+            node = self._theme_spec.get('components', {})
+        for part in parts:
+            if isinstance(node, dict) and part in node:
+                node = node[part]
+            else:
+                return default
+        return node
+
+    def _register_redraw(self, fn):
+        """注册主题重绘回调（_apply_theme 末尾统一执行）"""
+        if fn not in self._theme_redraws:
+            self._theme_redraws.append(fn)
+
     def _apply_theme(self, name):
-        """应用皮肤：更新类属性 + 递归刷新所有控件颜色"""
+        """应用皮肤：更新类属性 + 递归刷新所有控件颜色 + 重绘注册元素"""
         theme = THEMES.get(name, THEMES['机能黄白黑'])
         self._theme_name = name
+        self._theme_spec = _merge_theme(theme)
         
         # 窗口可能已在切换/关闭过程中销毁，walk 前先确认存活（防 TclError）
         try:
@@ -1118,6 +1172,13 @@ class App(SettingsUIMixin):
         if hasattr(self, 'tree'):
             self._update_ttk_theme(theme)
             self._refresh_tree_tags()
+        
+        # ── 重绘注册表（Canvas 装饰/按钮跟随主题）──
+        for fn in self._theme_redraws:
+            try:
+                fn()
+            except Exception:
+                pass
     
     def _update_ttk_theme(self, theme):
         """更新全部 ttk 控件颜色（Treeview, Combobox, Notebook, Scrollbar 等）"""
