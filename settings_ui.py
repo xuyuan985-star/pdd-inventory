@@ -38,13 +38,13 @@ class SettingsUIMixin:
         canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
 
         # ── 导出路径模块（浅灰白卡片容器）──
-        _m1 = tk.Frame(content, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        _m1 = tk.Frame(content, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         _m1.pack(fill="x", padx=20, pady=8)
-        self._lbl(_m1, text='导出路径', font=self.FONT_HEADING, bg=self.C_SURFACE,
+        self._lbl(_m1, text='导出路径', font=self.FONT_HEADING, bg=self.C_BG,
                  fg=self.C_SECONDARY).pack(pady=(12,2))
         self._lbl(_m1, text="Excel 导出文件的保存位置", font=(self.FONT[0], 8),
-                 fg=self.C_MUTED, bg=self.C_SURFACE).pack()
-        pf = tk.Frame(_m1, bg=self.C_SURFACE); pf.pack(pady=8, padx=20, fill='x')
+                 fg=self.C_MUTED, bg=self.C_BG).pack()
+        pf = tk.Frame(_m1, bg=self.C_BG); pf.pack(pady=8, padx=20, fill='x')
         self.export_path_var = tk.StringVar(self.win, value=self._get_export_path())
         _ep = tk.Entry(pf, textvariable=self.export_path_var, font=self.FONT, width=50,
                       relief='flat', bd=0, highlightthickness=1,
@@ -78,20 +78,20 @@ class SettingsUIMixin:
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
         # ── 识别列配置模块（浅灰白卡片容器）──
-        _m3 = tk.Frame(content, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        _m3 = tk.Frame(content, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         _m3.pack(fill="x", padx=20, pady=8)
-        self._lbl(_m3, text='识别列配置', font=self.FONT_HEADING, bg=self.C_SURFACE,
+        self._lbl(_m3, text='识别列配置', font=self.FONT_HEADING, bg=self.C_BG,
                  fg=self.C_SECONDARY).pack(pady=(12,2))
         self.col_status_var = tk.StringVar(self.win, value='')
         self._lbl(_m3, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE).pack()
-        col_btn_row = tk.Frame(_m3, bg=self.C_SURFACE); col_btn_row.pack(pady=8)
+                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack()
+        col_btn_row = tk.Frame(_m3, bg=self.C_BG); col_btn_row.pack(pady=8)
         self._mk_btn(col_btn_row, '🔍 探测全部列', self._probe_columns, kind='dark',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
         self._mk_btn(col_btn_row, '⚙ 配置识别列', self._config_columns, kind='dark',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
         self._lbl(_m3, textvariable=self.col_status_var,
-                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE).pack(pady=(0,10))
+                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(pady=(0,10))
 
         # ── 副模型（双模型验证用，🛡 勾选时生效）──
         sec_row = tk.Frame(content, bg=self.C_BG); sec_row.pack(pady=(4,2))
@@ -172,9 +172,9 @@ class SettingsUIMixin:
                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack()
 
         # 列勾选（可滚动）
-        canvas = tk.Canvas(dlg, bg=self.C_SURFACE, highlightthickness=0)
-        sb = tk.Scrollbar(dlg, orient="vertical", command=canvas.yview)
-        list_frame = tk.Frame(canvas, bg=self.C_SURFACE)
+        canvas = tk.Canvas(dlg, bg=self.C_BG, highlightthickness=0)
+        sb = ttk.Scrollbar(dlg, orient="vertical", command=canvas.yview)
+        list_frame = tk.Frame(canvas, bg=self.C_BG)
         list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=list_frame, anchor="nw", width=430)
         canvas.configure(yscrollcommand=sb.set)
@@ -187,8 +187,8 @@ class SettingsUIMixin:
             var = tk.BooleanVar(dlg, value=(c in selected_set))
             col_vars[c] = var
             tk.Checkbutton(list_frame, text=c, variable=var, font=(self.FONT[0], 8),
-                           bg=self.C_SURFACE, fg=self.C_TEXT,
-                           selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE,
+                           bg=self.C_BG, fg=self.C_TEXT,
+                           selectcolor=self.C_BG, activebackground=self.C_BG,
                            anchor="w").pack(fill="x", padx=8, pady=1)
 
         # 核心列映射
@@ -328,8 +328,8 @@ class SettingsUIMixin:
         canvas_frame = tk.Frame(parent, bg=self.C_BG)
         canvas_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
-        canvas = tk.Canvas(canvas_frame, height=220, highlightthickness=0)
-        scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        canvas = tk.Canvas(canvas_frame, height=220, highlightthickness=0, bg=self.C_BG)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
         self._settings_list_frame = tk.Frame(canvas, bg=self.C_BG)
 
         self._settings_list_frame.bind("<Configure>",
@@ -375,7 +375,10 @@ class SettingsUIMixin:
                 row = tk.Frame(self._settings_list_frame, bg=self.C_BG)
                 row.pack(fill="x", pady=1)
                 self._lbl(row, text=prod, font=self.FONT, width=22, anchor="w").pack(side="left")
-                spin = tk.Spinbox(row, from_=1, to=30, width=8, font=self.FONT)
+                spin = tk.Spinbox(row, from_=1, to=30, width=8, font=self.FONT,
+                                  bg=self.C_BG, fg=self.C_TEXT, insertbackground=self.C_TEXT,
+                                  buttonbackground=self.C_BG, relief='flat', bd=0,
+                                  highlightthickness=1, highlightbackground="#EAEAEA")
                 spin.delete(0, "end")
                 spin.insert(0, str(current_settings.get(prod, 3)))
                 spin.pack(side="left", padx=5)
@@ -496,18 +499,18 @@ class SettingsUIMixin:
             cal = {'mode': 'ai', 'ai': {}}
 
         # ── AI 模式卡片（v1.4 起唯一模式，无模式选择器）──
-        ai_card = tk.Frame(parent, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        ai_card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
 
-        ai_status_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_SURFACE)
+        ai_status_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_BG)
         ai_status_lbl.pack(pady=5)
-        ai_coords_lbl = self._lbl(ai_card, text="", font=self.FONT, fg=self.C_PRIMARY, bg=self.C_SURFACE)
+        ai_coords_lbl = self._lbl(ai_card, text="", font=self.FONT, fg=self.C_PRIMARY, bg=self.C_BG)
         ai_coords_lbl.pack(pady=2)
-        ai_conf_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
+        ai_conf_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG)
         ai_conf_lbl.pack(pady=2)
-        ai_res_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE)
+        ai_res_lbl = self._lbl(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG)
         ai_res_lbl.pack(pady=2)
 
-        ai_btn_frame = tk.Frame(ai_card, bg=self.C_SURFACE)
+        ai_btn_frame = tk.Frame(ai_card, bg=self.C_BG)
         ai_btn_frame.pack(pady=8)
 
         def do_ai_locate():
@@ -607,13 +610,15 @@ class SettingsUIMixin:
         url_frame.pack(fill="x", padx=20, pady=(15,5))
         self._lbl(url_frame, text="后台地址:", font=self.FONT, width=10, anchor="e").pack(side="left")
         url_var = tk.StringVar(self.win, value=config.get('url', 'https://mms.pinduoduo.com/'))
-        tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40).pack(side="left", padx=5)
+        tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40, bg=self.C_BG,
+                 fg=self.C_TEXT, relief='flat', bd=0, highlightthickness=1,
+                 highlightbackground="#EAEAEA").pack(side="left", padx=5)
 
         acc_frame = tk.Frame(parent, bg=self.C_BG)
         acc_frame.pack(fill="x", padx=20, pady=5)
         self._lbl(acc_frame, text="登录账号:", font=self.FONT, width=10, anchor="e").pack(side="left")
         acc_var = tk.StringVar(self.win, value=config.get('account', ''))
-        acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED)
+        acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED, bg=self.C_BG)
         acc_entry.pack(side="left", padx=5)
         def _ph_entry(entry, placeholder, var):
             def on_focus_in(e):
@@ -638,7 +643,7 @@ class SettingsUIMixin:
         pwd_frame.pack(fill="x", padx=20, pady=5)
         self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
         pwd_var = tk.StringVar(self.win, value=config.get('password', ''))
-        pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*" if config.get('password') else "")
+        pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*" if config.get('password') else "", bg=self.C_BG)
         pwd_entry.pack(side="left", padx=5)
         if not config.get('password'):
             pwd_entry.configure(fg=self.C_MUTED)
@@ -741,23 +746,23 @@ class SettingsUIMixin:
         for key, info in PRESET_PROVIDERS.items():
             cfg = providers.get(key, {}) if isinstance(providers, dict) else {}
             # 浅灰机能卡片（细黑边框 + 内边距）
-            card = tk.Frame(cards_frame, bg=self.C_SURFACE, highlightthickness=1,
+            card = tk.Frame(cards_frame, bg=self.C_BG, highlightthickness=1,
                             highlightbackground="#EAEAEA", bd=0)
             card.pack(fill="x", padx=4, pady=8)
             self._lbl(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
-                     bg=self.C_SURFACE, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))
+                     bg=self.C_BG, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))
 
             # API Key 行
-            kf = tk.Frame(card, bg=self.C_SURFACE)
+            kf = tk.Frame(card, bg=self.C_BG)
             kf.pack(fill="x", padx=12, pady=4)
             self._lbl(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
-                     bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
+                     bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             kv = tk.StringVar(self.win, value=cfg.get('api_key', ''))
             ke = _api_entry(kf, kv, show='*')
             ke.pack(side="left", padx=6)
             sv = tk.BooleanVar(self.win, value=False)
-            tk.Checkbutton(kf, text='显示', variable=sv, bg=self.C_SURFACE, fg=self.C_TEXT,
-                          selectcolor=self.C_ACCENT, activebackground=self.C_SURFACE,
+            tk.Checkbutton(kf, text='显示', variable=sv, bg=self.C_BG, fg=self.C_TEXT,
+                          selectcolor=self.C_ACCENT, activebackground=self.C_BG,
                           bd=0, relief='flat', highlightthickness=0,
                           command=lambda e=ke, v=sv: e.configure(show='' if v.get() else '*')).pack(side="left")
             key_vars[key] = kv
@@ -777,10 +782,10 @@ class SettingsUIMixin:
             if cfg.get('model', '') and cfg['model'] not in history:
                 history.insert(0, cfg['model'])
 
-            mf = tk.Frame(card, bg=self.C_SURFACE)
+            mf = tk.Frame(card, bg=self.C_BG)
             mf.pack(fill="x", padx=12, pady=4)
             self._lbl(mf, text="模型名称:", font=self.FONT, width=9, anchor="e",
-                     bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
+                     bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             mv = tk.StringVar(self.win, value=cfg.get('model', ''))
             combo = ttk.Combobox(mf, textvariable=mv, values=history, font=(self.FONT[0], 8), width=47)
             combo.pack(side="left", padx=6)
@@ -789,25 +794,25 @@ class SettingsUIMixin:
             setattr(self, f'_api_history_{key}', history)
 
             # Endpoint 行（预填，可改，完全由用户控制）
-            ef = tk.Frame(card, bg=self.C_SURFACE)
+            ef = tk.Frame(card, bg=self.C_BG)
             ef.pack(fill="x", padx=12, pady=4)
             self._lbl(ef, text="Endpoint:", font=self.FONT, width=9, anchor="e",
-                     bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
+                     bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             ev = tk.StringVar(self.win, value=cfg.get('endpoint', info['endpoint']))
             _api_entry(ef, ev).pack(side="left", padx=6)
             setattr(self, f'_api_ep_{key}', ev)
 
             # 豆包专属：自定义推理接入点（可选）
             if key == 'doubao':
-                cef = tk.Frame(card, bg=self.C_SURFACE)
+                cef = tk.Frame(card, bg=self.C_BG)
                 cef.pack(fill="x", padx=12, pady=4)
                 self._lbl(cef, text="推理接入点:", font=self.FONT, width=9, anchor="e",
-                         bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
+                         bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
                 cev = tk.StringVar(self.win, value=cfg.get('custom_endpoint', ''))
                 _api_entry(cef, cev).pack(side="left", padx=6)
                 setattr(self, f'_api_ce_{key}', cev)
                 self._lbl(cef, text="如 ep-xxx，留空则用默认", font=(self.FONT[0], 7),
-                         fg=self.C_MUTED, bg=self.C_SURFACE).pack(side="left")
+                         fg=self.C_MUTED, bg=self.C_BG).pack(side="left")
 
         def save_all():
             import json

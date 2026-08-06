@@ -974,10 +974,10 @@ class App(SettingsUIMixin):
                 bg=self.C_BG, fg=self.C_TEXT).pack(pady=(15,5))
         
         # 更新日志
-        log_frame = tk.Frame(dlg, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        log_frame = tk.Frame(dlg, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         log_frame.pack(fill="both", expand=True, padx=15, pady=5)
         log_text = tk.Text(log_frame, font=(self.FONT[0], 8), wrap="word", height=8,
-                          bg=self.C_SURFACE, fg=self.C_TEXT, relief="flat")
+                          bg=self.C_BG, fg=self.C_TEXT, relief="flat")
         log_text.insert("1.0", changelog)
         log_text.configure(state="disabled")
         log_text.pack(fill="both", expand=True, padx=5, pady=5)
@@ -1204,7 +1204,7 @@ class App(SettingsUIMixin):
         style.configure('.',
             background=theme['C_BG'],
             foreground=theme['C_TEXT'],
-            fieldbackground=theme['C_SURFACE'],
+            fieldbackground=theme['C_BG'],
             troughcolor=theme['C_BG'],
             bordercolor=theme['C_BORDER'],
             lightcolor=theme['C_BG'],
@@ -1229,16 +1229,16 @@ class App(SettingsUIMixin):
         style.map('Treeview.Heading',
             background=[('active', theme['C_SECONDARY'])])
         
-        # Combobox
+        # Combobox（白底统一：页面同色，边框区分输入区）
         style.configure('TCombobox',
-            fieldbackground=theme['C_SURFACE'],
-            background=theme['C_SURFACE'],
+            fieldbackground=theme['C_BG'],
+            background=theme['C_BG'],
             foreground=theme['C_TEXT'],
             arrowcolor=theme['C_TEXT'])
         style.map('TCombobox',
-            fieldbackground=[('readonly', theme['C_SURFACE'])],
+            fieldbackground=[('readonly', theme['C_BG'])],
             foreground=[('readonly', theme['C_TEXT'])],
-            background=[('readonly', theme['C_SURFACE'])])
+            background=[('readonly', theme['C_BG'])])
         
         # Notebook (设置里的标签栏)
         style.configure('TNotebook',
@@ -1668,7 +1668,7 @@ class App(SettingsUIMixin):
         
         # 地区勾选列表（可滚动，占剩余空间）
         canvas = tk.Canvas(dlg, bg=self.C_SURFACE, highlightthickness=0)
-        scrollbar = tk.Scrollbar(dlg, orient="vertical", command=canvas.yview)
+        scrollbar = ttk.Scrollbar(dlg, orient="vertical", command=canvas.yview)
         list_frame = tk.Frame(canvas, bg=self.C_SURFACE)
         list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=list_frame, anchor="nw", width=340)
