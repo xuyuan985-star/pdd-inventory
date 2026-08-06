@@ -169,7 +169,7 @@ class App(SettingsUIMixin):
         kind='tag'     → 亮黄底黑粗字（角标标签）
         返回 _CanvasBtn（模拟 Button 接口）。"""
         colors = self._btn_colors(kind)
-        h = height or 28
+        h = (height or 1) * 24 + 6  # height 按字符行高换算（24px/行）
         if width:
             w = width * 9
         else:
@@ -562,7 +562,7 @@ class App(SettingsUIMixin):
         btn_row.pack(fill="x", padx=10, pady=5)
         self._mk_btn(btn_row, "+ 加行", self._add_row, kind='ghost', pack_side="left")
         self._mk_btn(btn_row, "- 删行", self._del_row, kind='ghost', pack_side="left", padx=5)
-        self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='primary',
+        self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
                      font=(self.FONT[0], 9, 'bold'), pack_side="left", padx=15)
         self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='dark',
                      pack_side="left", padx=8)
@@ -575,18 +575,21 @@ class App(SettingsUIMixin):
         self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='text',
                      pack_side="right", padx=5)
         
-        # ── 当前地区（识别后自动显示）──
+        # ── 当前地区（识别后自动显示，次级信息：缩小变灰）──
         region_frame = tk.Frame(self.page_home)
-        region_frame.pack(pady=10)
-        tk.Label(region_frame, text="当前地区:", font=self.FONT, fg=self.C_MUTED).pack(side="left")
+        region_frame.pack(pady=4)
+        tk.Label(region_frame, text="当前地区:", font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
         tk.Label(region_frame, textvariable=self.region_var,
-                 font=self.FONT_BOLD, fg=self.C_PRIMARY).pack(side="left", padx=5)
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=4)
         
         # ── 导出按钮 ──
+        # ── 主操作区：唯一一级主按钮（页面第一视觉落点）──
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
-                  kind='primary', font=self.FONT_HEADING, width=20, height=2,
+                  kind='primary', font=(self.FONT[0], 14, 'bold'), width=24, height=3,
                   pack_side=None)
-        self.export_btn.pack(pady=10)
+        self.export_btn.pack(pady=(14, 2))
+        tk.Label(self.page_home, text="确认数据后点击导出", font=(self.FONT[0], 8),
+                 fg=self.C_MUTED).pack(pady=(0, 4))
         
         # ── 状态栏 ──
         tk.Label(self.page_home, textvariable=self.status_text,
