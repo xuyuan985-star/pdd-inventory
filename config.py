@@ -30,12 +30,12 @@ THEMES = {
         "components": {
             "on_accent": "#FFFFFF", "on_primary": "#FFFFFF",
             "btn": {
-                "corner": 3,
-                "primary": {"bg": "#2563EB", "fg": "#FFFFFF", "edge": "#1D4ED8", "bg_hover": "#3B82F6"},
+                "corner": 2,
+                "primary": {"bg": "#2563EB", "fg": "#FFFFFF", "edge": "#2563EB", "bg_hover": "#3B82F6"},
                 "dark":    {"bg": "#1E293B", "fg": "#FFFFFF", "edge": "#1E293B", "bg_hover": "#334155"},
                 "ghost":   {"bg": "#FFFFFF", "fg": "#0F172A", "edge": "#CBD5E1", "bg_hover": "#F1F5F9"},
                 "text":    {"bg": "#FFFFFF", "fg": "#0F172A", "underline": "#2563EB"},
-                "tag":     {"bg": "#2563EB", "fg": "#FFFFFF", "edge": "#1D4ED8", "bg_hover": "#3B82F6"},
+                "tag":     {"bg": "#2563EB", "fg": "#FFFFFF", "edge": "#2563EB", "bg_hover": "#3B82F6"},
                 "disabled": {"bg": "#E2E8F0", "edge": "#CBD5E1", "fg": "#94A3B8"},
             },
             "table": {
@@ -84,12 +84,12 @@ THEMES = {
         "components": {
             "on_accent": "#FFFFFF", "on_primary": "#FFFFFF",
             "btn": {
-                "corner": 3,
-                "primary": {"bg": "#D97706", "fg": "#FFFFFF", "edge": "#B45309", "bg_hover": "#F59E0B"},
+                "corner": 2,
+                "primary": {"bg": "#D97706", "fg": "#FFFFFF", "edge": "#D97706", "bg_hover": "#F59E0B"},
                 "dark":    {"bg": "#292524", "fg": "#FFFFFF", "edge": "#292524", "bg_hover": "#44403C"},
                 "ghost":   {"bg": "#FEF7ED", "fg": "#1C1917", "edge": "#D6C3A8", "bg_hover": "#F5F0E8"},
                 "text":    {"bg": "#FEF7ED", "fg": "#1C1917", "underline": "#D97706"},
-                "tag":     {"bg": "#D97706", "fg": "#FFFFFF", "edge": "#B45309", "bg_hover": "#F59E0B"},
+                "tag":     {"bg": "#D97706", "fg": "#FFFFFF", "edge": "#D97706", "bg_hover": "#F59E0B"},
                 "disabled": {"bg": "#E7D8C4", "edge": "#D6C3A8", "fg": "#A8A29E"},
             },
             "table": {
@@ -138,12 +138,12 @@ THEMES = {
         "components": {
             "on_accent": "#111111", "on_primary": "#FFFFFF",
             "btn": {
-                "corner": 3,
-                "primary": {"bg": "#FFE600", "fg": "#111111", "edge": "#111111", "bg_hover": "#F2D500"},
+                "corner": 2,
+                "primary": {"bg": "#FFE600", "fg": "#111111", "edge": "#FFE600", "bg_hover": "#F2D500"},
                 "dark":    {"bg": "#111111", "fg": "#FFFFFF", "edge": "#111111", "bg_hover": "#262626"},
                 "ghost":   {"bg": "#FFFFFF", "fg": "#222222", "edge": "#EAEAEA", "bg_hover": "#F5F5F0"},
                 "text":    {"bg": "#FFFFFF", "fg": "#111111", "underline": "#FFE600"},
-                "tag":     {"bg": "#FFE600", "fg": "#111111", "edge": "#EAEAEA", "bg_hover": "#F2D500"},
+                "tag":     {"bg": "#FFE600", "fg": "#111111", "edge": "#FFE600", "bg_hover": "#F2D500"},
                 "disabled": {"bg": "#E8E8E3", "edge": "#C9C9C2", "fg": "#9E9E9E"},
             },
             "table": {
