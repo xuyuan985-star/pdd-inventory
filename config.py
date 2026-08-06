@@ -153,8 +153,10 @@ THEMES = {
             },
             "pill": {
                 "bg": "#FFFFFF", "fg": "#111111",
-                "free": {"bg": "#111111", "fg": "#FFE600", "edge": "#111111"},
-                "pro":  {"bg": "#FFE600", "fg": "#111111", "edge": "#111111"},
+                # FREE 亮黄底（免费/入门）、PRO 深黑底（专业）——与极简白/暖一致：
+                # FREE 用亮色可读，避免黑底黄字在深色背景下看不清（v1.4 修复）
+                "free": {"bg": "#FFE600", "fg": "#111111", "edge": "#111111"},
+                "pro":  {"bg": "#111111", "fg": "#FFE600", "edge": "#111111"},
             },
             "field": {"normal_bg": "#FFFFFF", "bad_bg": "#FFEBEE", "bad_fg": "#B71C1C"},
             "nav": {"rail": "#FFE600", "item_bg": "#FFFFFF", "item_fg": "#111111", "active_bg": "#F7F7F2"},

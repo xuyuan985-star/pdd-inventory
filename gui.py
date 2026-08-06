@@ -111,8 +111,10 @@ class _CanvasBtn:
             self._command = kw.pop('command')
         if 'bg' in kw:
             self._colors['bg'] = kw.pop('bg')
+            self._apply()
         if 'fg' in kw:
             self._colors['fg'] = kw.pop('fg')
+            self._apply()
         if 'edge' in kw:
             self._colors['edge'] = kw.pop('edge')
         if kw:
@@ -144,11 +146,15 @@ class _CanvasBtn:
         c = self._colors or {}
         if self._state == 'disabled':
             d = self.owner.tc('btn.disabled', {}) if self.owner else {}
-            self.canvas.itemconfigure(self.poly, fill=d.get('bg', '#E8E8E3'), outline=d.get('edge', '#C9C9C2'))
-            self.canvas.itemconfigure(self.text_item, fill=d.get('fg', '#9E9E9E'))
+            if self.poly is not None:
+                self.canvas.itemconfigure(self.poly, fill=d.get('bg', '#E8E8E3'), outline=d.get('edge', '#C9C9C2'))
+            if self.text_item is not None:
+                self.canvas.itemconfigure(self.text_item, fill=d.get('fg', '#9E9E9E'))
         else:
-            self.canvas.itemconfigure(self.poly, fill=c.get('bg', '#FFE600'), outline=c.get('edge', c.get('bg', '#111111')))
-            self.canvas.itemconfigure(self.text_item, fill=c.get('fg', '#111111'))
+            if self.poly is not None:
+                self.canvas.itemconfigure(self.poly, fill=c.get('bg', '#FFE600'), outline=c.get('edge', c.get('bg', '#111111')))
+            if self.text_item is not None:
+                self.canvas.itemconfigure(self.text_item, fill=c.get('fg', '#111111'))
 
     def _click(self, e):
         if self._state != 'disabled' and self._command:
