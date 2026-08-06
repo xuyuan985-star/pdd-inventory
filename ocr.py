@@ -265,6 +265,29 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
     if not isinstance(providers_global, dict):
         providers_global = {}
 
+    # forced_model 可能属于其他 provider（如主模型 glm、副模型 qwen3.5-ocr）：
+    # 按模型名前缀推断所属 provider，切换到它的 endpoint/key——否则副模型请求
+    # 会发到主 provider 的 endpoint 报"模型不存在"（v1.4 修复，实测 glm 主+qwen-ocr 副报 1211）
+    if forced_model:
+        _fm = str(forced_model).strip().lower()
+        _fm_prov = None
+        if _fm.startswith('glm'):
+            _fm_prov = 'glm'
+        elif _fm.startswith(('qwen', 'qwen3', 'qwen-vl')):
+            _fm_prov = 'qwen'
+        elif _fm.startswith(('doubao', 'ep-')):
+            _fm_prov = 'doubao'
+        if _fm_prov and _fm_prov in providers_global and active != _fm_prov:
+            _alt = providers_global.get(_fm_prov, {}) or {}
+            if isinstance(_alt, dict) and (_alt.get('api_key') or _alt.get('model')):
+                active = _fm_prov
+                provider = _alt
+                endpoint = _alt.get('endpoint', '')
+                key = _alt.get('api_key', '') or os.environ.get(
+                    {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
+                model_name = forced_model or _alt.get('model', '')
+                use_responses = False
+
     if not key:
         raise RuntimeError(f"API Key 未设置 — 请在「API 管理」页面配置 {active} 的 Key")
 
@@ -558,6 +581,34 @@ def normalize_col_name(name) -> str:
     return s
 
 
+def _match_col_name(col: str, candidates: dict, norm_map: dict):
+    """列名匹配：先精确（normalize 后），失败用编辑距离≤2 + 长度差≤2 兜底。
+    全列模式下模型可能把列名抄错 1~2 字（实测'仓库预估总销售数'→'仓库预达总销数'、
+    '商家报价'→'商品报价'），精确匹配会漏字段 → 返回业务字段名或 None。
+    **name 字段永不参与模糊匹配**（'商品信息/商品名称/商品编码/商品报价'首2字相同
+    编辑距离≤2，模糊会误配核心商品名列），name 由调用方精确匹配。"""
+    _norm = normalize_col_name(col)
+    if _norm in norm_map and norm_map[_norm] != 'name':
+        return norm_map[_norm]
+    # 模糊兜底：与每个已配置列名比较，编辑距离小且长度接近的命中
+    best, best_d = None, 99
+    for _cfg_col, _field in norm_map.items():
+        if _field == 'name':
+            continue  # name 永不模糊匹配
+        if abs(len(_cfg_col) - len(_norm)) > 2:
+            continue
+        _d = _lev(_cfg_col, _norm)
+        # 只允许 ≤2 字差异（预估→预达、销售数→总销数）；
+        # 但前 3 字必须相同——「销售规格/销售日期」前3字是"销售规/销售日"，
+        # 与「销售区域」的"销售区"不同，不会误配；「仓库销售库存」前3字"仓库销"
+        # 与「仓库总库存」的"仓库总"不同，也不会误配（v1.4 收紧）
+        if _d <= 2 and _d < best_d:
+            if len(_cfg_col) >= 3 and len(_norm) >= 3 and _cfg_col[:3] != _norm[:3]:
+                continue
+            best, best_d = _field, _d
+    return best
+
+
 _SKU_ID_RE = None  # 延迟初始化（正则编译一次）
 
 
@@ -602,7 +653,12 @@ def map_columns_to_fields(row: dict, mapping: dict) -> dict:
     out = {'name': '', 'stock': '', 'sales': '', 'region': '', 'warehouse': '',
            'sku_id': '', '_raw': dict(row)}
     for col, val in row.items():
-        field = norm_map.get(normalize_col_name(col))
+        # name 列必须精确匹配（商品名是核心字段，模糊会误配"商品编码/商品报价"）；
+        # 其他字段允许编辑距离≤2 模糊（全列模式列名可能抄错 1~2 字，v1.4 修复）
+        _norm_col = normalize_col_name(col)
+        field = norm_map.get(_norm_col)
+        if field is None and _norm_col != normalize_col_name(mapping.get('name', '')):
+            field = _match_col_name(col, norm_map, norm_map)
         if field and field in ('name', 'stock', 'sales', 'region', 'warehouse'):
             out[field] = '' if val is None else str(val)
     # 商品信息列拆分：name + sku_id
@@ -666,7 +722,7 @@ def _write_ocr_debug(cols, rows, note=''):
 
 
 def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
-              table_bbox: dict = None) -> dict:
+              table_bbox: dict = None, prefer_general: bool = False) -> dict:
     """
     通用表格 OCR：识别 PDD 后台表格的任意列（不再局限于固定商品字段）。
 
@@ -739,7 +795,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
         max_tok = 4096 if _is_ocr else 2048  # glm-4.6v 有 reasoning 需更大预算；glm-4v-flash 由 _ocr_api_call 自动钳制到 1024；Qwen OCR 系列 4096
 
     content, _mdl = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model,
-                                 prefer_general=(columns is None))
+                                 prefer_general=prefer_general)
 
     # 解析：优先 {"columns","rows"} 结构，兜底纯数组
     text = content.strip()
@@ -822,6 +878,15 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     """
     from PIL import Image as PILImg
     import io as _io
+    # columns=None → 全列模式：用探测到的列清单（客户勾选列 或 all 全列），
+    # 符合"模型识别全表、程序端筛选"的设计（v1.4 修复）
+    if not columns:
+        try:
+            from utils import get_ocr_columns
+            _cc = get_ocr_columns()
+            columns = [c for c in (_cc.get('selected') or []) if c] or [c for c in (_cc.get('all') or []) if c]
+        except Exception:
+            columns = None
     if not columns or not row_bboxes:
         raise RuntimeError('row_split 缺少 columns/row_bboxes')
     _img = PILImg.open(image_path).convert('RGB')
@@ -909,12 +974,20 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     from utils import get_ocr_columns
     cfg = get_ocr_columns() if mapping is None else {'mapping': mapping, 'selected': columns}
     mapping = cfg.get('mapping') or {}
-    sel = [c for c in (columns or cfg.get('selected') or []) if c]
+    # 全列模式：columns=None → 模型识别整张表所有列，程序端按 mapping 筛选
+    # （设计初衷：不把勾选列丢给模型，模型只负责完整抄表）
+    if columns:
+        sel = [c for c in columns if c]
+    else:
+        sel = [c for c in (cfg.get('all') or []) if c]
+        if not sel:
+            sel = [c for c in (cfg.get('selected') or []) if c]
     if not sel:
         sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
 
     def _one(forced_model=None):
-        """单模型识别：行切分优先，失败回退整表（v1.4 与单模型路径一致）"""
+        """单模型识别：行切分优先，失败回退整表（v1.4 与单模型路径一致）。
+        全列模式（columns=None 时）：整表识别所有列，程序端后续按 mapping 筛选。"""
         if row_bboxes:
             try:
                 _r = ocr_table_row_split(image_path, columns=sel, table_bbox=table_bbox,
@@ -922,7 +995,7 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
                 return parse_items_generic(_r.get('rows') or [], mapping)
             except Exception:
                 pass  # 行切分失败回退整表
-        result = ocr_table(image_path, columns=sel, table_bbox=table_bbox,
+        result = ocr_table(image_path, columns=None, table_bbox=table_bbox,
                            forced_model=forced_model)
         return parse_items_generic(result.get('rows') or [], mapping)
 
@@ -961,13 +1034,18 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
         pn = _norm(item.get('name'))
         match = sec_by_name.get(pn) if pn else None
         # 主模型 name 单字误识别（如 结→丝）时精确匹配不上：
-        # 用编辑距离≤1 做近似配对，配对后标记低置信度提示用户复核
+        # 用编辑距离≤2 做近似配对（多字/串字场景，如"新鲜解火锅辣味"vs"新鲜火锅麻辣烫"），
+        # 配对后标记低置信度提示用户复核
         if not match and pn:
             for skey, sit in sec_by_name.items():
-                if abs(len(skey) - len(pn)) <= 1 and _lev(skey, pn) <= 1:
+                if abs(len(skey) - len(pn)) <= 2 and _lev(skey, pn) <= 2:
                     match = sit
                     break
         if not match:
+            # 主副模型都没配上：不静默保留串名——标记低置信，用户复核时能看到 ⚠
+            # （v1.4 修复：此前 continue 直接输出主模型串名，数据串行无提示）
+            item['_low_confidence'] = True
+            item['_name_unmatched'] = True
             continue
         if match and _norm(match.get('name')) != pn:
             item['_low_confidence'] = True

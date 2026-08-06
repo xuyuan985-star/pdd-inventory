@@ -2424,9 +2424,9 @@ class App(SettingsUIMixin):
                               row_bboxes=None):
         """
         通用列识别 → 业务字段 items（v1.3 主入口）。
-        读取客户勾选列配置，ocr_table 指定列识别，parse_items_generic 映射为
-        {name, stock, sales, region, warehouse, _raw} 供填充/计算/导出。
-        未配置勾选列时回退默认商品字段列。
+        **设计初衷（阿洋定）：模型识别整张表所有列 → 程序端按 mapping/勾选列筛选显示。**
+        因此 OCR 始终全列识别（columns=None），不把勾选列丢给模型；
+        parse_items_generic 按 mapping 取业务字段，_raw 保留全列原文供显示/导出时筛选。
         dual_verify=True 时走双模型交叉验证（ocr_dual_verify_generic）。
         row_bboxes（v1.4）：表格行级边界 [(top,bottom),...]，优先走行级切分识别
         （防整表乱编），失败自动回退整表。
@@ -2434,15 +2434,7 @@ class App(SettingsUIMixin):
         from ocr import ocr_table, parse_items_generic
         from utils import get_ocr_columns
         cfg = get_ocr_columns()
-        sel = [c for c in (cfg.get('selected') or []) if c]
-        if not sel:
-            sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
-        # 省份识别依赖：mapping 里 region 映射的列（如"销售区域"）即使未勾选也要识别，
-        # 否则 region 永远为空 → 当前地区识别不出来（v1.4 修复）
         _mapping = cfg.get('mapping') or {}
-        _region_col = _mapping.get('region')
-        if _region_col and _region_col not in sel:
-            sel = sel + [_region_col]
         if dual_verify:
             from ocr import ocr_dual_verify_generic
             from utils import get_secondary_model, get_api_config
@@ -2454,22 +2446,22 @@ class App(SettingsUIMixin):
                 from ocr import _ocr_dlog
                 _ocr_dlog(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
                 self.status_text.set(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
-            return ocr_dual_verify_generic(image_path, columns=sel,
-                                           mapping=cfg.get('mapping') or {},
+            return ocr_dual_verify_generic(image_path, columns=None,
+                                           mapping=_mapping,
                                            table_bbox=table_bbox,
                                            secondary_model=_sec,
                                            row_bboxes=row_bboxes)
         if row_bboxes:
             from ocr import ocr_table_row_split
             try:
-                result = ocr_table_row_split(image_path, columns=sel,
+                result = ocr_table_row_split(image_path, columns=None,
                                              table_bbox=table_bbox,
                                              row_bboxes=row_bboxes)
             except Exception:
                 # 行切分失败（rows 无效/API 异常）回退整表，保证识别不中断
-                result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
+                result = ocr_table(image_path, columns=None, table_bbox=table_bbox)
         else:
-            result = ocr_table(image_path, columns=sel, table_bbox=table_bbox)
+            result = ocr_table(image_path, columns=None, table_bbox=table_bbox)
         rows = result.get('rows') or []
         return parse_items_generic(rows, cfg.get('mapping') or {})
 
@@ -2497,11 +2489,14 @@ class App(SettingsUIMixin):
         # 填入数据
         detected_regions = set()
         low_conf_count = 0
+        name_unmatched_count = 0
         dual_degraded = False
         for i, item in enumerate(items):
             r = self.rows[i]
             # 双模型验证标记的低置信度商品：名称加 ⚠ 提示复核
             low_conf = item.get('_low_confidence', False)
+            if item.get('_name_unmatched'):
+                name_unmatched_count += 1
             if item.get('_dual_degraded'):
                 dual_degraded = True
             name_disp = item.get('name', '')
@@ -2524,6 +2519,8 @@ class App(SettingsUIMixin):
                 detected_regions.add(strip_region_suffix(region))
         if low_conf_count:
             self.status_text.set(f"⚠ {low_conf_count} 个商品双模型结果不一致，已取保守值，请重点核对")
+        elif name_unmatched_count:
+            self.status_text.set(f"⚠ {name_unmatched_count} 个商品双模型识别名称不一致，已标记请复核")
         elif dual_degraded:
             self.status_text.set("⚠ 双模型副模型识别失败，本次为单模型结果，请留意准确性")
         # 自动匹配地区
