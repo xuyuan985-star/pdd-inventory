@@ -3,7 +3,7 @@ PDD EZ — 补货排期助手
 客户看后台页面，输入库存和预估销量，自动算补货时间
 """
 
-import os, sys, threading
+import os, sys, threading, time
 from datetime import datetime
 
 from utils import get_base_dir, get_api_config, VERSION, version_newer
@@ -134,6 +134,12 @@ class _CanvasBtn:
 
     def _click(self, e):
         if self._state != 'disabled' and self._command:
+            # 防重入：Canvas 按钮同时绑了 item 级 tag_bind + widget 级 bind，
+            # 一次点击会触发 2 次；250ms 内只执行一次（防批量识别弹双对话框等）
+            now = time.time()
+            if now - getattr(self, '_last_click_ts', 0.0) < 0.25:
+                return
+            self._last_click_ts = now
             self._command()
 
     def _hover(self, e):
