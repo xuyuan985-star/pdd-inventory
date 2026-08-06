@@ -109,18 +109,42 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     active = api_cfg.get('active_provider', 'doubao')
     providers = api_cfg.get('providers', {})
     provider = (providers.get(active, {}) or {}) if isinstance(providers, dict) else {}
-    endpoint = provider.get('endpoint', 'https://ark.cn-beijing.volces.com/api/v3/chat/completions')
-    key = provider.get('api_key', '')
+    # 与 ocr.py 一致：key 支持 provider 配置 + 环境变量回退
+    key = provider.get('api_key', '') or os.environ.get(
+        {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
     if not key:
         raise RuntimeError('API Key 未设置')
 
     import requests as _req
+    endpoint = provider.get('endpoint', '')
+    # 与 ocr.py 一致的默认端点兜底（active 不同 provider 各自默认值）
+    if active == 'doubao':
+        if not endpoint:
+            endpoint = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
+    elif active == 'qwen':
+        if not endpoint:
+            endpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+    else:  # glm
+        if not endpoint:
+            endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
     use_responses = 'responses' in endpoint.lower()  # 大小写不敏感，与 ocr.py 一致
     # custom_endpoint（ep-xxx 推理接入点 ID）优先：ark 上 Doubao-Seed-2.1-pro 等产品名
     # 不是有效模型 ID（实测 404 InvalidEndpointOrModel.NotFound），与 ocr.py 逻辑一致
-    mdl = provider.get('custom_endpoint', '') or provider.get('model', 'Doubao-Seed-2.1-pro')
+    mdl = provider.get('custom_endpoint', '') or provider.get('model',
+        {'doubao': 'Doubao-Seed-2.1-pro', 'qwen': 'qwen3.5-omni-flash', 'glm': 'glm-4v-flash'}.get(active, ''))
     mdl_l = (mdl or '').lower()
     is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
+    # 与 ocr.py 一致：模型是 glm 但 endpoint 是官方阿里/豆包端点时，自动切回智谱端点+key
+    # （自定义代理 endpoint 含子串不误切，只认官方域名）
+    ep_l = endpoint.lower()
+    if is_glm and ('dashscope.aliyuncs.com' in ep_l or 'ark.cn-beijing.volces.com' in ep_l):
+        endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+        _glm = (providers.get('glm', {}) or {}) if isinstance(providers, dict) else {}
+        _glm_key = _glm.get('api_key', '') or os.environ.get('ZHIPU_API_KEY', '')
+        if not _glm_key:
+            raise RuntimeError('GLM API Key 未设置（当前模型为 glm 但端点/Key 是阿里/豆包）')
+        key = _glm_key
+        use_responses = False
     # glm-4v-flash 输出上限 1024；glm-4.6v 等有 reasoning 需要更大预算
     # 统一钳制避免 400（flash 超 1024 报错），同时保证 4.6v 的定位/OCR 有足够 token
     if mdl_l.startswith('glm-4v-flash') or mdl_l == 'glm-4v-flash':

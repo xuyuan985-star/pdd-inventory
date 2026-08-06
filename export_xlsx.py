@@ -110,7 +110,7 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
             break
     if not sel_cols:
         sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
-    headers = ['地区', '仓库'] + list(sel_cols) + ['可售卖天数', '补货状态', '建议补货量']
+    headers = ['地区', '仓库'] + list(sel_cols) + ['可售卖天数', '状态', '补货量']
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = styles['header_font']
@@ -127,10 +127,21 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
             raw = p.get('_raw') or {}
             vals = [_sanitize_cell(region), _sanitize_cell(p.get('warehouse', ''))]
             from ocr import strip_tail_noise  # 去「查看地址/查看」词条噪音（OCR 识别不稳定，导出层统一清）
+            # 名称列用解析后的干净 name（与 GUI 一致，不含 ID:xxx）；其余勾选列用原文
+            _name_col = None
+            try:
+                from utils import get_ocr_columns
+                _nm = (get_ocr_columns().get('mapping') or {}).get('name')
+                _name_col = _nm if _nm in sel_cols else None
+            except Exception:
+                _name_col = None
             for col in sel_cols:
-                v = raw.get(col)
-                if v is None or v == '':
-                    v = p.get(col, '')
+                if _name_col and col == _name_col:
+                    v = p.get('name', '')
+                else:
+                    v = raw.get(col)
+                    if v is None or v == '':
+                        v = p.get(col, '')
                 if isinstance(v, str):
                     v = strip_tail_noise(v)
                 vals.append(_sanitize_cell(v))

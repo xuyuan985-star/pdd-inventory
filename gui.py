@@ -49,6 +49,24 @@ def _validate_num_entry(p) -> bool:
         return False
 
 
+def _strip_name_decor(name: str) -> str:
+    """剥离 _fill_from_ocr 写入显示名时的装饰：
+    '⚠盐渍鞭炮笋 [烟台1仓]' → '盐渍鞭炮笋'。
+    ⚠ 为低置信前缀；[xxx] 为分仓库显示后缀。两者都可能进入 rows 供编辑/重算回读。"""
+    if not name:
+        return name
+    s = str(name)
+    # 剥离 ⚠ 前缀（可能有多个，如 ⚠⚠）
+    while s.startswith('⚠'):
+        s = s[1:]
+    # 剥离尾部 [仓库名] 后缀（仓库名不含方括号；[xxx] 中 xxx 也可能带空格）
+    import re as _re
+    m = _re.search(r'\s*\[[^\]]*\]\s*$', s)
+    if m:
+        s = s[:m.start()].rstrip()
+    return s
+
+
 class _CanvasBtn:
     """Canvas 自绘切角按钮（终末地机能风）：几何微切角、完全扁平、无渐变无浮雕。
     模拟 tk.Button 的 config/configure/cget/pack/destroy 接口，兼容现有调用。"""
@@ -867,7 +885,12 @@ class App(SettingsUIMixin):
         row['stock'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
         row['sales'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
         
-        # 加行后立即反映到识别结果表格（UI 输入卡已隐藏，表格即唯一展示）
+        # 加行后立即反映到识别结果表格（UI 输入卡已隐藏，表格即唯一展示）。
+        # 批量填充（_fill_from_ocr）期间 _suppress_auto_append=True，不排队重算——
+        # 否则 N 个商品排队 N 次 after(0, _recalc_from_rows)，回调在填充返回后执行，
+        # 全量混合数据会覆盖 cache[region_var]（最后省份），且 UI 反复全量重渲染卡顿（v1.4 修复）
+        if getattr(self, '_suppress_auto_append', False):
+            return
         if hasattr(self, 'tree') and self.tree.winfo_exists():
             self.win.after(0, self._recalc_from_rows)
     
@@ -1347,7 +1370,6 @@ class App(SettingsUIMixin):
                 'name': name, 'stock': stock,
                 'daily': daily, 'ratio': round(ratio, 1),
                 'days_left': round(ratio, 1),
-                'est_sales': int(round(daily * (shipping + _off))) if daily > 0 else 0,
                 'status': status, 'color': color, 'qty': qty,
                 '_row_idx': len(plans),  # 原始 rows 索引（筛选/排序后编辑仍回写正确行）
                 'warehouse': item.get('warehouse', ''),
@@ -1392,8 +1414,9 @@ class App(SettingsUIMixin):
         try:
             self.tree.configure(columns=display_cols)
             for col in display_cols:
-                # 数字/状态列加宽到 110，防"1109份"被截断成"110份"误导；名称列 260
-                width = 260 if col in ('商品名称', '商品') or '名称' in col else 110
+                # 数字/状态列加宽到 110，防"1109份"被截断成"110份"误导；
+                # 名称类列（商品信息/商品名称/商品等）260 宽防截断（v1.4 修复：默认列"商品信息"此前判不到）
+                width = 260 if col in ('商品信息', '商品名称', '商品') or '名称' in col or '商品' in col else 110
                 self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
                 self.tree.column(col, width=width, anchor="center")
         except Exception:
@@ -1479,6 +1502,32 @@ class App(SettingsUIMixin):
         self.active_region = region
         data = self.cache[region]
         self.region_var.set(region)
+        
+        # 同步重建 rows：切地区后 rows 必须对应当前地区缓存，否则用户编辑/刷新计算
+        # 会用上一地区的混合 rows 覆盖当前地区缓存（v1.4 修复 Bug#3）
+        try:
+            _items = data.get('items') or []
+            self._suppress_auto_append = True
+            try:
+                for row in self.rows:
+                    row['name'].set('')
+                    row['stock'].set('')
+                    row['sales'].set('')
+                    row['_raw'] = {}
+                while len(self.rows) < len(_items):
+                    self._add_row()
+                for i, it in enumerate(_items):
+                    if i >= len(self.rows):
+                        break
+                    r = self.rows[i]
+                    r['name'].set(it.get('name', ''))
+                    r['stock'].set(str(it.get('stock', '')))
+                    r['sales'].set(str(it.get('sales', '')))
+                    r['_raw'] = it.get('_raw') or {}
+            finally:
+                self._suppress_auto_append = False
+        except Exception:
+            pass  # 缓存 items 缺失时保持现状（只切显示）
         
         # 显示该地区的结果（v1.3 动态列 + 筛选：复用 _render_tree）
         self._render_tree(data['plans'])
@@ -1566,6 +1615,9 @@ class App(SettingsUIMixin):
             if not name:
                 skipped += 1
                 continue
+            # 剥离 _fill_from_ocr 写入的显示装饰（⚠低置信前缀 / [仓库]后缀），
+            # 保证计算/时效匹配/导出用干净原始 name（v1.4 修复）
+            name = _strip_name_decor(name)
             try:
                 stock = int(stock_s) if stock_s else 0
             except ValueError:
@@ -2397,7 +2449,8 @@ class App(SettingsUIMixin):
             return ocr_dual_verify_generic(image_path, columns=sel,
                                            mapping=cfg.get('mapping') or {},
                                            table_bbox=table_bbox,
-                                           secondary_model=_sec)
+                                           secondary_model=_sec,
+                                           row_bboxes=row_bboxes)
         if row_bboxes:
             from ocr import ocr_table_row_split
             try:
