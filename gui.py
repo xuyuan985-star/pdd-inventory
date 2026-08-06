@@ -1442,8 +1442,12 @@ class App(SettingsUIMixin):
                     # plans 里销量存 daily（_calc_from_items 没有 'sales' 键），
                     # 且 sales 原始值带单位（'78份'）——显示 _raw 原文更准确
                     row_vals.append(_raw.get(_c) or p.get('daily', '') or '')
+                elif _map.get(_c) == 'warehouse':
+                    # 仓库信息：用 parse 已过滤的 warehouse（strip_tail_noise 已去"查看地址"等词条），
+                    # 不用 _raw 原文——原文带词条噪音会显示成"烟台1仓 查看地址"
+                    row_vals.append(p.get('warehouse', '') or _raw.get(_c, '') or '')
                 else:
-                    # 其他勾选列（仓库信息/仓库销售库存等）：显示 OCR 原文
+                    # 其他勾选列（仓库销售库存等）：显示 OCR 原文
                     row_vals.append(_raw.get(_c, '') or '')
             iid = self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
             self._row_index_map[iid] = p.get('_row_idx', len(self._row_index_map))
@@ -2257,11 +2261,15 @@ class App(SettingsUIMixin):
         # 主线程 2 秒后无条件恢复窗口（符合设计：最小化最多 2 秒）。
         # 截图线程只负责截图+OCR，不参与窗口恢复——不依赖子线程 after，
         # 也不管截图是否卡住，窗口 2 秒必弹回来。
+        # 注意：截图函数 win.activate() 会把浏览器拉到前台，deiconify 后 PDD EZ
+        # 可能被浏览器盖住（看着像没恢复）→ 恢复时短暂置顶确保可见。
         def _auto_restore():
             try:
                 if self.win.state() == 'iconic':
                     self.win.deiconify()
-                    self.win.lift()
+                self.win.lift()
+                self.win.attributes('-topmost', True)
+                self.win.after(500, lambda: self.win.attributes('-topmost', False))
             except Exception:
                 pass
         try:
@@ -2285,7 +2293,11 @@ class App(SettingsUIMixin):
                 # 截图完成立即恢复窗口（OCR 可能耗时数秒，不必等）
                 try:
                     if self.win.state() == 'iconic':
-                        self.win.after(0, lambda: (self.win.deiconify(), self.win.lift()))
+                        self.win.after(0, lambda: (
+                            self.win.deiconify(),
+                            self.win.lift(),
+                            self.win.attributes('-topmost', True),
+                            self.win.after(500, lambda: self.win.attributes('-topmost', False))))
                 except Exception:
                     pass
                 
