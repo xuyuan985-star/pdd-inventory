@@ -1,5 +1,8 @@
 # PDD EZ v1.2 — Release 发布材料
 
+> ⚠️ **历史版本发布材料**（当前版本为 v1.4，见 README/CHANGELOG）。
+> 保留此文件仅作 v1.2 历史记录；v1.4 发布材料按当前 dist/ 产物生成。
+
 ## 1. GitHub Release 基本信息
 
 - **Tag**: `v1.2`
