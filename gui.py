@@ -306,7 +306,7 @@ class App(SettingsUIMixin):
         self._wh_filter = '全部仓库'       # 结果表"仓库筛选"（来自 OCR 仓库信息列）
         self._suppress_auto_append = False  # 清空输入时临时禁用自动加行
         self._batch_stop = threading.Event()  # 紧急停止信号
-        self.status_text = tk.StringVar(self.win, value="就绪 — 截图识别完成后，可直接在表格手动修改数据")
+        self.status_text = tk.StringVar(self.win, value="就绪‑识别后可直接编辑表格")
         self.regions = self._load_regions()
         first = list(self.regions.keys())[0] if self.regions else '（首次使用，截图后自动识别）'
         self.region_var = tk.StringVar(self.win, value=first)
@@ -579,7 +579,7 @@ class App(SettingsUIMixin):
         
         # 全局工具栏（页面最上方独立行，不属于任何卡片）
         btn_row = tk.Frame(self.page_home, bg=self.C_BG)
-        btn_row.pack(fill="x", padx=15, pady=(14, 8))
+        btn_row.pack(fill="x", padx=15, pady=(6, 4))
         self._mk_btn(btn_row, "+ 加行", self._add_row, kind='ghost', pack_side="left")
         self._mk_btn(btn_row, "- 删行", self._del_row, kind='ghost', pack_side="left", padx=5)
         self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
@@ -597,44 +597,35 @@ class App(SettingsUIMixin):
         
         # ── 当前地区（识别后自动显示，次级信息：缩小变灰）──
         region_frame = tk.Frame(self.page_home)
-        region_frame.pack(pady=4)
+        region_frame.pack(pady=2)
         tk.Label(region_frame, text="当前地区:", font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
         tk.Label(region_frame, textvariable=self.region_var,
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=4)
         
-        # ── 导出按钮 ──
-        # ── 主操作区：唯一一级主按钮（页面第一视觉落点）──
-        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(2, 0)); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
+        # ── 导出按钮（适度尺寸，上下留白压缩）──
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
-                  kind='primary', font=(self.FONT[0], 14, 'bold'), width=24, height=3,
+                  kind='primary', font=(self.FONT[0], 13, 'bold'), width=16, height=2,
                   pack_side=None)
-        self.export_btn.pack(pady=(14, 2))
+        self.export_btn.pack(pady=(6, 2))
         tk.Label(self.page_home, text="确认数据后再导出", font=(self.FONT[0], 7),
-                 fg="#9E9E9E").pack(pady=(0, 4))
-        _ln = tk.Frame(self.page_home, bg="#E0E0E0", height=1); _ln._skip_theme = True; _ln.pack(fill="x", padx=15, pady=(0, 2)); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
+                 fg="#9E9E9E").pack(pady=(0, 2))
         
-        # ── 状态栏 ──
+        # ── 状态栏（精简文案，与导出按钮间距收窄）──
         tk.Label(self.page_home, textvariable=self.status_text,
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(8,3))
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(2, 3))
         
-        # ── 结果表 ──
-        self.result_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR, highlightthickness=1,
-                                highlightbackground=self.C_BORDER)
+        # ── 结果表（纯炭黑卡片，无任何轮廓线）──
+        self.result_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR)
         self.result_frame._skip_theme = True  # 深色卡片：_walk_force 不刷白
-        self.result_frame.pack(fill="both", expand=True, padx=15, pady=(5,15))
+        self.result_frame.pack(fill="both", expand=True, padx=15, pady=(4, 10))
         self._register_redraw(lambda f=self.result_frame: f.configure(bg=self.tc('table.header_bg', '#1F1F1F')))
         
-        _ln = tk.Frame(self.result_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("result.accent_line", "#FFE600")))
         tk.Label(self.result_frame, text="识别结果", font=(self.FONT[0], 11, 'bold'),
                  bg=self.C_CARD_HDR, fg='#FFFFFF').pack(fill="x", pady=(0,0))
         
-        # 地区切换标签
+        # 地区切换标签（无初始占位文字，识别出多地区后动态生成）
         self.tab_frame = tk.Frame(self.result_frame)
-        self.tab_frame.pack(fill="x", padx=3, pady=(5,2))
-        
-        # 初始占位（深色卡片内：浅灰文字）
-        tk.Label(self.tab_frame, text="截图识别后此处显示地区标签",
-                 font=(self.FONT[0], 8), fg="#A0A0A0", bg=self.C_CARD_HDR).pack(side="left")
+        self.tab_frame.pack(fill="x", padx=3, pady=(2,0))
         
         columns = ("商品", "总库存", "总销量", "预估销量", "可售卖天数", "状态", "补货量")
         # 结果表放入带滚动条的容器（勾选列多时右侧列不再被截断）
@@ -642,31 +633,27 @@ class App(SettingsUIMixin):
         tree_frame._skip_theme = True
         tree_frame.pack(fill="both", expand=True, padx=3, pady=3)
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=15)
-        # 美化滚动条：细、低对比度深色（替换原生粗丑滚动条）
+        # clam 主题：Treeview rowheight 等样式可配置（原生 vista 主题 rowheight 失效）
         try:
-            _st = ttk.Style()
-            _st.theme_use('clam')  # clam 支持自定义滚动条配色
+            ttk.Style().theme_use('clam')
         except Exception:
             pass
-        try:
-            _st.configure('Pdd.Vertical.TScrollbar', background='#555555', troughcolor=self.C_CARD_HDR,
-                          bordercolor=self.C_CARD_HDR, arrowcolor='#999999',
-                          lightcolor='#555555', darkcolor='#555555',
-                          arrowsize=10, relief='flat', borderwidth=0)
-            _st.configure('Pdd.Horizontal.TScrollbar', background='#555555', troughcolor=self.C_CARD_HDR,
-                          bordercolor=self.C_CARD_HDR, arrowcolor='#999999',
-                          lightcolor='#555555', darkcolor='#555555',
-                          arrowsize=10, relief='flat', borderwidth=0)
-        except Exception:
-            pass
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview,
-                            style='Pdd.Vertical.TScrollbar')
-        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview,
-                            style='Pdd.Horizontal.TScrollbar')
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        # 自定义纤细深色滚动条：Canvas 自绘（8px 深色滑块，替换 ttk/原生粗滚动条）
+        self._vsb_canvas = tk.Canvas(tree_frame, width=9, bg=self.C_CARD_HDR, highlightthickness=0, bd=0)
+        self._vsb_canvas._skip_theme = True
+        self._hsb_canvas = tk.Canvas(tree_frame, height=9, bg=self.C_CARD_HDR, highlightthickness=0, bd=0)
+        self._hsb_canvas._skip_theme = True
+        self.tree.configure(yscrollcommand=self._on_tree_yscroll, xscrollcommand=self._on_tree_xscroll)
+        self._vsb_first, self._vsb_last = 0.0, 1.0
+        self._hsb_first, self._hsb_last = 0.0, 1.0
+        self.tree.bind('<Configure>', lambda e: (self._draw_vsb(), self._draw_hsb()))
+        self._vsb_canvas.bind('<Button-1>', self._click_vsb)
+        self._vsb_canvas.bind('<B1-Motion>', self._drag_vsb)
+        self._hsb_canvas.bind('<Button-1>', self._click_hsb)
+        self._hsb_canvas.bind('<B1-Motion>', self._drag_hsb)
         self.tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
+        self._vsb_canvas.grid(row=0, column=1, sticky="ns")
+        self._hsb_canvas.grid(row=1, column=0, sticky="ew")
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
         
@@ -712,9 +699,14 @@ class App(SettingsUIMixin):
         # 可编辑表格：双击前 3 列（商品/总库存/总销量）→ overlay Entry → 回写 rows → 重算
         self.tree.bind("<Double-1>", self._tree_edit_cell)
         
-        # Treeview 行高加大，避免计算结果条目上下拥挤
+        # Treeview 行高加大，避免计算结果条目上下拥挤；表头黑底白字（不依赖主题）
         style = ttk.Style()
         style.configure("Treeview", rowheight=28)
+        try:
+            style.configure("Treeview.Heading", background="#111111", foreground="#FFFFFF",
+                            relief="flat", borderwidth=0, padding=(6, 4))
+        except Exception:
+            pass
         
         self._apply_theme(self._theme_name)
         self._refresh_model_badge()
@@ -807,7 +799,7 @@ class App(SettingsUIMixin):
             messagebox.showerror("出错", msg)
     
     def _clear_error(self):
-        self.status_text.set("就绪 — 截图识别完成后，可直接在表格手动修改数据")
+        self.status_text.set("就绪‑识别后可直接编辑表格")
     
     def _auto_expand(self, row_count: int):
         """结果出来后自动展开窗口，动态测量确保 Treeview 可见，封顶屏幕 82%"""
@@ -2477,6 +2469,69 @@ class App(SettingsUIMixin):
             self._show_error(f"计算出错: {e}", popup=True)
             import traceback; traceback.print_exc()
     
+    def _on_tree_yscroll(self, first, last):
+        self._vsb_first = float(first); self._vsb_last = float(last)
+        self._draw_vsb()
+
+    def _on_tree_xscroll(self, first, last):
+        self._hsb_first = float(first); self._hsb_last = float(last)
+        self._draw_hsb()
+
+    def _draw_vsb(self):
+        """纤细深色纵向滚动条：3px 滑轨 + 深灰滑块"""
+        c = self._vsb_canvas
+        c.delete('all')
+        h = c.winfo_height()
+        if h <= 0:
+            return
+        c.create_rectangle(4, 0, 5, h, fill='#3A3A3A', outline='')  # 滑轨
+        y0 = self._vsb_first * h; y1 = self._vsb_last * h
+        if y1 - y0 >= 4:
+            c.create_rectangle(3, y0, 6, y1, fill='#5A5A5A', outline='')  # 滑块
+
+    def _draw_hsb(self):
+        c = self._hsb_canvas
+        c.delete('all')
+        w = c.winfo_width()
+        if w <= 0:
+            return
+        c.create_rectangle(0, 4, w, 5, fill='#3A3A3A', outline='')
+        x0 = self._hsb_first * w; x1 = self._hsb_last * w
+        if x1 - x0 >= 4:
+            c.create_rectangle(x0, 3, x1, 6, fill='#5A5A5A', outline='')
+
+    def _click_vsb(self, event):
+        self._scroll_vsb_to(event.y)
+
+    def _drag_vsb(self, event):
+        self._scroll_vsb_to(event.y)
+
+    def _scroll_vsb_to(self, y):
+        h = self._vsb_canvas.winfo_height()
+        if h <= 0:
+            return
+        total = self._vsb_last - self._vsb_first
+        if total <= 0:
+            return
+        frac = y / h
+        self.tree.yview_moveto(max(0.0, min(1.0, frac - total / 2)))
+
+    def _click_hsb(self, event):
+        self._scroll_hsb_to(event.x)
+
+    def _drag_hsb(self, event):
+        self._scroll_hsb_to(event.x)
+
+    def _scroll_hsb_to(self, x):
+        w = self._hsb_canvas.winfo_width()
+        if w <= 0:
+            return
+        total = self._hsb_last - self._hsb_first
+        if total <= 0:
+            return
+        frac = x / w
+        self.tree.xview_moveto(max(0.0, min(1.0, frac - total / 2)))
+
     def _tree_edit_cell(self, event):
         """双击识别结果表格前 3 列（商品/总库存/总销量）→ overlay Entry 编辑 → 回写 rows → 重算"""
         iid = self.tree.identify_row(event.y)
