@@ -308,8 +308,8 @@ class App(SettingsUIMixin):
         self._batch_stop = threading.Event()  # 紧急停止信号
         self.status_text = tk.StringVar(self.win, value="就绪｜确认数据后导出，识别结果表格可直接编辑，右键行可删除条目")
         self.regions = self._load_regions()
-        first = list(self.regions.keys())[0] if self.regions else '（首次使用，截图后自动识别）'
-        self.region_var = tk.StringVar(self.win, value=first)
+        # 当前地区由截图识别后确定；初始不预设配置表第一个地区（云南是时效配置，不是当前地区）
+        self.region_var = tk.StringVar(self.win, value='未识别')
         
         # 多地区缓存
         self.cache = {}  # {region: {'plans': [...], 'items': [...]}}
@@ -590,13 +590,17 @@ class App(SettingsUIMixin):
         tk.Checkbutton(btn_row, text="🛡 双模型", variable=self._single_dual_var,
                        font=(self.FONT[0], 8), bg=self.C_SURFACE, fg=self.C_MUTED,
                        selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE).pack(side="left", padx=10)
-        # 右组：截图识别 + 实时截图 + 当前地区（同一行最右）
-        tk.Label(btn_row, text="当前地区:", font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="right")
-        tk.Label(btn_row, textvariable=self.region_var,
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="right", padx=(0, 10))
+        # 右组：截图识别 + 实时截图
         self._mk_btn(btn_row, "截图识别", self._ocr_fill, kind='text', pack_side="right")
         self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='text',
                      pack_side="right", padx=5)
+        
+        # ── 当前地区（刷新计算按钮正下方一行，左对齐；识别后更新）──
+        region_line = tk.Frame(self.page_home, bg=self.C_BG)
+        region_line.pack(fill="x", padx=15, pady=(0, 2))
+        tk.Label(region_line, text="当前地区:", font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
+        tk.Label(region_line, textvariable=self.region_var,
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=(0, 4))
         
         # ── 导出按钮 + 单条合并状态行（导出正下方，不拆分）──
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
