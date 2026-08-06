@@ -53,14 +53,14 @@ class App(SettingsUIMixin):
     # Design system — New Minimalism / Flat Design
     C_PRIMARY = '#111111'      # 近黑（主标题/文字）
     C_SECONDARY = '#333333'    # 深灰（次级文字）
-    C_ACCENT = '#FFD400'       # 亮黄（accent / 高亮块）
+    C_ACCENT = '#FFE600'       # 亮柠檬黄（accent / 高亮块）
     C_BG = '#FFFFFF'           # 纯白背景
     C_SURFACE = '#F7F7F2'      # 米白浅灰（卡片/底纹）
     C_TEXT = '#111111'         # 近黑正文
     C_MUTED = '#6B6B6B'        # 中灰
     C_BORDER = '#111111'       # 黑色细分割线
     C_RED = '#DC2626'
-    C_YELLOW_BG = '#FFD400'    # 亮黄高亮块（配黑字）
+    C_YELLOW_BG = '#FFE600'    # 亮柠檬黄高亮块（配黑字）
     C_GREEN_BG = '#E8F5E9'
     C_RED_BG = '#FFEBEE'
     C_BLUE_LIGHT = '#FFF3B0'   # 浅黄（导航按钮/标签底，机能风）
@@ -68,7 +68,35 @@ class App(SettingsUIMixin):
     FONT_BOLD = ('Microsoft YaHei UI', 9, 'bold')
     FONT_TITLE = ('Microsoft YaHei UI', 14, 'bold')
     FONT_HEADING = ('Microsoft YaHei UI', 11, 'bold')
-    
+
+    def _mk_btn(self, parent, text, command=None, kind='primary', font=None,
+                width=None, height=None, padx=10, pady=3, pack_side=None, **pack_kw):
+        """机能风按钮：Frame 包边实现常显细描边（Tk Button highlight 无焦点不显示）。
+        kind='primary' → 柠檬黄底黑字 + 黑描边；kind='ghost' → 白底黑字 + 黄描边。
+        返回 Button；外层描边 Frame 由 pack_side/pack_kw 布局。"""
+        if kind == 'primary':
+            bg, fg, edge = self.C_ACCENT, '#111111', '#111111'
+        else:
+            bg, fg, edge = self.C_BG, '#111111', self.C_ACCENT
+        frame = tk.Frame(parent, bg=edge, bd=0, highlightthickness=0)
+        frame._skip_theme = True
+        inner = tk.Frame(frame, bg=bg, bd=0, highlightthickness=0)
+        inner._skip_theme = True
+        inner.pack(padx=1, pady=1)
+        btn = tk.Button(inner, text=text, relief='flat', bd=0, bg=bg, fg=fg,
+                        activebackground=bg, activeforeground=fg,
+                        font=font or self.FONT, cursor='hand2',
+                        width=width, height=height, **pack_kw.pop('btn_kw', {}))
+        if command is not None:
+            btn.config(command=command)
+        btn.pack(padx=padx, pady=pady)
+        btn._edge_frame = frame
+        if pack_side is not None:
+            frame.pack(side=pack_side, **pack_kw)
+        else:
+            frame.pack(**pack_kw)
+        return btn
+
     def __init__(self):
         # 任务栏图标：必须在 Tk() 之前设置，否则源码运行时显示 python 图标
         if sys.platform == 'win32':
@@ -291,16 +319,15 @@ class App(SettingsUIMixin):
                                  outline='', tags='deco')
             _deco.create_rectangle(w - 190, 10, w - 80, 32, fill='#111111', outline='',
                                    tags='deco')
-            _deco.create_text(w - 135, 21, text="V" + VERSION.upper(), fill='#FFD400',
+            _deco.create_text(w - 135, 21, text="V" + VERSION.upper(), fill='#FFE600',
                               font=(self.FONT[0], 9, 'bold'), tags='deco')
         _deco.bind('<Configure>', _redraw_deco)
         # 工具条（白底 + 黑色细分割线，按钮行）
         tool_bar = tk.Frame(self.win, bg=self.C_BG)
         tool_bar.pack(fill="x", padx=15, pady=(8, 2))
         tk.Frame(tool_bar, bg=self.C_BORDER, height=1).pack(fill="x", pady=(0, 6))
-        # ☰ 导航按钮（左侧）
-        tk.Button(tool_bar, text="☰ 导航", relief='flat', command=self._toggle_nav,
-                  font=(self.FONT[0], 9), bg=self.C_BLUE_LIGHT, fg=self.C_PRIMARY).pack(side="left")
+        # ☰ 导航按钮（幽灵：白底黄边）
+        self._mk_btn(tool_bar, "☰ 导航", self._toggle_nav, kind='ghost', pack_side="left")
         # 当前模型标签
         api_cfg = get_api_config()
         active = api_cfg.get('active_provider', 'doubao')
@@ -316,16 +343,16 @@ class App(SettingsUIMixin):
                                    fg=self.C_TEXT, bg=self.C_SURFACE)
         self.pill_name.pack(side="left", padx=(10,4), pady=4)
         self.pill_name._skip_theme = True
-        tag_bg = "#111111" if is_free else "#FFD400"
+        tag_bg = "#111111" if is_free else "#FFE600"
         tag_text = "FREE" if is_free else "PRO"
         self.pill_tag = tk.Label(self.pill_frame, text=tag_text, font=(self.FONT[0], 7, 'bold'),
-                                  fg="#FFD400" if is_free else "#111111", bg=tag_bg, padx=6)
+                                  fg="#FFE600" if is_free else "#111111", bg=tag_bg, padx=6)
         self.pill_tag.pack(side="left", padx=(0,8), pady=2)
         self.pill_tag._skip_theme = True
-        tk.Button(tool_bar, text="🏪 商家后台", relief='flat', command=self._open_backend,
-                  font=(self.FONT[0], 9), bg=self.C_PRIMARY, fg="#FFFFFF").pack(side="right", padx=5)
-        tk.Button(tool_bar, text="🔄 更新", relief='flat', command=self._run_updater,
-                  font=(self.FONT[0], 9), bg=self.C_ACCENT, fg="#111111").pack(side="right", padx=5)
+        self._mk_btn(tool_bar, "🏪 商家后台", self._open_backend, kind='ghost',
+                     pack_side="right", padx=5)
+        self._mk_btn(tool_bar, "🔄 更新", self._run_updater, kind='primary',
+                     pack_side="right", padx=5)
         
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
@@ -353,11 +380,11 @@ class App(SettingsUIMixin):
         table_frame.pack(fill="x", padx=15, pady=5)
         
         # 标题头
-        hdr_bg = tk.Frame(table_frame, bg=self.C_PRIMARY, height=32)
+        hdr_bg = tk.Frame(table_frame, bg=self.C_ACCENT, height=32)
         hdr_bg.pack(fill="x")
         hdr_bg.pack_propagate(False)
         tk.Label(hdr_bg, text="输入数据  —  照着 PDD 后台页面填写",
-                 font=self.FONT, fg='#FFFFFF', bg=self.C_PRIMARY).pack(side="left", padx=12, pady=4)
+                 font=self.FONT, fg='#111111', bg=self.C_ACCENT).pack(side="left", padx=12, pady=4)
         
         # 列头
         col_hdr = tk.Frame(table_frame, bg=self.C_BLUE_LIGHT)
@@ -386,23 +413,20 @@ class App(SettingsUIMixin):
         # 按钮行
         btn_row = tk.Frame(table_frame)
         btn_row.pack(fill="x", padx=10, pady=5)
-        tk.Button(btn_row, text="+ 加行", relief='flat', command=self._add_row,
-                  font=(self.FONT[0], 8)).pack(side="left")
-        tk.Button(btn_row, text="- 删行", relief='flat', command=self._del_row,
-                  font=(self.FONT[0], 8)).pack(side="left", padx=5)
-        tk.Button(btn_row, text="🔄 刷新计算", relief='flat', command=self._recalc_from_rows,
-                  font=(self.FONT[0], 9, 'bold'), bg=self.C_SECONDARY, fg="#FFFFFF").pack(side="left", padx=15)
-        tk.Button(btn_row, text="📋 批量识别", relief='flat', command=self._batch_scan,
-                  font=(self.FONT[0], 8), bg=self.C_ACCENT, fg="#111111").pack(side="left", padx=8)
+        self._mk_btn(btn_row, "+ 加行", self._add_row, kind='ghost', pack_side="left")
+        self._mk_btn(btn_row, "- 删行", self._del_row, kind='ghost', pack_side="left", padx=5)
+        self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='primary',
+                     font=(self.FONT[0], 9, 'bold'), pack_side="left", padx=15)
+        self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='primary',
+                     pack_side="left", padx=8)
         # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
         self._single_dual_var = tk.BooleanVar(self.win, value=True)
         tk.Checkbutton(btn_row, text="🛡 双模型", variable=self._single_dual_var,
                        font=(self.FONT[0], 8), bg=self.C_SURFACE, fg=self.C_MUTED,
                        selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE).pack(side="left", padx=10)
-        tk.Button(btn_row, text="截图识别", relief='flat', command=self._ocr_fill,
-                  font=(self.FONT[0], 8), bg="#FF9800", fg="#FFFFFF").pack(side="right")
-        tk.Button(btn_row, text="实时截图", relief='flat', command=self._live_screenshot,
-                  font=(self.FONT[0], 8), bg="#4CAF50", fg="#FFFFFF").pack(side="right", padx=5)
+        self._mk_btn(btn_row, "截图识别", self._ocr_fill, kind='ghost', pack_side="right")
+        self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='ghost',
+                     pack_side="right", padx=5)
         
         # ── 当前地区（识别后自动显示）──
         region_frame = tk.Frame(self.page_home)
@@ -412,10 +436,9 @@ class App(SettingsUIMixin):
                  font=self.FONT_BOLD, fg=self.C_PRIMARY).pack(side="left", padx=5)
         
         # ── 导出按钮 ──
-        self.export_btn = tk.Button(self.page_home, text="导出 Excel",
-                  font=self.FONT_HEADING, bg="#4CAF50", fg="#FFFFFF",
-                  width=20, height=2, relief='flat', highlightthickness=0,
-                  command=self._export, state="normal")
+        self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
+                  kind='primary', font=self.FONT_HEADING, width=20, height=2,
+                  pack_side=None)
         self.export_btn.pack(pady=10)
         
         # ── 状态栏 ──
@@ -427,8 +450,8 @@ class App(SettingsUIMixin):
                                 highlightbackground=self.C_BORDER)
         self.result_frame.pack(fill="both", expand=True, padx=15, pady=(5,15))
         
-        tk.Label(self.result_frame, text="计算结果", font=self.FONT_BOLD, bg=self.C_PRIMARY,
-                 fg='#FFFFFF').pack(fill="x", pady=(0,0))
+        tk.Label(self.result_frame, text="计算结果", font=self.FONT_BOLD, bg=self.C_ACCENT,
+                 fg='#111111').pack(fill="x", pady=(0,0))
         
         # 地区切换标签
         self.tab_frame = tk.Frame(self.result_frame)
@@ -510,9 +533,9 @@ class App(SettingsUIMixin):
         is_free = active == 'glm'
         self.pill_frame.configure(bg=self.C_SURFACE)
         self.pill_name.configure(text=model_name, bg=self.C_SURFACE, fg=self.C_TEXT)
-        tag_bg = "#111111" if is_free else "#FFD400"
+        tag_bg = "#111111" if is_free else "#FFE600"
         tag_text = "FREE" if is_free else "PRO"
-        self.pill_tag.configure(text=tag_text, bg=tag_bg, fg="#FFD400" if is_free else "#111111")
+        self.pill_tag.configure(text=tag_text, bg=tag_bg, fg="#FFE600" if is_free else "#111111")
 
     def _toggle_nav(self):
         if self.nav_frame.winfo_ismapped():
@@ -532,12 +555,18 @@ class App(SettingsUIMixin):
             ("🔗 后台", self.page_backend),
         ]
         for text, page in items:
-            btn = tk.Button(self.nav_frame, text=text, relief="flat",
+            _nf = tk.Frame(self.nav_frame, bg=self.C_ACCENT, bd=0, highlightthickness=0)
+            _nf._skip_theme = True
+            _ni = tk.Frame(_nf, bg=self.C_BG, bd=0, highlightthickness=0)
+            _ni._skip_theme = True
+            _ni.pack(padx=1, pady=1)
+            btn = tk.Button(_ni, text=text, relief="flat",
                            font=(self.FONT[0], 9), anchor="w", padx=12, pady=6,
-                           bg=self.C_SURFACE, fg=self.C_TEXT, activebackground=self.C_BLUE_LIGHT,
-                           command=lambda p=page: self._show_page(p))
+                           bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_BLUE_LIGHT,
+                           bd=0, command=lambda p=page: self._show_page(p))
             btn._page = page
             btn.pack(fill="x")
+            _nf.pack(fill="x")
             self.nav_buttons[text] = btn
         self._highlight_nav(self.page_home)
 
@@ -795,10 +824,10 @@ class App(SettingsUIMixin):
         
         btn_frame = tk.Frame(dlg, bg=self.C_BG)
         btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="立即更新", command=do_update,
-                 font=self.FONT_BOLD, bg=self.C_ACCENT, fg="#111111", width=12).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="稍后再说", command=dlg.destroy,
-                 font=self.FONT, bg=self.C_MUTED, fg="#FFFFFF", width=12).pack(side="left", padx=5)
+        self._mk_btn(btn_frame, "立即更新", do_update, kind='primary',
+                     font=self.FONT_BOLD, width=12, pack_side="left", padx=5)
+        self._mk_btn(btn_frame, "稍后再说", dlg.destroy, kind='ghost',
+                     font=self.FONT, width=12, pack_side="left", padx=5)
     
     def _apply_theme(self, name):
         """应用皮肤：更新类属性 + 递归刷新所有控件颜色"""
@@ -1202,12 +1231,10 @@ class App(SettingsUIMixin):
                  fg=self.C_MUTED).pack(side="left")
         for reg in sorted(self.cache.keys()):
             is_active = reg == self.active_region
-            bg = "#4CAF50" if is_active else self.C_BLUE_LIGHT
-            fg = "white" if is_active else self.C_TEXT
-            btn = tk.Button(self.tab_frame, text=reg, bg=bg, fg=fg,
-                           font=("微软雅黑", 8, "bold" if is_active else "normal"),
-                           command=lambda r=reg: self._switch_region(r))
-            btn.pack(side="left", padx=2)
+            self._mk_btn(self.tab_frame, reg, lambda r=reg: self._switch_region(r),
+                         kind='primary' if is_active else 'ghost',
+                         font=("微软雅黑", 8, "bold" if is_active else "normal"),
+                         pack_side="left", padx=2)
     
     def _switch_region(self, region):
         """切换到指定地区的缓存结果"""
@@ -1453,9 +1480,9 @@ class App(SettingsUIMixin):
                     self.win.after(0, lambda: self.export_btn.configure(state='normal'))
             threading.Thread(target=_batch_thread_wrapper, daemon=True).start()
         
-        tk.Button(bottom_frame, text="开始批量识别", command=start_batch,
-                  font=self.FONT_BOLD, bg=self.C_PRIMARY, fg="#FFFFFF",
-                  width=18, height=2).pack(pady=(10,0))
+        _sb = self._mk_btn(bottom_frame, "开始批量识别", start_batch, kind='primary',
+                           font=self.FONT_BOLD, width=18, height=2)
+        _sb._edge_frame.pack(pady=(10,0))
         
         dlg.transient(self.win)
         dlg.grab_set()
