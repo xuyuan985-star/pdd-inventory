@@ -520,6 +520,7 @@ class SettingsUIMixin:
 
         # ── AI 模式卡片（v1.4 起唯一模式，无模式选择器）──
         ai_card = tk.Frame(parent, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        ai_card._skip_theme = True
 
         ai_status_lbl = tk.Label(ai_card, text="", font=(self.FONT[0], 8), fg=self.C_TEXT, bg=self.C_SURFACE)
         ai_status_lbl.pack(pady=5)
@@ -765,6 +766,7 @@ class SettingsUIMixin:
             # 浅灰机能卡片（细黑边框 + 内边距）
             card = tk.Frame(cards_frame, bg=self.C_SURFACE, highlightthickness=1,
                             highlightbackground="#111111", bd=0)
+            card._skip_theme = True
             card.pack(fill="x", padx=4, pady=8)
             tk.Label(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
                      bg=self.C_SURFACE, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))
