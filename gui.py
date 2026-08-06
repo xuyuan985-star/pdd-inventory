@@ -1601,14 +1601,9 @@ class App(SettingsUIMixin):
         bottom_frame.pack(side="bottom", fill="x", padx=20, pady=(5,10))
         bottom_frame.pack_propagate(False)
 
-        # 选项横排（测试模式 + 双模型），避免纵向堆叠把按钮挤出可视区
+        # 选项横排（双模型），避免纵向堆叠把按钮挤出可视区
         opt_row = tk.Frame(bottom_frame, bg=self.C_BG)
         opt_row.pack(pady=(5,0))
-        test_var = tk.BooleanVar(dlg, value=False)
-        tk.Checkbutton(opt_row, text="🔍 测试模式",
-                      variable=test_var, font=(self.FONT[0], 8),
-                      bg=self.C_BG, fg=self.C_MUTED,
-                      selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left", padx=10)
         dual_var = tk.BooleanVar(dlg, value=True)  # 默认开双模型（v1.3：不在乎 token 成本，识别更准）
         tk.Checkbutton(opt_row, text="🛡 双模型验证（慢一倍，更准）",
                       variable=dual_var, font=(self.FONT[0], 8),
@@ -1644,22 +1639,19 @@ class App(SettingsUIMixin):
             if not selected:
                 messagebox.showwarning("未选择", "请至少选择一个地区", parent=dlg)
                 return
-            debug_mode = test_var.get()
-            # 测试模式：主线程创建 HUD
-            hud = None; hud_text = None
-            if debug_mode:
-                hud = tk.Toplevel(self.win)
-                hud.title("")
-                hud.overrideredirect(True)
-                hud.attributes('-topmost', True, '-alpha', 0.82)
-                hud.configure(bg='#0F172A')
-                sw_h, sh_h = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
-                hud.geometry(f"400x250+{sw_h-420}+30")
-                hud_text = tk.Text(hud, font=('Consolas', 9), bg='#0F172A', fg='#22D3EE',
-                                  wrap='word', relief='flat', borderwidth=0, padx=10, pady=10)
-                hud_text.pack(fill='both', expand=True)
-                hud_text.insert('end', '🔍 测试模式启动\n')
-                hud_text.see('end')
+            # HUD 实时日志窗（默认开启，替代原测试模式开关）：主线程创建
+            hud = tk.Toplevel(self.win)
+            hud.title("")
+            hud.overrideredirect(True)
+            hud.attributes('-topmost', True, '-alpha', 0.82)
+            hud.configure(bg='#0F172A')
+            sw_h, sh_h = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+            hud.geometry(f"400x250+{sw_h-420}+30")
+            hud_text = tk.Text(hud, font=('Consolas', 9), bg='#0F172A', fg='#22D3EE',
+                              wrap='word', relief='flat', borderwidth=0, padx=10, pady=10)
+            hud_text.pack(fill='both', expand=True)
+            hud_text.insert('end', '🔍 批量识别进行中…\n')
+            hud_text.see('end')
             # 先缓存所有 UI 值再销毁对话框（destroy 后访问控件会 TclError）
             _dual_mode = dual_var.get()
             dlg.destroy()
