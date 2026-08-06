@@ -51,19 +51,19 @@ def _validate_num_entry(p) -> bool:
 
 class App(SettingsUIMixin):
     # Design system — New Minimalism / Flat Design
-    C_PRIMARY = '#1E293B'      # Slate 800
-    C_SECONDARY = '#64748B'    # Slate 500
-    C_ACCENT = '#2563EB'       # Blue 600 — only accent
-    C_BG = '#FFFFFF'           # Pure white
-    C_SURFACE = '#F8FAFC'      # Slate 50
-    C_TEXT = '#0F172A'         # Slate 900
-    C_MUTED = '#94A3B8'        # Slate 400
-    C_BORDER = '#E2E8F0'       # Slate 200
+    C_PRIMARY = '#111111'      # 近黑（主标题/文字）
+    C_SECONDARY = '#333333'    # 深灰（次级文字）
+    C_ACCENT = '#FFD400'       # 亮黄（accent / 高亮块）
+    C_BG = '#FFFFFF'           # 纯白背景
+    C_SURFACE = '#F7F7F2'      # 米白浅灰（卡片/底纹）
+    C_TEXT = '#111111'         # 近黑正文
+    C_MUTED = '#6B6B6B'        # 中灰
+    C_BORDER = '#111111'       # 黑色细分割线
     C_RED = '#DC2626'
-    C_YELLOW_BG = '#FEF9C3'
-    C_GREEN_BG = '#DCFCE7'
-    C_RED_BG = '#FEE2E2'
-    C_BLUE_LIGHT = '#EFF6FF'
+    C_YELLOW_BG = '#FFD400'    # 亮黄高亮块（配黑字）
+    C_GREEN_BG = '#E8F5E9'
+    C_RED_BG = '#FFEBEE'
+    C_BLUE_LIGHT = '#FFF3B0'   # 浅黄（导航按钮/标签底，机能风）
     FONT = ('Microsoft YaHei UI', 9)
     FONT_BOLD = ('Microsoft YaHei UI', 9, 'bold')
     FONT_TITLE = ('Microsoft YaHei UI', 14, 'bold')
@@ -264,11 +264,42 @@ class App(SettingsUIMixin):
         # ── 全局热键 ──
         self.win.bind('<F9>', lambda e: self._emergency_stop())
         
-        # ── 顶部 ──
-        top_bar = tk.Frame(self.win)
-        top_bar.pack(fill="x", padx=15, pady=(15, 2))
+        # ── 顶部：亮黄通栏（机能风）──
+        top_bar = tk.Frame(self.win, bg=self.C_ACCENT)
+        top_bar.pack(fill="x")
+        # 标题装饰区：大标题 + 斜切几何块 + 页码角标（机能风）
+        _deco = tk.Canvas(top_bar, height=66, bg=self.C_ACCENT, highlightthickness=0)
+        _deco.pack(fill="x")
+        _deco._skip_theme = True  # 黄通栏是设计元素，主题切换不刷白
+        # 黑色粗体大标题（左侧固定）
+        _deco.create_text(22, 18, text="PDD EZ", anchor='w', fill='#111111',
+                          font=(self.FONT[0], 26, 'bold'))
+        _deco.create_text(23, 50, text="补货排期助手  ·  智能识别  ·  自动计算", anchor='w',
+                          fill='#333333', font=(self.FONT[0], 9))
+        # 右侧斜切几何块 + 页码角标：按窗口实际宽度动态绘制
+        def _redraw_deco(e):
+            try:
+                _deco.delete('deco')
+            except Exception:
+                return
+            w = e.width
+            if w < 200:
+                return
+            _deco.create_polygon(w - 360, 0, w - 60, 0, w - 360, 66, fill='#111111',
+                                 outline='', tags='deco')
+            _deco.create_polygon(w - 230, 0, w - 30, 0, w - 230, 66, fill='#333333',
+                                 outline='', tags='deco')
+            _deco.create_rectangle(w - 190, 10, w - 80, 32, fill='#111111', outline='',
+                                   tags='deco')
+            _deco.create_text(w - 135, 21, text="V" + VERSION.upper(), fill='#FFD400',
+                              font=(self.FONT[0], 9, 'bold'), tags='deco')
+        _deco.bind('<Configure>', _redraw_deco)
+        # 工具条（白底 + 黑色细分割线，按钮行）
+        tool_bar = tk.Frame(self.win, bg=self.C_BG)
+        tool_bar.pack(fill="x", padx=15, pady=(8, 2))
+        tk.Frame(tool_bar, bg=self.C_BORDER, height=1).pack(fill="x", pady=(0, 6))
         # ☰ 导航按钮（左侧）
-        tk.Button(top_bar, text="☰ 导航", relief='flat', command=self._toggle_nav,
+        tk.Button(tool_bar, text="☰ 导航", relief='flat', command=self._toggle_nav,
                   font=(self.FONT[0], 9), bg=self.C_BLUE_LIGHT, fg=self.C_PRIMARY).pack(side="left")
         # 当前模型标签
         api_cfg = get_api_config()
@@ -278,23 +309,23 @@ class App(SettingsUIMixin):
         bm = provider.get('model', '') or active
         is_free = active == 'glm'
         # 模型标识胶囊
-        self.pill_frame = tk.Frame(top_bar, bg=self.C_SURFACE)
+        self.pill_frame = tk.Frame(tool_bar, bg=self.C_SURFACE)
         self.pill_frame.pack(side="left", padx=12)
         self.pill_frame._skip_theme = True
         self.pill_name = tk.Label(self.pill_frame, text=bm, font=(self.FONT[0], 8, 'bold'),
                                    fg=self.C_TEXT, bg=self.C_SURFACE)
         self.pill_name.pack(side="left", padx=(10,4), pady=4)
         self.pill_name._skip_theme = True
-        tag_bg = "#10B981" if is_free else "#8B5CF6"
+        tag_bg = "#111111" if is_free else "#FFD400"
         tag_text = "FREE" if is_free else "PRO"
         self.pill_tag = tk.Label(self.pill_frame, text=tag_text, font=(self.FONT[0], 7, 'bold'),
-                                  fg="#FFFFFF", bg=tag_bg, padx=6)
+                                  fg="#FFD400" if is_free else "#111111", bg=tag_bg, padx=6)
         self.pill_tag.pack(side="left", padx=(0,8), pady=2)
         self.pill_tag._skip_theme = True
-        tk.Button(top_bar, text="🏪 商家后台", relief='flat', command=self._open_backend,
+        tk.Button(tool_bar, text="🏪 商家后台", relief='flat', command=self._open_backend,
                   font=(self.FONT[0], 9), bg=self.C_PRIMARY, fg="#FFFFFF").pack(side="right", padx=5)
-        tk.Button(top_bar, text="🔄 更新", relief='flat', command=self._run_updater,
-                  font=(self.FONT[0], 9), bg="#10B981", fg="#FFFFFF").pack(side="right", padx=5)
+        tk.Button(tool_bar, text="🔄 更新", relief='flat', command=self._run_updater,
+                  font=(self.FONT[0], 9), bg=self.C_ACCENT, fg="#111111").pack(side="right", padx=5)
         
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
@@ -362,7 +393,7 @@ class App(SettingsUIMixin):
         tk.Button(btn_row, text="🔄 刷新计算", relief='flat', command=self._recalc_from_rows,
                   font=(self.FONT[0], 9, 'bold'), bg=self.C_SECONDARY, fg="#FFFFFF").pack(side="left", padx=15)
         tk.Button(btn_row, text="📋 批量识别", relief='flat', command=self._batch_scan,
-                  font=(self.FONT[0], 8), bg="#8B5CF6", fg="#FFFFFF").pack(side="left", padx=8)
+                  font=(self.FONT[0], 8), bg=self.C_ACCENT, fg="#111111").pack(side="left", padx=8)
         # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
         self._single_dual_var = tk.BooleanVar(self.win, value=True)
         tk.Checkbutton(btn_row, text="🛡 双模型", variable=self._single_dual_var,
@@ -389,7 +420,7 @@ class App(SettingsUIMixin):
         
         # ── 状态栏 ──
         tk.Label(self.page_home, textvariable=self.status_text,
-                 font=(self.FONT[0], 8), fg="#64748B").pack(pady=(8,3))
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(8,3))
         
         # ── 结果表 ──
         self.result_frame = tk.Frame(self.page_home, bg=self.C_SURFACE, highlightthickness=1,
@@ -479,9 +510,9 @@ class App(SettingsUIMixin):
         is_free = active == 'glm'
         self.pill_frame.configure(bg=self.C_SURFACE)
         self.pill_name.configure(text=model_name, bg=self.C_SURFACE, fg=self.C_TEXT)
-        tag_bg = "#10B981" if is_free else "#8B5CF6"
+        tag_bg = "#111111" if is_free else "#FFD400"
         tag_text = "FREE" if is_free else "PRO"
-        self.pill_tag.configure(text=tag_text, bg=tag_bg, fg="#FFFFFF")
+        self.pill_tag.configure(text=tag_text, bg=tag_bg, fg="#FFD400" if is_free else "#111111")
 
     def _toggle_nav(self):
         if self.nav_frame.winfo_ismapped():
@@ -765,13 +796,13 @@ class App(SettingsUIMixin):
         btn_frame = tk.Frame(dlg, bg=self.C_BG)
         btn_frame.pack(pady=10)
         tk.Button(btn_frame, text="立即更新", command=do_update,
-                 font=self.FONT_BOLD, bg="#10B981", fg="#FFFFFF", width=12).pack(side="left", padx=5)
+                 font=self.FONT_BOLD, bg=self.C_ACCENT, fg="#111111", width=12).pack(side="left", padx=5)
         tk.Button(btn_frame, text="稍后再说", command=dlg.destroy,
                  font=self.FONT, bg=self.C_MUTED, fg="#FFFFFF", width=12).pack(side="left", padx=5)
     
     def _apply_theme(self, name):
         """应用皮肤：更新类属性 + 递归刷新所有控件颜色"""
-        theme = THEMES.get(name, THEMES['极简白'])
+        theme = THEMES.get(name, THEMES['机能黄白黑'])
         self._theme_name = name
         
         # 窗口可能已在切换/关闭过程中销毁，walk 前先确认存活（防 TclError）
