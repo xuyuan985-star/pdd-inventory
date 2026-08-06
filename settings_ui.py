@@ -413,11 +413,7 @@ class SettingsUIMixin:
         tk.Label(parent, text="点击卡片即时切换，自动保存偏好", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         cards_frame = tk.Frame(parent)
-        cards_frame.pack(fill="both", expand=True, padx=15, pady=10)
-        cards_frame.grid_columnconfigure(0, weight=1, uniform="card")
-        cards_frame.grid_columnconfigure(1, weight=1, uniform="card")
-        cards_frame.grid_rowconfigure(0, weight=1, uniform="card")
-        cards_frame.grid_rowconfigure(1, weight=1, uniform="card")
+        cards_frame.pack(fill="x", padx=15, pady=10)
 
         def select_theme(name):
             self._apply_theme(name)
@@ -425,14 +421,15 @@ class SettingsUIMixin:
             self.status_text.set(f"皮肤已切换为「{name}」")
             for child in cards_frame.winfo_children():
                 is_sel = getattr(child, '_skin_name', '') == name
-                child.configure(highlightbackground="#3B82F6" if is_sel else "#E2E8F0",
+                ac = THEMES.get(name, {}).get('C_ACCENT', '#3B82F6')
+                child.configure(highlightbackground=ac if is_sel else "#E2E8F0",
                                highlightthickness=2 if is_sel else 1)
                 for gc in child.winfo_children():
                     if isinstance(gc, tk.Frame):
                         for gcc in gc.winfo_children():
                             if isinstance(gcc, tk.Label) and gcc.cget('text') == '✓ 当前':
                                 if is_sel:
-                                    gcc.configure(text='✓ 当前', fg='#3B82F6')
+                                    gcc.configure(text='✓ 当前', fg=ac)
                                 else:
                                     gcc.configure(text='')
 
@@ -443,7 +440,7 @@ class SettingsUIMixin:
             card = tk.Frame(cards_frame, bg="#FFFFFF",
                            highlightbackground=ac if is_sel else "#E2E8F0",
                            highlightthickness=2 if is_sel else 1)
-            card.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
+            card.pack(fill="x", padx=4, pady=6)
             card._skin_name = name
             card._skip_theme = True
 
