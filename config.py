@@ -55,6 +55,8 @@ THEMES = {
         "C_MUTED": "#6B6B6B",
         "C_BORDER": "#111111",
         "C_RED": "#DC2626",
+        "C_BTN_BLUE": "#1E88E5",
+        "C_CARD_HDR": "#1F1F1F",
         "C_YELLOW_BG": "#FFE600",
         "C_GREEN_BG": "#E8F5E9",
         "C_RED_BG": "#FFEBEE",
