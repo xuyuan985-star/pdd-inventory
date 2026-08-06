@@ -1282,9 +1282,15 @@ class App(SettingsUIMixin):
             _col_cfg = get_ocr_columns()
             _sel_cols = [c for c in (_col_cfg.get('selected') or []) if c]
         except Exception:
+            _col_cfg = {}
             _sel_cols = []
         if not _sel_cols:
             _sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
+        # mapping 反查：列名 → 业务字段（渲染动态列时把 name/stock/sales 放回对应勾选列）
+        try:
+            _sel_cols_map = {v: k for k, v in ((_col_cfg.get('mapping') or {}).items()) if v}
+        except Exception:
+            _sel_cols_map = {}
 
         # 防御性转换：兼容字符串/None/含单位文本，避免 ValueError/TypeError（循环外定义避免重复建函数）
         def _to_int(v, default=0):
@@ -1345,6 +1351,7 @@ class App(SettingsUIMixin):
                 # 通用列原始数据：客户勾选列从 _raw 取原文显示
                 '_raw': item.get('_raw') or {},
                 '_sel_cols': _sel_cols,
+                '_sel_cols_map': _sel_cols_map,
             })
         
         # Sort
@@ -1413,16 +1420,27 @@ class App(SettingsUIMixin):
             tags = ()
             if p['color'] == 'red': tags = ('urgent',)
             elif p['color'] == 'yellow': tags = ('warning',)
-            # 固定 7 列：商品｜总库存｜总销量｜预估销量｜可售卖天数｜状态｜补货量
-            row_vals = [
-                p.get('name', '') or '',
-                p.get('stock', '') or '',
-                p.get('daily', '') if p.get('daily') else (p.get('sales', '') or ''),
-                p.get('est_sales', p.get('ratio', '')) or '',
-                p.get('days_left', p.get('ratio', '')) or '',
-                p.get('status', '') or '',
-                p.get('qty', '') or '',
-            ]
+            # 动态列渲染：display_cols = 勾选列 + 计算列，按列名逐列取值，
+            # 不再硬编码旧固定 7 列（旧版 name/stock/daily/est_sales 顺序与新勾选列对不上 → 串位）
+            _raw = p.get('_raw') or {}
+            _map = p.get('_sel_cols_map') or {}
+            row_vals = []
+            for _c in display_cols:
+                if _c == '可售卖天数':
+                    row_vals.append(p.get('days_left', p.get('ratio', '')) or '')
+                elif _c == '状态':
+                    row_vals.append(p.get('status', '') or '')
+                elif _c == '补货量':
+                    row_vals.append(p.get('qty', '') or '')
+                elif _map.get(_c) == 'name':
+                    row_vals.append(p.get('name', '') or '')
+                elif _map.get(_c) == 'stock':
+                    row_vals.append(p.get('stock', '') or '')
+                elif _map.get(_c) == 'sales':
+                    row_vals.append(p.get('sales', '') or '')
+                else:
+                    # 其他勾选列（仓库信息/仓库销售库存等）：显示 OCR 原文
+                    row_vals.append(_raw.get(_c, '') or '')
             iid = self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
             self._row_index_map[iid] = p.get('_row_idx', len(self._row_index_map))
     
@@ -2321,6 +2339,12 @@ class App(SettingsUIMixin):
         sel = [c for c in (cfg.get('selected') or []) if c]
         if not sel:
             sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
+        # 省份识别依赖：mapping 里 region 映射的列（如"销售区域"）即使未勾选也要识别，
+        # 否则 region 永远为空 → 当前地区识别不出来（v1.4 修复）
+        _mapping = cfg.get('mapping') or {}
+        _region_col = _mapping.get('region')
+        if _region_col and _region_col not in sel:
+            sel = sel + [_region_col]
         if dual_verify:
             from ocr import ocr_dual_verify_generic
             from utils import get_secondary_model, get_api_config
