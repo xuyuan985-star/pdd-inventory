@@ -2557,14 +2557,30 @@ class App(SettingsUIMixin):
             menu.grab_release()
 
     def _tree_edit_cell(self, event):
-        """双击识别结果表格前 3 列（商品/总库存/总销量）→ overlay Entry 编辑 → 回写 rows → 重算"""
+        """双击可编辑列（商品名/仓库总库存/仓库预估总销售数，由动态列 mapping 决定）
+        → overlay Entry 编辑 → 回写 rows → 重算。其他列（仓库信息/销售库存/计算列）只读。"""
         iid = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
         if not iid or not col_id:
             return
         col_idx = int(col_id[1:]) - 1
-        if col_idx > 2:  # 计算列（预估/天数/状态/补货）只读
+        # 动态列：按当前列名反查业务字段（旧版固定前3列映射在动态列下会错位）
+        try:
+            _cols = list(self.tree['columns'])
+            if col_idx < 0 or col_idx >= len(_cols):
+                return
+            _col_name = _cols[col_idx]
+            _map = getattr(self, '_tree_col_map', None)
+            if _map is None:
+                from utils import get_ocr_columns
+                _m = (get_ocr_columns().get('mapping') or {})
+                _map = {v: k for k, v in _m.items() if v}
+                self._tree_col_map = _map
+            _field = _map.get(_col_name)
+        except Exception:
             return
+        if _field not in ('name', 'stock', 'sales'):
+            return  # 非可编辑字段（仓库信息/销售库存/计算列）只读
         row_idx = getattr(self, '_row_index_map', {}).get(iid)
         if row_idx is None or row_idx >= len(self.rows):
             return
@@ -2572,7 +2588,7 @@ class App(SettingsUIMixin):
         if not bbox:
             return
         x, y, w, h = bbox
-        var = self.rows[row_idx][('name', 'stock', 'sales')[col_idx]]
+        var = self.rows[row_idx][_field]
         entry = tk.Entry(self.tree, font=self.FONT, relief='flat', bd=0,
                          highlightthickness=1, highlightbackground='#CCCCCC',
                          highlightcolor='#FFE600',
@@ -2593,7 +2609,7 @@ class App(SettingsUIMixin):
             except Exception:
                 return
             ok = True
-            if col_idx == 0:
+            if _field == 'name':
                 var.set(val)
             else:
                 ok = (val == '' or _validate_num_entry(val))
