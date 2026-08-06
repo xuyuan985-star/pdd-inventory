@@ -154,7 +154,9 @@ class SettingsUIMixin:
                 except Exception:
                     bbox = None
                 from ocr import ocr_table
-                result = ocr_table(shot, columns=None, table_bbox=bbox)
+                # 探测列名是"结构理解"任务（列名汇总），必须用通用视觉模型——
+                # OCR 专用模型只做文字提取不汇总列名，会返回文字定位结果（v1.4 修复）
+                result = ocr_table(shot, columns=None, table_bbox=bbox, prefer_general=True)
                 cols = result.get('columns') or []
                 if not cols:
                     self.win.after(0, lambda: self.col_status_var.set(
