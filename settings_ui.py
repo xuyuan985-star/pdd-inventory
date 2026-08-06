@@ -717,22 +717,23 @@ class SettingsUIMixin:
             'glm':     {'name': '智谱清言（GLM）',   'endpoint': 'https://open.bigmodel.cn/api/paas/v4/chat/completions'},
         }
 
-        tk.Label(parent, text="API 提供商管理", font=self.FONT_HEADING, bg=self.C_BG, fg=self.C_TEXT).pack(pady=(15,2))
+        tk.Label(parent, text="API 提供商管理", font=self.FONT_TITLE, bg=self.C_BG, fg=self.C_TEXT).pack(pady=(18,2))
         tk.Label(parent, text="每个提供商独立配置 Key 和模型名，数据仅保存在本机",
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack()
 
-        # 活跃提供商选择
+        # 活跃提供商选择（机能单选：选中圆点填充亮黄）
         active_frame = tk.Frame(parent, bg=self.C_BG)
-        active_frame.pack(fill="x", padx=20, pady=(12,5))
-        tk.Label(active_frame, text="当前使用:", font=self.FONT, bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
+        active_frame.pack(fill="x", padx=24, pady=(14,6))
+        tk.Label(active_frame, text="当前使用:", font=self.FONT_BOLD, bg=self.C_BG, fg=self.C_TEXT).pack(side="left", padx=(0,8))
         active_var = tk.StringVar(self.win, value=active)
         for key, info in PRESET_PROVIDERS.items():
             tk.Radiobutton(active_frame, text=info['name'], variable=active_var,
                           value=key, font=self.FONT, bg=self.C_BG, fg=self.C_TEXT,
-                          selectcolor=self.C_BG, activebackground=self.C_BG,
-                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=10)
+                          selectcolor=self.C_ACCENT, activebackground=self.C_BG,
+                          bd=0, relief='flat', highlightthickness=0,
+                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=12)
 
-        # 三张提供商卡片（带滚轮）
+        # 三张提供商卡片（浅灰机能卡片 + 细黑切角边框，带滚轮）
         canvas = tk.Canvas(parent, highlightthickness=0, bg=self.C_BG)
         scroll = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
         cards_frame = tk.Frame(canvas, bg=self.C_BG)
@@ -750,23 +751,36 @@ class SettingsUIMixin:
         model_vars = {}
         show_vars = {}
 
+        def _api_entry(parent, var, width=50, show=None):
+            """白底细黑切角边框输入框（终末地统一控件）"""
+            e = tk.Entry(parent, textvariable=var, font=(self.FONT[0], 8), width=width,
+                         show=show, relief='flat', bd=0,
+                         highlightthickness=1, highlightbackground="#111111",
+                         highlightcolor="#111111",
+                         bg=self.C_BG, fg=self.C_TEXT, insertbackground=self.C_TEXT)
+            return e
+
         for key, info in PRESET_PROVIDERS.items():
             cfg = providers.get(key, {}) if isinstance(providers, dict) else {}
-            card = tk.LabelFrame(cards_frame, text=f" {info['name']} ", font=self.FONT_BOLD,
-                                fg=self.C_PRIMARY, bg=self.C_BG, padx=10, pady=8)
-            card.pack(fill="x", pady=6)
+            # 浅灰机能卡片（细黑边框 + 内边距）
+            card = tk.Frame(cards_frame, bg=self.C_SURFACE, highlightthickness=1,
+                            highlightbackground="#111111", bd=0)
+            card.pack(fill="x", padx=4, pady=8)
+            tk.Label(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
+                     bg=self.C_SURFACE, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))
 
             # API Key 行
-            kf = tk.Frame(card, bg=self.C_BG)
-            kf.pack(fill="x", pady=3)
-            tk.Label(kf, text="API Key:", font=self.FONT, width=9, anchor="e", bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
+            kf = tk.Frame(card, bg=self.C_SURFACE)
+            kf.pack(fill="x", padx=12, pady=4)
+            tk.Label(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
+                     bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
             kv = tk.StringVar(self.win, value=cfg.get('api_key', ''))
-            ke = tk.Entry(kf, textvariable=kv, font=(self.FONT[0], 8), width=50, show='*',
-                         bg=self.C_SURFACE, fg=self.C_TEXT, insertbackground=self.C_TEXT)
-            ke.pack(side="left", padx=5)
+            ke = _api_entry(kf, kv, show='*')
+            ke.pack(side="left", padx=6)
             sv = tk.BooleanVar(self.win, value=False)
-            tk.Checkbutton(kf, text='显示', variable=sv, bg=self.C_BG, fg=self.C_TEXT,
-                          selectcolor=self.C_BG, activebackground=self.C_BG,
+            tk.Checkbutton(kf, text='显示', variable=sv, bg=self.C_SURFACE, fg=self.C_TEXT,
+                          selectcolor=self.C_ACCENT, activebackground=self.C_SURFACE,
+                          bd=0, relief='flat', highlightthickness=0,
                           command=lambda e=ke, v=sv: e.configure(show='' if v.get() else '*')).pack(side="left")
             key_vars[key] = kv
             show_vars[key] = sv
@@ -785,37 +799,37 @@ class SettingsUIMixin:
             if cfg.get('model', '') and cfg['model'] not in history:
                 history.insert(0, cfg['model'])
 
-            mf = tk.Frame(card, bg=self.C_BG)
-            mf.pack(fill="x", pady=3)
-            tk.Label(mf, text="模型名称:", font=self.FONT, width=9, anchor="e", bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
+            mf = tk.Frame(card, bg=self.C_SURFACE)
+            mf.pack(fill="x", padx=12, pady=4)
+            tk.Label(mf, text="模型名称:", font=self.FONT, width=9, anchor="e",
+                     bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
             mv = tk.StringVar(self.win, value=cfg.get('model', ''))
             combo = ttk.Combobox(mf, textvariable=mv, values=history, font=(self.FONT[0], 8), width=47)
-            combo.pack(side="left", padx=5)
+            combo.pack(side="left", padx=6)
             model_vars[key] = mv
             setattr(self, f'_api_combo_{key}', combo)
             setattr(self, f'_api_history_{key}', history)
 
             # Endpoint 行（预填，可改，完全由用户控制）
-            ef = tk.Frame(card, bg=self.C_BG)
-            ef.pack(fill="x", pady=3)
-            tk.Label(ef, text="Endpoint:", font=self.FONT, width=9, anchor="e", bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
+            ef = tk.Frame(card, bg=self.C_SURFACE)
+            ef.pack(fill="x", padx=12, pady=4)
+            tk.Label(ef, text="Endpoint:", font=self.FONT, width=9, anchor="e",
+                     bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
             ev = tk.StringVar(self.win, value=cfg.get('endpoint', info['endpoint']))
-            tk.Entry(ef, textvariable=ev, font=(self.FONT[0], 8), width=50,
-                    bg=self.C_SURFACE, fg=self.C_TEXT, insertbackground=self.C_TEXT).pack(side="left", padx=5)
+            _api_entry(ef, ev).pack(side="left", padx=6)
             setattr(self, f'_api_ep_{key}', ev)
 
             # 豆包专属：自定义推理接入点（可选）
             if key == 'doubao':
-                cef = tk.Frame(card, bg=self.C_BG)
-                cef.pack(fill="x", pady=3)
+                cef = tk.Frame(card, bg=self.C_SURFACE)
+                cef.pack(fill="x", padx=12, pady=4)
                 tk.Label(cef, text="推理接入点:", font=self.FONT, width=9, anchor="e",
-                         bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
+                         bg=self.C_SURFACE, fg=self.C_TEXT).pack(side="left")
                 cev = tk.StringVar(self.win, value=cfg.get('custom_endpoint', ''))
-                tk.Entry(cef, textvariable=cev, font=(self.FONT[0], 8), width=50,
-                        bg=self.C_SURFACE, fg=self.C_TEXT, insertbackground=self.C_TEXT).pack(side="left", padx=5)
+                _api_entry(cef, cev).pack(side="left", padx=6)
                 setattr(self, f'_api_ce_{key}', cev)
                 tk.Label(cef, text="如 ep-xxx，留空则用默认", font=(self.FONT[0], 7),
-                         fg=self.C_MUTED, bg=self.C_BG).pack(side="left")
+                         fg=self.C_MUTED, bg=self.C_SURFACE).pack(side="left")
 
         def save_all():
             import json
@@ -853,4 +867,4 @@ class SettingsUIMixin:
             self.status_text.set(f"API 配置已保存 — 当前: {PRESET_PROVIDERS[active_var.get()]['name']}")
 
         self._mk_btn(parent, "保存", save_all, kind='primary',
-                  font=self.FONT_BOLD, width=18).pack(pady=12)
+                  font=self.FONT_BOLD, width=18).pack_configure(pady=(16, 18))
