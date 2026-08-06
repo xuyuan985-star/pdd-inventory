@@ -206,13 +206,30 @@ def _read_settings():
 
 
 def _write_settings(s):
-    """写入 settings.json"""
-    import os
+    """写入 settings.json（原子替换 + 失败重试 + .bak 备份，防 Windows 文件锁丢配置）"""
+    import os, time
     path = os.path.join(get_base_dir(), 'settings.json')
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(s, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)  # 原子替换，防崩溃丢配置
+    # 写入前备份现有配置（杀毒/云同步短暂锁定时可恢复）
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as _f:
+                _bak = _f.read()
+            with open(path + '.bak', 'w', encoding='utf-8') as _f:
+                _f.write(_bak)
+    except Exception:
+        pass
+    # os.replace 原子替换；Windows 上目标被短暂锁定会抛 PermissionError → 重试 3 次
+    for _attempt in range(3):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as _e:
+            if _attempt >= 2:
+                raise  # 重试耗尽：显式抛给调用方提示，不静默吞（避免用户无感知丢设置）
+            time.sleep(0.2)
 
 
 def load_theme_pref() -> str:

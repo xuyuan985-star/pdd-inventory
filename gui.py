@@ -1679,10 +1679,13 @@ class App(SettingsUIMixin):
                             _f.write('[batch] 线程异常: ' + traceback.format_exc() + '\n')
                     except Exception:
                         pass
-                    self.win.after(0, lambda: self.status_text.set(f"❌ 批量识别异常: {str(_e)[:80]}"))
-                    self.win.after(0, self.win.deiconify)
-                    # 异常路径立即恢复导出按钮，不等 10 分钟 idle 兜底（result_queue 无 None 信号）
-                    self.win.after(0, lambda: self.export_btn.configure(state='normal'))
+                    try:
+                        self.win.after(0, lambda: self.status_text.set(f"❌ 批量识别异常: {str(_e)[:80]}"))
+                        self.win.after(0, self.win.deiconify)
+                        # 异常路径立即恢复导出按钮，不等 10 分钟 idle 兜底（result_queue 无 None 信号）
+                        self.win.after(0, lambda: self.export_btn.configure(state='normal'))
+                    except Exception:
+                        pass  # 主窗口可能已销毁/关闭，UI 恢复失败无妨（程序正在退出）
             threading.Thread(target=_batch_thread_wrapper, daemon=True).start()
         
         _sb = self._mk_btn(bottom_frame, "开始批量识别", start_batch, kind='primary',
@@ -2349,10 +2352,13 @@ class App(SettingsUIMixin):
         # 填入数据
         detected_regions = set()
         low_conf_count = 0
+        dual_degraded = False
         for i, item in enumerate(items):
             r = self.rows[i]
             # 双模型验证标记的低置信度商品：名称加 ⚠ 提示复核
             low_conf = item.get('_low_confidence', False)
+            if item.get('_dual_degraded'):
+                dual_degraded = True
             name_disp = item.get('name', '')
             if low_conf:
                 low_conf_count += 1
@@ -2373,6 +2379,8 @@ class App(SettingsUIMixin):
                 detected_regions.add(strip_region_suffix(region))
         if low_conf_count:
             self.status_text.set(f"⚠ {low_conf_count} 个商品双模型结果不一致，已取保守值，请重点核对")
+        elif dual_degraded:
+            self.status_text.set("⚠ 双模型副模型识别失败，本次为单模型结果，请留意准确性")
         # 自动匹配地区
         msg = f"识别完成 — {len(items)} 个商品，请核对后点计算"
         if detected_regions:
@@ -2519,7 +2527,15 @@ class App(SettingsUIMixin):
         entry.select_range(0, 'end')
         
         def _commit(*_a):
-            val = entry.get().strip()
+            # 防重入：destroy 可能触发二次 <FocusOut>，第二次 entry 已销毁，
+            # entry.get() 会抛 TclError（destroy 在 try 内、get 在 try 外）→ 加提交标志
+            if getattr(entry, '_committed', False):
+                return
+            entry._committed = True
+            try:
+                val = entry.get().strip()
+            except Exception:
+                return
             ok = True
             if col_idx == 0:
                 var.set(val)
