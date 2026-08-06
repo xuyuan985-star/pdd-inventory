@@ -243,14 +243,8 @@ class SettingsUIMixin:
             self.export_path_var.set(path)
 
     def _get_export_path(self):
-        import json
-        settings_file = os.path.join(get_base_dir(), 'settings.json')
-        try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                s = json.load(f)
-                return s.get('export_path', os.path.join(os.path.expanduser('~'), 'Desktop'))
-        except:
-            return os.path.join(os.path.expanduser('~'), 'Desktop')
+        from export_xlsx import _get_default_export_dir
+        return _get_default_export_dir()
 
     def _save_settings(self, dlg):
         import json, os as _os, tempfile

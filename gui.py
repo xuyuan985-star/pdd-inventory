@@ -194,7 +194,7 @@ class App(SettingsUIMixin):
         kind='text'    → 黑字 + 底部细黄下划线（文字型操作）
         kind='tag'     → 亮黄底黑粗字（角标标签）
         返回 _CanvasBtn（模拟 Button 接口）。"""
-        colors = self.tc(f'btn.{kind}', {}) if kind != 'text' else self.tc(f'btn.{kind}', {})
+        colors = self.tc(f'btn.{kind}', {})
         h = (height or 1) * 24 + 6  # height 按字符行高换算（24px/行）
         if width:
             w = width * 9
@@ -447,10 +447,7 @@ class App(SettingsUIMixin):
         # ── 全局热键 ──
         self.win.bind('<F9>', lambda e: self._emergency_stop())
         
-        # ── 顶部：亮黄通栏（机能风）──
-        top_bar = tk.Frame(self.win, bg=self.C_ACCENT)
-        top_bar.pack(fill="x")
-        # 标题装饰区：大标题 + 斜切几何块 + 页码角标（随主题 token）
+        # ── 顶部：亮黄通栏（机能风，随主题 token）──
         top_bar = tk.Frame(self.win, bg=self.tc('decor.topbar.bg', '#FFE600'))
         top_bar.pack(fill="x")
         top_bar._skip_theme = True  # 通栏色由重绘表按 decor.topbar 刷新，walk 不碰
@@ -570,16 +567,7 @@ class App(SettingsUIMixin):
         self.page_api = tk.Frame(self.content_frame, bg=self.C_BG)
         self._current_page = self.page_home
         
-        # ── 数据容器（隐藏：识别结果表承载显示与编辑，rows 仅存数据对象）──
-        table_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR)  # 不 pack（隐藏输入卡）
-        table_frame._skip_theme = True
-        self.table_area = tk.Frame(table_frame, bg=self.C_CARD_HDR)
-        self.table_area._skip_theme = True  # _walk_force 不刷白
-        self.table_area.grid_columnconfigure(0, weight=1)
-        self.table_area.grid_columnconfigure(1, minsize=80)
-        self.table_area.grid_columnconfigure(2, minsize=80)
-        
-        # 初始 3 行（数据对象，UI 隐藏）
+        # 初始 3 行数据对象（识别结果表承载显示/编辑，rows 仅存数据）
         for _ in range(3):
             self._add_row()
         
@@ -840,44 +828,11 @@ class App(SettingsUIMixin):
             self.win.update()  # 立即生效
     
     def _add_row(self):
+        """新增一行数据（UI 输入卡已隐藏，只维护 rows 数据对象；表格显示/编辑走识别结果表）"""
         row = {}
-        f = tk.Frame(self.table_area, bg=self.C_CARD_HDR)
-        f._skip_theme = True
-        f.pack(fill="x", pady=1)
-        f.grid_columnconfigure(0, weight=1)
-        f.grid_columnconfigure(1, minsize=80)
-        f.grid_columnconfigure(2, minsize=80)
-        
         row['name'] = tk.StringVar(self.win)
         row['stock'] = tk.StringVar(self.win)
         row['sales'] = tk.StringVar(self.win)
-        
-        # 主题感知的 Entry 样式（终末地扁平：白底细黑切角边框，无凹陷）
-        e_kwargs = dict(font=self.FONT, relief="flat", bd=0, highlightthickness=1,
-                        highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
-                        bg=self.C_BG, fg=self.C_TEXT, insertbackground=self.C_TEXT,
-                        selectbackground=self.C_SECONDARY, selectforeground='#FFFFFF')
-        
-        # 数字输入校验：只允许数字（含空串），非法输入即时标红
-        _bad_bg = '#FEE2E2'  # 浅红底提示非法
-
-        def _make_num_entry(var, col):
-            entry = tk.Entry(f, textvariable=var, width=10, justify="center", **e_kwargs)
-            entry.grid(row=0, column=col, padx=4, pady=2)
-            # 输入时校验：非法字符拒绝并标红，合法恢复
-            def _on_key(p):
-                ok = _validate_num_entry(p)
-                try:
-                    entry.configure(bg=self.C_SURFACE if ok else _bad_bg)
-                except Exception:
-                    pass
-                return True
-            entry.configure(validate='key', validatecommand=(self.win.register(_on_key), '%P'))
-            return entry
-
-        tk.Entry(f, textvariable=row['name'], **e_kwargs).grid(row=0, column=0, sticky="ew", padx=10, pady=2)
-        _make_num_entry(row['stock'], 1)
-        _make_num_entry(row['sales'], 2)
         
         self.rows.append(row)
         
@@ -1179,13 +1134,6 @@ class App(SettingsUIMixin):
         
         _walk_force(self.win, theme['C_BG'])
         
-        # 同步刷新设置窗口（如果打开着）
-        if hasattr(self, '_settings_dlg') and self._settings_dlg and self._settings_dlg.winfo_exists():
-            _walk_color(self._settings_dlg)
-            _walk_system(self._settings_dlg)
-            _walk_force(self._settings_dlg, theme['C_BG'])
-            self._settings_dlg.configure(bg=theme['C_BG'])
-        
         # ── ttk 皮肤 ──
         if hasattr(self, 'tree'):
             self._update_ttk_theme(theme)
@@ -1371,13 +1319,12 @@ class App(SettingsUIMixin):
                     qty = 0
             
             plans.append({
-                'name': name, 'sku': name, 'stock': stock,
+                'name': name, 'stock': stock,
                 'daily': daily, 'ratio': round(ratio, 1),
                 'days_left': round(ratio, 1),
                 'est_sales': int(round(daily * (shipping + _off))) if daily > 0 else 0,
                 'status': status, 'color': color, 'qty': qty,
                 '_row_idx': len(plans),  # 原始 rows 索引（筛选/排序后编辑仍回写正确行）
-                'stat_date': f'{today.month}.{today.day}',
                 'warehouse': item.get('warehouse', ''),
                 # 通用列原始数据：客户勾选列从 _raw 取原文显示
                 '_raw': item.get('_raw') or {},
@@ -1516,10 +1463,6 @@ class App(SettingsUIMixin):
             if len(self.rows) <= 1:
                 break
             self.rows.pop(idx)
-            # 同步删隐藏数据容器里的 UI 行（每行一个 Frame）
-            children = list(self.table_area.winfo_children())
-            if 0 <= idx < len(children):
-                children[idx].destroy()
         if hasattr(self, 'tree') and self.tree.winfo_exists():
             self._recalc_from_rows()
     
@@ -1796,7 +1739,6 @@ class App(SettingsUIMixin):
             sw, sh = 1920, 1080  # 兜底：屏幕探测失败用 FHD 默认，避免线程崩溃
         # 加载校准配置
         _cal = {}
-        _cal_mode = 'ai'  # v1.4 起只保留 AI 定位（旧 absolute/offset 已废弃）
         import json as _json
         try:
             with open(os.path.join(get_base_dir(), 'settings.json'), 'r', encoding='utf-8') as _f:
@@ -1807,43 +1749,42 @@ class App(SettingsUIMixin):
 
         # AI 自动定位：AI 模式下，批量识别启动时每次实时定位按钮坐标
         # （窗口位置/分辨率随时可能变化，坐标必须最新；定位失败时下方静默回退旧坐标）
-        if _cal_mode == 'ai':
-            now = time.time()
-            dlog("AI 自动定位页面元素...")
-            try:
-                import tempfile
-                from vision import ai_locate_elements
-                from utils import capture_pdd_screenshot
-                # 窗口截图定位：锁定商家后台窗口截图（自动前置），坐标加窗口偏移转全屏；
-                # 找不到后台窗口 → fallback 全屏（偏移 0），保持兼容
-                _shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_batch.png')
-                _pos = {}
-                capture_pdd_screenshot(_shot, _pos)
-                result = ai_locate_elements(_shot)
-                if result:
-                    _ox, _oy = _pos.get('left', 0), _pos.get('top', 0)
-                    import pyautogui as _pg_batch
-                    _sw, _sh = _pg_batch.size()
-                    _cal['ai'] = {
-                        'last_time': now,
-                        'dropdown': {'x': int(result['dropdown']['x']) + _ox, 'y': int(result['dropdown']['y']) + _oy},
-                        'query': {'x': int(result['query']['x']) + _ox, 'y': int(result['query']['y']) + _oy},
-                        'confidence': result['confidence'],
-                        'screen_width': _sw,
-                        'screen_height': _sh,
-                    }
-                    _cal['mode'] = 'ai'
-                    # 原子写回 settings.json，持久化 AI 定位结果（下次启动直接复用缓存）
-                    try:
-                        from utils import Config as _Cfg
-                        _full = _Cfg.load() or {}
-                        _full['calibrate'] = _cal
-                        _Cfg.save(_full)
-                    except Exception:
-                        pass
-                    dlog(f"AI 定位完成 置信度:{result['confidence']:.0%}")
-            except Exception:
-                pass  # 失败静默回退，用旧坐标继续
+        now = time.time()
+        dlog("AI 自动定位页面元素...")
+        try:
+            import tempfile
+            from vision import ai_locate_elements
+            from utils import capture_pdd_screenshot
+            # 窗口截图定位：锁定商家后台窗口截图（自动前置），坐标加窗口偏移转全屏；
+            # 找不到后台窗口 → fallback 全屏（偏移 0），保持兼容
+            _shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_batch.png')
+            _pos = {}
+            capture_pdd_screenshot(_shot, _pos)
+            result = ai_locate_elements(_shot)
+            if result:
+                _ox, _oy = _pos.get('left', 0), _pos.get('top', 0)
+                import pyautogui as _pg_batch
+                _sw, _sh = _pg_batch.size()
+                _cal['ai'] = {
+                    'last_time': now,
+                    'dropdown': {'x': int(result['dropdown']['x']) + _ox, 'y': int(result['dropdown']['y']) + _oy},
+                    'query': {'x': int(result['query']['x']) + _ox, 'y': int(result['query']['y']) + _oy},
+                    'confidence': result['confidence'],
+                    'screen_width': _sw,
+                    'screen_height': _sh,
+                }
+                _cal['mode'] = 'ai'
+                # 原子写回 settings.json，持久化 AI 定位结果（下次启动直接复用缓存）
+                try:
+                    from utils import Config as _Cfg
+                    _full = _Cfg.load() or {}
+                    _full['calibrate'] = _cal
+                    _Cfg.save(_full)
+                except Exception:
+                    pass
+                dlog(f"AI 定位完成 置信度:{result['confidence']:.0%}")
+        except Exception:
+            pass  # 失败静默回退，用旧坐标继续
 
         # 获取有效坐标（v1.4 起只保留 AI 定位；绝对坐标模式已移除）
         def _get_coords():
@@ -1866,9 +1807,9 @@ class App(SettingsUIMixin):
 
         dd_coord, qq_coord = _get_coords()
         if dd_coord and qq_coord:
-            dlog(f"校准OK ({_cal_mode}): dd({dd_coord.get('x')},{dd_coord.get('y')}) q({qq_coord.get('x')},{qq_coord.get('y')})")
+            dlog(f"校准OK (ai): dd({dd_coord.get('x')},{dd_coord.get('y')}) q({qq_coord.get('x')},{qq_coord.get('y')})")
         else:
-            dlog(f"未校准（{_cal_mode}模式），请先到设置→校准")
+            dlog(f"未校准（ai模式），请先到设置→校准")
         # 打印当前API配置状态
         try:
             api_cfg = get_api_config()
@@ -1905,7 +1846,7 @@ class App(SettingsUIMixin):
                         dlog(f"1.✋ 页面状态={_st.get('state')}：{_st_hint}，跳过该省份")
                         continue
                 tm_x = tm_y = None
-                pos = locate_element(sp, 'region_dropdown', method='template', threshold=0.80)
+                pos = locate_element(sp, 'region_dropdown', threshold=0.80)
                 if pos:
                     tm_x, tm_y = pos[0], pos[1]
                     # 点击偏移比例制：90px 相对 1920 参考宽度，按当前分辨率缩放
@@ -2025,7 +1966,7 @@ class App(SettingsUIMixin):
                 # 4. 找查询按钮
                 if qq_coord:
                     qx, qy = qq_coord['x'], qq_coord['y']
-                    dlog(f"4.{_cal_mode}坐标({qx},{qy})")
+                    dlog(f"4.ai坐标({qx},{qy})")
                 else:
                     dlog("4.⚠ 未校准查询按钮，跳过"); continue
                 pyautogui.click(qx, qy)

@@ -4,7 +4,7 @@ PDD 后台截图 OCR 识别
 输出：[{name, stock, sales}, ...]
 """
 
-import base64, json, os, sys
+import base64, json, os
 
 import requests
 from utils import get_api_config, get_base_dir
