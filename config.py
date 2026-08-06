@@ -26,23 +26,6 @@ THEMES = {
         "C_RED_BG": "#FEE2E2",
         "C_BLUE_LIGHT": "#EFF6FF",
     },
-    "极简墨": {
-        "label": "极简墨",
-        "desc": "墨灰底·浅灰字·白线",
-        "C_PRIMARY": "#64748B",
-        "C_SECONDARY": "#94A3B8",
-        "C_ACCENT": "#60A5FA",
-        "C_BG": "#1E293B",
-        "C_SURFACE": "#0F172A",
-        "C_TEXT": "#F1F5F9",
-        "C_MUTED": "#64748B",
-        "C_BORDER": "#334155",
-        "C_RED": "#EF4444",
-        "C_YELLOW_BG": "#3B2F00",
-        "C_GREEN_BG": "#052E16",
-        "C_RED_BG": "#450A0A",
-        "C_BLUE_LIGHT": "#1E293B",
-    },
     "极简暖": {
         "label": "极简暖",
         "desc": "暖杏底·褐字·金点缀",
@@ -59,6 +42,23 @@ THEMES = {
         "C_GREEN_BG": "#DCFCE7",
         "C_RED_BG": "#FEE2E2",
         "C_BLUE_LIGHT": "#F5F0E8",
+    },
+    "机能黄白黑": {
+        "label": "机能黄白黑",
+        "desc": "亮黄通栏·黑白分割·斜切机能",
+        "C_PRIMARY": "#111111",
+        "C_SECONDARY": "#333333",
+        "C_ACCENT": "#FFD400",
+        "C_BG": "#FFFFFF",
+        "C_SURFACE": "#F7F7F2",
+        "C_TEXT": "#111111",
+        "C_MUTED": "#6B6B6B",
+        "C_BORDER": "#111111",
+        "C_RED": "#DC2626",
+        "C_YELLOW_BG": "#FFD400",
+        "C_GREEN_BG": "#E8F5E9",
+        "C_RED_BG": "#FFEBEE",
+        "C_BLUE_LIGHT": "#FFF3B0",
     },
 }
 
@@ -84,8 +84,8 @@ def _write_settings(s):
 
 def load_theme_pref() -> str:
     """读取皮肤偏好，返回主题名"""
-    name = _read_settings().get('theme', '极简白')
-    return name if name in THEMES else '极简白'
+    name = _read_settings().get('theme', '机能黄白黑')
+    return name if name in THEMES else '机能黄白黑'
 
 
 def save_theme_pref(name: str):
