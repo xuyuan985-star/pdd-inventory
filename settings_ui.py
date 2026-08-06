@@ -15,9 +15,9 @@ class SettingsUIMixin:
 
     def _build_general_page(self):
         """通用设置：导出路径 + API配置"""
-        canvas = tk.Canvas(self.page_general, highlightthickness=0)
+        canvas = tk.Canvas(self.page_general, highlightthickness=0, bg=self.C_BG)
         scroll = ttk.Scrollbar(self.page_general, orient='vertical', command=canvas.yview)
-        content = tk.Frame(canvas)
+        content = tk.Frame(canvas, bg=self.C_BG)
         content.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
         wid = canvas.create_window((0, 0), window=content, anchor='nw')
         canvas.bind('<Configure>', lambda e: canvas.itemconfig(wid, width=e.width))
@@ -28,10 +28,20 @@ class SettingsUIMixin:
         canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _mw))
         canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
 
-        tk.Label(content, text='导出路径', font=self.FONT_HEADING).pack(pady=(15,5))
-        pf = tk.Frame(content); pf.pack(pady=8, padx=20, fill='x')
+        # ── 导出路径模块（浅灰白卡片容器）──
+        _m1 = tk.Frame(content, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        _m1.pack(fill="x", padx=20, pady=8)
+        tk.Label(_m1, text='导出路径', font=self.FONT_HEADING, bg=self.C_SURFACE,
+                 fg=self.C_SECONDARY).pack(pady=(12,2))
+        tk.Label(_m1, text="Excel 导出文件的保存位置", font=(self.FONT[0], 8),
+                 fg=self.C_MUTED, bg=self.C_SURFACE).pack()
+        pf = tk.Frame(_m1, bg=self.C_SURFACE); pf.pack(pady=8, padx=20, fill='x')
         self.export_path_var = tk.StringVar(self.win, value=self._get_export_path())
-        tk.Entry(pf, textvariable=self.export_path_var, font=self.FONT, width=50).pack(side='left')
+        _ep = tk.Entry(pf, textvariable=self.export_path_var, font=self.FONT, width=50,
+                      relief='flat', bd=0, highlightthickness=1,
+                      highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                      bg="#FFFFFF", fg=self.C_TEXT, insertbackground=self.C_TEXT)
+        _ep.pack(side='left')
         self._mk_btn(pf, '浏览', lambda: self._pick_export_path(None), kind='ghost', font=(self.FONT[0], 8), pack_side='left', padx=5)
         def open_export_dir():
             """打开导出目录；不存在/不可写时给出明确提示"""
@@ -51,25 +61,28 @@ class SettingsUIMixin:
             except OSError as e:
                 messagebox.showwarning("无法打开", f"打开文件夹失败：{e}", parent=self.win)
         self._mk_btn(pf, '打开文件夹', open_export_dir, kind='ghost', font=(self.FONT[0], 8), pack_side='left', padx=5)
-        self._mk_btn(content, '保存', lambda: self._save_settings(None), kind='primary', font=(self.FONT[0], 9, 'bold'), width=12).pack_configure(pady=(5,10))
+        self._mk_btn(_m1, '保存', lambda: self._save_settings(None), kind='primary', font=(self.FONT[0], 9, 'bold'), width=12).pack_configure(pady=(5,12))
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
         # ── 定位校准（AI 智能定位，v1.3 起唯一模式）──
         self._build_calibrate_tab(content)
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
-        # ── 识别列配置（v1.3 通用列：客户自主选择要识别的列）──
-        tk.Label(content, text='识别列配置', font=self.FONT_HEADING).pack(pady=(5,2))
+        # ── 识别列配置模块（浅灰白卡片容器）──
+        _m3 = tk.Frame(content, bg=self.C_SURFACE, highlightthickness=1, highlightbackground=self.C_BORDER)
+        _m3.pack(fill="x", padx=20, pady=8)
+        tk.Label(_m3, text='识别列配置', font=self.FONT_HEADING, bg=self.C_SURFACE,
+                 fg=self.C_SECONDARY).pack(pady=(12,2))
         self.col_status_var = tk.StringVar(self.win, value='')
-        tk.Label(content, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
-        col_btn_row = tk.Frame(content); col_btn_row.pack(pady=8)
+        tk.Label(_m3, text="先「探测列」识别后台表格的所有列，再勾选要识别的列（库存/销量列为计算必需）",
+                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE).pack()
+        col_btn_row = tk.Frame(_m3, bg=self.C_SURFACE); col_btn_row.pack(pady=8)
         self._mk_btn(col_btn_row, '🔍 探测全部列', self._probe_columns, kind='dark',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
         self._mk_btn(col_btn_row, '⚙ 配置识别列', self._config_columns, kind='dark',
                   font=(self.FONT[0], 8)).pack(side='left', padx=5)
-        tk.Label(content, textvariable=self.col_status_var,
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
+        tk.Label(_m3, textvariable=self.col_status_var,
+                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_SURFACE).pack(pady=(0,10))
 
         # ── 副模型（双模型验证用，🛡 勾选时生效）──
         sec_row = tk.Frame(content); sec_row.pack(pady=(4,2))
