@@ -190,37 +190,8 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
     out_window_pos: 可选 dict，调用方传入后填充 {'left': int, 'top': int}（窗口左上角
     在全屏坐标系中的位置）。滚动/点击坐标换算时用窗口位置还原全屏偏移，
     避免窗口未最大化时坐标错位（如 1920 窗口在 4K 屏上）。
+    实测耗时 ~0.7s，无需线程超时包装；窗口恢复由调用方主线程 after 负责。
     """
-    # 截图整体超时保护：win.activate() 可能被 Windows 前台锁定卡住，pg.screenshot
-    # 大屏也慢——实时截图依赖本函数返回后恢复窗口，卡死=窗口永远最小化（v1.4 修复）
-    import threading as _th
-    _result = {}
-    def _shot_worker():
-        try:
-            _result['found'] = _capture_impl(output_path, out_window_pos)
-        except Exception as _e:
-            _result['err'] = _e
-    _t = _th.Thread(target=_shot_worker, daemon=True)
-    _t.start()
-    _t.join(timeout=8)
-    if _t.is_alive():
-        # 超时：立即回退全屏截图（窗口可能已恢复前台，全屏也能截到页面），不等卡住的线程
-        _result['found'] = False
-        try:
-            _pg = __import__('pyautogui', fromlist=['screenshot'])
-            _img = _pg.screenshot()
-            if _img is not None:
-                _img.save(output_path)
-        except Exception:
-            pass
-        return False
-    if 'err' in _result:
-        raise _result['err']
-    return _result.get('found', False)
-
-
-def _capture_impl(output_path: str, out_window_pos: dict = None) -> bool:
-    """capture_pdd_screenshot 实际实现（线程内执行，外层有 8 秒超时保护）"""
     import os as _os, time as _time
     _os.makedirs(_os.path.dirname(output_path) or '.', exist_ok=True)
 

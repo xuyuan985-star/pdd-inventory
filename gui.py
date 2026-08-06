@@ -2245,49 +2245,28 @@ class App(SettingsUIMixin):
                                    "未成功识别任何地区\n\n请检查：\n1. 网络是否正常\n2. API Key / 模型配置\n3. PDD 页面是否在前台显示")
     
     def _live_screenshot(self):
-        """即时截图：最小化窗口 → 立刻截全屏 → OCR → 恢复"""
+        """即时截图：最小化窗口 → 立刻截全屏 → OCR → 恢复（最小化最多 2 秒）"""
         self.status_text.set("最小化窗口，请确认PDD页面在后面...")
         self._clear_input_rows()  # 先清旧数据
         self.win.update()
         
-        # 主线程 watchdog：无论截图/OCR 是否卡死，15 秒后强制恢复窗口。
-        # 子线程里 self.win.after(deiconify) 可能因 Tk 线程锁冲突被吞（except pass），
-        # 且截图函数若卡住，截图后的 _restore() 永远不会执行——watchdog 兜底。
-        _watchdog = None
-        def _force_restore():
+        # 主线程 2 秒后无条件恢复窗口（符合设计：最小化最多 2 秒）。
+        # 截图线程只负责截图+OCR，不参与窗口恢复——不依赖子线程 after，
+        # 也不管截图是否卡住，窗口 2 秒必弹回来。
+        def _auto_restore():
             try:
                 if self.win.state() == 'iconic':
                     self.win.deiconify()
                     self.win.lift()
-                    self.win.attributes('-topmost', True)
-                    self.win.after(300, lambda: self.win.attributes('-topmost', False))
             except Exception:
                 pass
         try:
-            _watchdog = self.win.after(15000, _force_restore)
+            self.win.after(2000, _auto_restore)
         except Exception:
-            _watchdog = None
+            pass
         
         def task():
             import time, os
-            restored = False
-            def _restore():
-                """无论成功失败都恢复窗口（防卡在最小化）。
-                必须用 after 调度到主线程执行 Tk 操作（子线程直接调用 deiconify 会 RuntimeError）"""
-                nonlocal restored
-                if restored:
-                    return
-                restored = True
-                # 若 watchdog 还在排队，取消它（已恢复就不需要强制恢复）
-                if _watchdog is not None:
-                    try:
-                        self.win.after_cancel(_watchdog)
-                    except Exception:
-                        pass
-                try:
-                    self.win.after(0, _force_restore)
-                except Exception:
-                    pass
             try:
                 self.win.after(0, self.win.iconify)
                 time.sleep(0.5)
@@ -2300,7 +2279,11 @@ class App(SettingsUIMixin):
                 found_window = capture_pdd_screenshot(ss_path)
                 
                 # 截图完成立即恢复窗口（OCR 可能耗时数秒，不必等）
-                _restore()
+                try:
+                    if self.win.state() == 'iconic':
+                        self.win.after(0, lambda: (self.win.deiconify(), self.win.lift()))
+                except Exception:
+                    pass
                 
                 if not found_window:
                     self.win.after(0, lambda: (
@@ -2318,10 +2301,8 @@ class App(SettingsUIMixin):
                 
                 self.win.after(0, lambda i=items: self._fill_from_ocr(i))
             except Exception as e:
-                _restore()
                 self.win.after(0, lambda err=str(e): self.status_text.set(f'识别失败: {err[:50]}'))
-            finally:
-                _restore()  # 兜底：任何分支遗漏都恢复窗口
+            # 窗口恢复由主线程 _auto_restore 负责（2 秒后无条件恢复），子线程不再干预
         
         import threading
         threading.Thread(target=task, daemon=True).start()
