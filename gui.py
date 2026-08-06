@@ -1462,12 +1462,20 @@ class App(SettingsUIMixin):
                     # 商品名：用解析后的 name（去掉 ID 后缀），比 _raw 原文干净
                     row_vals.append(p.get('name', '') or '')
                 elif _map.get(_c) == 'stock':
-                    # 仓库总库存：优先 _raw 原文（带单位'69份'），与客户看到的后台一致
-                    row_vals.append(_raw.get(_c) or p.get('stock', '') or '')
+                    # 仓库总库存：优先 _raw 原文（带单位'69份'），但去过尾部噪音
+                    # （qwen3.5-ocr 会抄出 '69份 查看' / '108份 08-06 21:30 更新记录'）
+                    _sv = _raw.get(_c) or p.get('stock', '') or ''
+                    if isinstance(_sv, str):
+                        from ocr import strip_tail_noise as _stn
+                        _sv = _stn(_sv)
+                    row_vals.append(_sv)
                 elif _map.get(_c) == 'sales':
-                    # plans 里销量存 daily（_calc_from_items 没有 'sales' 键），
-                    # 且 sales 原始值带单位（'78份'）——显示 _raw 原文更准确
-                    row_vals.append(_raw.get(_c) or p.get('daily', '') or '')
+                    # 仓库预估总销售数：优先 _raw 原文（带单位），同样去过尾部噪音
+                    _sv = _raw.get(_c) or p.get('daily', '') or ''
+                    if isinstance(_sv, str):
+                        from ocr import strip_tail_noise as _stn
+                        _sv = _stn(_sv)
+                    row_vals.append(_sv)
                 elif _map.get(_c) == 'warehouse':
                     # 仓库信息：用 parse 已过滤的 warehouse（strip_tail_noise 已去"查看地址"等词条），
                     # 不用 _raw 原文——原文带词条噪音会显示成"烟台1仓 查看地址"

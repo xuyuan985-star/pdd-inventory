@@ -132,6 +132,20 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     # 不是有效模型 ID（实测 404 InvalidEndpointOrModel.NotFound），与 ocr.py 逻辑一致
     mdl = provider.get('custom_endpoint', '') or provider.get('model',
         {'doubao': 'Doubao-Seed-2.1-pro', 'qwen': 'qwen3.5-omni-flash', 'glm': 'glm-4v-flash'}.get(active, ''))
+    # Qwen OCR 专用模型（qwen3.5-ocr/qwen-vl-ocr 等）是纯文字提取模型，
+    # **不支持物体定位/表格 bbox/页面状态检测**——vision 的定位类任务必须用通用视觉模型。
+    # 若用户把 qwen model 配成 OCR 模型，这里回退 qwen3.5-omni-flash（通用视觉），
+    # 否则 ai_locate_table 等会收到乱码 JSON → 定位失败 → 批量识别"未检测到商品"。
+    try:
+        from ocr import _is_qwen_ocr as _qocr
+        if _qocr(mdl):
+            _q = (providers.get('qwen', {}) or {}) if isinstance(providers, dict) else {}
+            mdl = _q.get('model', 'qwen3.5-omni-flash')
+            if _qocr(mdl):  # 配置里也是 OCR 模型 → 直接回退默认通用视觉
+                mdl = 'qwen3.5-omni-flash'
+            mdl_l = (mdl or '').lower()
+    except Exception:
+        pass
     mdl_l = (mdl or '').lower()
     is_glm = mdl_l.startswith('glm-') or mdl_l == 'glm'
     # 与 ocr.py 一致：模型是 glm 但 endpoint 是官方阿里/豆包端点时，自动切回智谱端点+key
