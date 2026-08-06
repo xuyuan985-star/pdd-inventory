@@ -60,6 +60,8 @@ class App(SettingsUIMixin):
     C_MUTED = '#6B6B6B'        # 中灰
     C_BORDER = '#111111'       # 黑色细分割线
     C_RED = '#DC2626'
+    C_BTN_BLUE = '#1E88E5'     # 主操作按钮（亮蓝实心）
+    C_CARD_HDR = '#1F1F1F'     # 卡片标题栏（深炭灰）
     C_YELLOW_BG = '#FFE600'    # 亮柠檬黄高亮块（配黑字）
     C_GREEN_BG = '#E8F5E9'
     C_RED_BG = '#FFEBEE'
@@ -71,30 +73,56 @@ class App(SettingsUIMixin):
 
     def _mk_btn(self, parent, text, command=None, kind='primary', font=None,
                 width=None, height=None, padx=10, pady=3, pack_side=None, **pack_kw):
-        """机能风按钮：Frame 包边实现常显细描边（Tk Button highlight 无焦点不显示）。
-        kind='primary' → 柠檬黄底黑字 + 黑描边；kind='ghost' → 白底黑字 + 黄描边。
-        返回 Button；外层描边 Frame 由 pack_side/pack_kw 布局。"""
+        """终末地机能风按钮（网页风格适配 Tkinter）：
+        kind='primary' → 亮蓝实心底白字（主操作，无描边）
+        kind='ghost'   → 纯白底黑字（次要标签按钮，无描边）
+        kind='dark'    → 深炭黑长条白字 + 左下亮黄装饰条（顶部主功能入口）
+        kind='tag'     → 亮黄实心底黑粗字（角标标签）
+        返回 Button；外层 Frame 由 pack_side/pack_kw 布局。"""
         if kind == 'primary':
-            bg, fg, edge = self.C_ACCENT, '#111111', '#111111'
-        else:
-            bg, fg, edge = self.C_BG, '#111111', self.C_ACCENT
-        frame = tk.Frame(parent, bg=edge, bd=0, highlightthickness=0)
-        frame._skip_theme = True
-        inner = tk.Frame(frame, bg=bg, bd=0, highlightthickness=0)
-        inner._skip_theme = True
-        inner.pack(padx=1, pady=1)
-        btn = tk.Button(inner, text=text, relief='flat', bd=0, bg=bg, fg=fg,
-                        activebackground=bg, activeforeground=fg,
-                        font=font or self.FONT, cursor='hand2',
-                        width=width, height=height, **pack_kw.pop('btn_kw', {}))
+            bg, fg = self.C_BTN_BLUE, '#FFFFFF'
+            btn = tk.Button(parent, text=text, relief='flat', bd=0, bg=bg, fg=fg,
+                            activebackground=bg, activeforeground=fg,
+                            font=font or self.FONT, cursor='hand2',
+                            width=width, height=height, **pack_kw.pop('btn_kw', {}))
+        elif kind == 'ghost':
+            bg, fg = self.C_BG, '#111111'
+            btn = tk.Button(parent, text=text, relief='flat', bd=0, bg=bg, fg=fg,
+                            activebackground=self.C_SURFACE, activeforeground='#111111',
+                            font=font or self.FONT, cursor='hand2',
+                            width=width, height=height, **pack_kw.pop('btn_kw', {}))
+        elif kind == 'tag':
+            bg, fg = self.C_ACCENT, '#111111'
+            btn = tk.Button(parent, text=text, relief='flat', bd=0, bg=bg, fg=fg,
+                            activebackground=bg, activeforeground=fg,
+                            font=(font or self.FONT)[0] and (font or self.FONT), cursor='hand2',
+                            width=width, height=height, **pack_kw.pop('btn_kw', {}))
+        else:  # dark 深炭黑长条 + 左下黄条
+            frame = tk.Frame(parent, bg='#111111', bd=0, highlightthickness=0)
+            frame._skip_theme = True
+            inner = tk.Frame(frame, bg='#111111', bd=0, highlightthickness=0)
+            inner._skip_theme = True
+            inner.pack(padx=0, pady=0)
+            btn = tk.Button(inner, text=text, relief='flat', bd=0, bg='#111111', fg='#FFFFFF',
+                            activebackground='#1F1F1F', activeforeground='#FFFFFF',
+                            font=font or self.FONT, cursor='hand2',
+                            width=width, height=height, **pack_kw.pop('btn_kw', {}))
+            tk.Frame(inner, bg=self.C_ACCENT, height=3).pack(fill="x", side="bottom")
+            if command is not None:
+                btn.config(command=command)
+            btn.pack(padx=padx, pady=pady)
+            btn._edge_frame = frame
+            if pack_side is not None:
+                frame.pack(side=pack_side, **pack_kw)
+            else:
+                frame.pack(**pack_kw)
+            return btn
         if command is not None:
             btn.config(command=command)
-        btn.pack(padx=padx, pady=pady)
-        btn._edge_frame = frame
         if pack_side is not None:
-            frame.pack(side=pack_side, **pack_kw)
+            btn.pack(side=pack_side, **pack_kw)
         else:
-            frame.pack(**pack_kw)
+            btn.pack(**pack_kw)
         return btn
 
     def __init__(self):
@@ -317,9 +345,9 @@ class App(SettingsUIMixin):
                                  outline='', tags='deco')
             _deco.create_polygon(w - 230, 0, w - 30, 0, w - 230, 66, fill='#333333',
                                  outline='', tags='deco')
-            _deco.create_rectangle(w - 190, 10, w - 80, 32, fill='#111111', outline='',
+            _deco.create_rectangle(w - 190, 10, w - 80, 32, fill='#FFE600', outline='',
                                    tags='deco')
-            _deco.create_text(w - 135, 21, text="V" + VERSION.upper(), fill='#FFE600',
+            _deco.create_text(w - 135, 21, text="V" + VERSION.upper(), fill='#111111',
                               font=(self.FONT[0], 9, 'bold'), tags='deco')
         _deco.bind('<Configure>', _redraw_deco)
         # 工具条（白底 + 黑色细分割线，按钮行）
@@ -380,11 +408,11 @@ class App(SettingsUIMixin):
         table_frame.pack(fill="x", padx=15, pady=5)
         
         # 标题头
-        hdr_bg = tk.Frame(table_frame, bg=self.C_ACCENT, height=32)
+        hdr_bg = tk.Frame(table_frame, bg=self.C_CARD_HDR, height=32)
         hdr_bg.pack(fill="x")
         hdr_bg.pack_propagate(False)
         tk.Label(hdr_bg, text="输入数据  —  照着 PDD 后台页面填写",
-                 font=self.FONT, fg='#111111', bg=self.C_ACCENT).pack(side="left", padx=12, pady=4)
+                 font=self.FONT, fg='#FFFFFF', bg=self.C_CARD_HDR).pack(side="left", padx=12, pady=4)
         
         # 列头
         col_hdr = tk.Frame(table_frame, bg=self.C_BLUE_LIGHT)
@@ -417,7 +445,7 @@ class App(SettingsUIMixin):
         self._mk_btn(btn_row, "- 删行", self._del_row, kind='ghost', pack_side="left", padx=5)
         self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='primary',
                      font=(self.FONT[0], 9, 'bold'), pack_side="left", padx=15)
-        self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='primary',
+        self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='dark',
                      pack_side="left", padx=8)
         # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
         self._single_dual_var = tk.BooleanVar(self.win, value=True)
@@ -450,8 +478,8 @@ class App(SettingsUIMixin):
                                 highlightbackground=self.C_BORDER)
         self.result_frame.pack(fill="both", expand=True, padx=15, pady=(5,15))
         
-        tk.Label(self.result_frame, text="计算结果", font=self.FONT_BOLD, bg=self.C_ACCENT,
-                 fg='#111111').pack(fill="x", pady=(0,0))
+        tk.Label(self.result_frame, text="计算结果", font=self.FONT_BOLD, bg=self.C_CARD_HDR,
+                 fg='#FFFFFF').pack(fill="x", pady=(0,0))
         
         # 地区切换标签
         self.tab_frame = tk.Frame(self.result_frame)
@@ -559,12 +587,13 @@ class App(SettingsUIMixin):
             _nf._skip_theme = True
             _ni = tk.Frame(_nf, bg=self.C_BG, bd=0, highlightthickness=0)
             _ni._skip_theme = True
-            _ni.pack(padx=1, pady=1)
+            _ni.pack(side="left", padx=(3, 0), pady=0, fill="x", expand=True)
             btn = tk.Button(_ni, text=text, relief="flat",
                            font=(self.FONT[0], 9), anchor="w", padx=12, pady=6,
                            bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_BLUE_LIGHT,
                            bd=0, command=lambda p=page: self._show_page(p))
             btn._page = page
+            btn._nf = _nf
             btn.pack(fill="x")
             _nf.pack(fill="x")
             self.nav_buttons[text] = btn
@@ -573,9 +602,9 @@ class App(SettingsUIMixin):
     def _highlight_nav(self, page):
         for btn in self.nav_buttons.values():
             if getattr(btn, '_page', None) == page:
-                btn.configure(bg=self.C_PRIMARY, fg="#FFFFFF")
-            else:
                 btn.configure(bg=self.C_SURFACE, fg=self.C_TEXT)
+            else:
+                btn.configure(bg=self.C_BG, fg=self.C_TEXT)
 
     def _show_page(self, page):
         if self._current_page:
@@ -1232,7 +1261,7 @@ class App(SettingsUIMixin):
         for reg in sorted(self.cache.keys()):
             is_active = reg == self.active_region
             self._mk_btn(self.tab_frame, reg, lambda r=reg: self._switch_region(r),
-                         kind='primary' if is_active else 'ghost',
+                         kind='tag' if is_active else 'ghost',
                          font=("微软雅黑", 8, "bold" if is_active else "normal"),
                          pack_side="left", padx=2)
     
