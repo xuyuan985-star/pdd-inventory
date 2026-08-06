@@ -223,7 +223,8 @@ class App(SettingsUIMixin):
                 w, h - r, w - r, h,
                 r, h, 0, h - r,
                 smooth=True, splinesteps=12,
-                fill=colors.get('bg', '#FFE600'), outline=colors.get('edge', colors.get('bg', '#111111')),
+                fill=colors.get('bg', '#FFE600'),
+                outline=(colors.get('edge') if colors.get('edge') and colors.get('edge') != colors.get('bg') else ''),
                 width=1)
             fnt = font or (self.FONT_BOLD if kind in ('tag',) else self.FONT)
             txt = canvas.create_text(w // 2, h // 2, text=text, fill=colors.get('fg', '#111111'),
@@ -571,8 +572,7 @@ class App(SettingsUIMixin):
         self._register_redraw(lambda f=table_frame: f.configure(bg=self.tc('table.header_bg', '#1F1F1F')))
         
         # 标题头
-        # 标题头（炭黑表头 + 顶部细亮黄装饰线，终末地标志性细节）
-        _ln = tk.Frame(table_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.accent_line", "#FFE600")))
+        # 标题头（炭黑表头，底部细黄装饰线——不贴卡片边缘，避免黄描边感）
         hdr_bg = tk.Frame(table_frame, bg=self.C_CARD_HDR, height=32)
         hdr_bg._skip_theme = True  # 深色表头：_walk_force 不刷白
         hdr_bg.pack(fill="x")
@@ -581,6 +581,8 @@ class App(SettingsUIMixin):
                  fg='#FFFFFF', bg=self.C_CARD_HDR).pack(side="left", padx=12, pady=4)
         tk.Label(hdr_bg, text="—  照着 PDD 后台页面填写",
                  font=self.FONT, fg='#BDBDBD', bg=self.C_CARD_HDR).pack(side="left")
+        # 表头底部细黄装饰线（在炭黑表头内，不贴卡片顶部）
+        _ln = tk.Frame(table_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.accent_line", "#FFE600")))
         
         # 列头（深色卡片内：深灰底白字）
         col_hdr = tk.Frame(table_frame, bg=self.C_CARD_HDR)
@@ -609,9 +611,9 @@ class App(SettingsUIMixin):
         for _ in range(3):
             self._add_row()
         
-        # 按钮行
-        btn_row = tk.Frame(table_frame)
-        btn_row.pack(fill="x", padx=10, pady=5)
+        # 全局工具栏（独立于卡片外，操作整张表格）
+        btn_row = tk.Frame(self.page_home, bg=self.C_BG)
+        btn_row.pack(fill="x", padx=15, pady=14)
         self._mk_btn(btn_row, "+ 加行", self._add_row, kind='ghost', pack_side="left")
         self._mk_btn(btn_row, "- 删行", self._del_row, kind='ghost', pack_side="left", padx=5)
         self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
