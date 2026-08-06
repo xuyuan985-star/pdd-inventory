@@ -208,22 +208,62 @@ def _dedup_models(*names) -> list:
 
 
 def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
-                  forced_model: str = None) -> tuple:
+                  forced_model: str = None, prefer_general: bool = False) -> tuple:
     """
     通用视觉 API 调用：按 settings 提供商配置选端点/模型。
     识别失败如实抛出错误，不偷偷 fallback 到其他模型（v1.3：一切如实）。
     返回 (content_text, model_used)；失败抛 RuntimeError。
+    prefer_general=True：探测列/列名汇总等任务必须用通用视觉模型——
+    Qwen OCR 专用模型（qwen*-ocr）只做文字提取，不做"列名汇总/结构理解"，
+    会返回文字定位结果而非表格结构（v1.4 修复）。此时复用 vision._pick_vision_model
+    的规则：主模型通用→用主模型；主模型 OCR→用副模型；都不可用→报错。
     """
     api_cfg = get_api_config()
     active = api_cfg.get('active_provider', 'doubao')
     providers = api_cfg.get('providers', {})
     provider = providers.get(active, {}) if isinstance(providers, dict) else {}
 
+    # 探测/结构理解任务：若主模型是 OCR 专用，切换为通用视觉模型（vision 同款规则）
+    # 复用 vision._pick_vision_model：主模型通用→用主模型；主模型 OCR→用副模型；都不可用→报错
+    if prefer_general and not forced_model:
+        try:
+            from vision import _pick_vision_model as _pvm
+            _a2, _p2, _e2, _k2, _m2, _r2 = _pvm()
+            # 只要解析出的模型与主模型不同（即发生了 OCR→通用切换），就使用解析结果
+            _cur_main = provider.get('model', '') or ''
+            if str(_m2).strip() != str(_cur_main).strip():
+                active = _a2
+                provider = _p2 if isinstance(_p2, dict) else {}
+                # 走下方统一逻辑：key/model/endpoint 从 provider 重新解析
+                key = _k2
+                model_name = _m2
+                endpoint = _e2
+                use_responses = _r2
+                if not key:
+                    raise RuntimeError(f"API Key 未设置 — 请在「API 管理」页面配置 {active} 的 Key")
+                return _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
+                                        active, provider, key, model_name, endpoint, use_responses)
+        except Exception as _e:
+            if isinstance(_e, RuntimeError):
+                raise
+            pass  # 解析异常则按原逻辑（可能抛"无 key"等明确错误）
+
     key = provider.get('api_key', '') or os.environ.get(
         {'doubao':'ARK_API_KEY','qwen':'DASHSCOPE_API_KEY','glm':'ZHIPU_API_KEY'}.get(active, ''), '')
     model_name = forced_model or provider.get('model', '')
     endpoint = provider.get('endpoint', '')
     use_responses = False
+
+    return _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
+                            active, provider, key, model_name, endpoint, use_responses)
+
+
+def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
+                     active, provider, key, model_name, endpoint, use_responses):
+    """_ocr_api_call 的请求执行段（可被 prefer_general 复用，传入已解析配置）。"""
+    providers_global = get_api_config().get('providers', {}) if callable(get_api_config) else {}
+    if not isinstance(providers_global, dict):
+        providers_global = {}
 
     if not key:
         raise RuntimeError(f"API Key 未设置 — 请在「API 管理」页面配置 {active} 的 Key")
@@ -273,7 +313,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
         _is_official_ark = 'ark.cn-beijing.volces.com' in ep_l
         if is_glm and (_is_official_ali or _is_official_ark):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-            cur_key = providers.get('glm', {}).get('api_key', '') if isinstance(providers, dict) else ''
+            cur_key = providers_global.get('glm', {}).get('api_key', '') if isinstance(providers_global, dict) else ''
             if not cur_key:
                 continue
             cur_responses = False
@@ -698,7 +738,8 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 - 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
         max_tok = 4096 if _is_ocr else 2048  # glm-4.6v 有 reasoning 需更大预算；glm-4v-flash 由 _ocr_api_call 自动钳制到 1024；Qwen OCR 系列 4096
 
-    content, _mdl = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model)
+    content, _mdl = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model,
+                                 prefer_general=(columns is None))
 
     # 解析：优先 {"columns","rows"} 结构，兜底纯数组
     text = content.strip()
@@ -731,6 +772,17 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
             dict_rows = [r for r in rows if isinstance(r, dict) and r]
             if dict_rows:
                 from collections import Counter as _C
+                # 过滤不可哈希的 key（模型可能返回嵌套对象当 key，如 {dict: value}），
+                # 否则 set() 会抛 TypeError: unhashable type → 整个识别失败（v1.4 修复）
+                _safe_rows = []
+                for _r in dict_rows:
+                    _k2 = [k for k in _r.keys() if isinstance(k, (str, int, float, bool, type(None)))]
+                    if _k2:
+                        _safe_rows.append({_k: _r[_k] for _k in _k2})
+                if not _safe_rows:
+                    _dbg_note = 'rows_keys_unhashable_filtered'
+                dict_rows = _safe_rows
+            if dict_rows:
                 _kc = _C(tuple(r.keys()) for r in dict_rows)
                 _top_keys = list(_kc.most_common(1)[0][0])
                 if set(cols) != set(_top_keys):
