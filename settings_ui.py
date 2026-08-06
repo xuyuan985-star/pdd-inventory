@@ -713,8 +713,8 @@ class SettingsUIMixin:
             """白底细黑切角边框输入框（终末地统一控件）"""
             e = tk.Entry(parent, textvariable=var, font=(self.FONT[0], 8), width=width,
                          show=show, relief='flat', bd=0,
-                         highlightthickness=1, highlightbackground="#111111",
-                         highlightcolor="#111111",
+                         highlightthickness=1, highlightbackground="#EAEAEA",
+                         highlightcolor="#EAEAEA",
                          bg=self.C_BG, fg=self.C_TEXT, insertbackground=self.C_TEXT)
             return e
 
@@ -722,7 +722,7 @@ class SettingsUIMixin:
             cfg = providers.get(key, {}) if isinstance(providers, dict) else {}
             # 浅灰机能卡片（细黑边框 + 内边距）
             card = tk.Frame(cards_frame, bg=self.C_SURFACE, highlightthickness=1,
-                            highlightbackground="#111111", bd=0)
+                            highlightbackground="#EAEAEA", bd=0)
             card.pack(fill="x", padx=4, pady=8)
             tk.Label(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
                      bg=self.C_SURFACE, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))

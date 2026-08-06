@@ -155,9 +155,9 @@ class App(SettingsUIMixin):
     C_ACCENT = '#FFE600'       # 亮柠檬黄（accent / 高亮块）
     C_BG = '#FFFFFF'           # 纯白背景
     C_SURFACE = '#F7F7F2'      # 米白浅灰（卡片/底纹）
-    C_TEXT = '#111111'         # 近黑正文
+    C_TEXT = '#222222'         # 深灰正文（避免死黑）
     C_MUTED = '#6B6B6B'        # 中灰
-    C_BORDER = '#111111'       # 黑色细分割线
+    C_BORDER = '#EAEAEA'       # 浅灰细分割线（容器不画黑框）
     C_RED = '#DC2626'
     C_BTN_BLUE = '#1E88E5'     # 主操作按钮（亮蓝实心）
     C_CARD_HDR = '#1F1F1F'     # 卡片标题栏（深炭灰）
@@ -742,7 +742,7 @@ class App(SettingsUIMixin):
             _nf._skip_theme = True
             _ni = tk.Frame(_nf, bg=self.C_BG, bd=0, highlightthickness=0)
             _ni._skip_theme = True
-            _ni.pack(side="left", padx=(3, 0), pady=0, fill="x", expand=True)
+            _ni.pack(side="left", padx=(2, 0), pady=0, fill="x", expand=True)
             btn = tk.Button(_ni, text=text, relief="flat",
                            font=(self.FONT[0], 9), anchor="w", padx=12, pady=6,
                            bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_BLUE_LIGHT,
@@ -840,7 +840,7 @@ class App(SettingsUIMixin):
         
         # 主题感知的 Entry 样式（终末地扁平：白底细黑切角边框，无凹陷）
         e_kwargs = dict(font=self.FONT, relief="flat", bd=0, highlightthickness=1,
-                        highlightbackground="#111111", highlightcolor="#111111",
+                        highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                         bg=self.C_BG, fg=self.C_TEXT, insertbackground=self.C_TEXT,
                         selectbackground=self.C_SECONDARY, selectforeground='#FFFFFF')
         
