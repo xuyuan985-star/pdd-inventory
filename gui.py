@@ -141,8 +141,17 @@ class _CanvasBtn:
             return
         c = self._colors
         hov = c.get('bg_hover')
-        if hov:
+        if hov and self.poly is not None:
             self.canvas.itemconfigure(self.poly, fill=hov)
+        # 文字按钮：hover 下划线略粗
+        if getattr(self, 'underline_item', None) is not None:
+            try:
+                coords = self.canvas.coords(self.underline_item)
+                h = getattr(self, '_btn_h', 26)
+                if len(coords) == 4:
+                    self.canvas.coords(self.underline_item, coords[0], h - 4, coords[2], h - 1)
+            except Exception:
+                pass
 
     def _leave(self, e):
         self._apply()
@@ -192,13 +201,15 @@ class App(SettingsUIMixin):
                            highlightthickness=0, bd=0)
         canvas._skip_theme = True
         if kind == 'text':
-            # 文字型操作：黑字 + 底部细黄下划线（下划线色随主题）
+            # 文字型操作：黑字 + 底部细黄下划线（下划线色随主题，hover 加粗）
             _ul = self.tc('btn.text.underline', '#FFE600')
             txt = canvas.create_text(w // 2, h // 2 - 2, text=text,
-                                     fill=self.tc('btn.text.fg', '#111111'),
+                                     fill=self.tc('btn.text.fg', '#222222'),
                                      font=font or self.FONT)
-            canvas.create_rectangle(4, h - 3, w - 4, h - 1, fill=_ul, outline='')
+            ul_item = canvas.create_rectangle(4, h - 3, w - 4, h - 1, fill=_ul, outline='')
             btn = _CanvasBtn(canvas, None, txt, text, command, kind, colors, owner=self)
+            btn.underline_item = ul_item
+            btn._btn_h = h
             canvas.bind('<Button-1>', btn._click)
             canvas.tag_bind(txt, '<Button-1>', btn._click)
             canvas.bind('<Enter>', btn._hover)
