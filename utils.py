@@ -5,7 +5,6 @@ PDD EZ — 公共工具函数
 import os, sys, json
 
 VERSION = "v1.4"
-EXE_NAME = f"PDD EZ {VERSION}.exe"
 
 
 def version_newer(remote: str, local: str) -> bool:

@@ -32,12 +32,6 @@ def _load_templates(name):
     return templates
 
 
-def _load_template(name):
-    """向后兼容：取第一个匹配的模板"""
-    tmpls = _load_templates(name)
-    return tmpls[0] if tmpls else None
-
-
 def template_match(screenshot, template_name, threshold=0.75):
     """
     模板匹配：归一化相关系数 + 多尺度，支持多变体模板
@@ -84,54 +78,9 @@ def template_match(screenshot, template_name, threshold=0.75):
     return (cx, cy, best_val)
 
 
-def orb_match(screenshot, template_name, min_matches=8, threshold=0.6):
+def locate_element(screenshot_path, template_name, threshold=0.75):
     """
-    ORB 特征点匹配：抗遮挡/旋转/形变
-    返回 (center_x, center_y, match_count) 或 None
-    """
-    # 依赖检查提前：无 cv2/np 时 _load_template 内部 cv2.imread 会先崩
-    if cv2 is None or np is None:
-        return None
-    template = _load_template(template_name)
-    if template is None:
-        return None
-    
-    orb = cv2.ORB_create(nfeatures=500)
-    kp1, des1 = orb.detectAndCompute(template, None)
-    kp2, des2 = orb.detectAndCompute(screenshot, None)
-    
-    if des1 is None or des2 is None or len(des1) < 4 or len(des2) < 4:
-        return None
-    
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(des1, des2)
-    matches = sorted(matches, key=lambda x: x.distance)
-    
-    # 取前 N 个高质量匹配
-    good = [m for m in matches if m.distance < 50]
-    if len(good) < min_matches:
-        return None
-    
-    # 计算变换后的中心点
-    src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-    
-    try:
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-        if M is None or mask.sum() < min_matches * threshold:
-            return None
-        h, w = template.shape[:2]
-        center = np.float32([[w/2, h/2]]).reshape(-1, 1, 2)
-        center_dst = cv2.perspectiveTransform(center, M)
-        return (int(center_dst[0][0][0]), int(center_dst[0][0][1]), mask.sum())
-    except Exception:
-        return None
-
-
-def locate_element(screenshot_path, template_name, method='auto', threshold=0.75):
-    """
-    融合识别：模板匹配 + ORB 交叉校验
-    method: 'template' | 'orb' | 'auto'（默认两法交叉校验）
+    模板匹配定位元素（v1.4 起只保留 template 单路径，orb/auto 已废弃）
     返回 (x, y) 或 None
     """
     if cv2 is None or np is None:
@@ -144,25 +93,7 @@ def locate_element(screenshot_path, template_name, method='auto', threshold=0.75
     if w > 1920:
         scale = 1920 / w
         screenshot = cv2.resize(screenshot, (1920, int(h * scale)))
-    if method == 'template':
-        result = template_match(screenshot, template_name, threshold)
-    elif method == 'orb':
-        result = orb_match(screenshot, template_name, threshold=threshold)
-    else:
-        r1 = template_match(screenshot, template_name, threshold)
-        r2 = orb_match(screenshot, template_name)
-        if r1 and r2:
-            dist = ((r1[0] - r2[0])**2 + (r1[1] - r2[1])**2)**0.5
-            if dist < 50:
-                result = (int((r1[0]+r2[0])/2), int((r1[1]+r2[1])/2))
-            else:
-                result = r1
-        elif r1:
-            result = (r1[0], r1[1])
-        elif r2:
-            result = (r2[0], r2[1])
-        else:
-            result = None
+    result = template_match(screenshot, template_name, threshold)
     if result and scale != 1.0:
         return (int(result[0] / scale), int(result[1] / scale))
     return result
