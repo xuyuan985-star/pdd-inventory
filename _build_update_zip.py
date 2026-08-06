@@ -24,6 +24,9 @@ PIP_TO_INTERNAL = {
 
 SKIP_DIRS = {'__pycache__', 'tests', 'test'}
 SKIP_EXTENSIONS = {'.pyc', '.pyo', '.log', '.tmp'}
+# 敏感文件：settings.json 含用户 API key/账号密码，keys.json/keys.enc 同理——
+# 即使 _internal 里的 settings.json 是模板，也绝不进包（防覆盖客户 %APPDATA% 已配置副本）
+SKIP_FILES = {'settings.json', 'keys.json', 'keys.enc', 'config.ini', '.env'}
 
 
 def _run(cmd: list) -> str:
@@ -223,8 +226,8 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
                         continue
 
                 for f in files:
-                    # 跳过临时/编译文件
-                    if any(f.endswith(ext) for ext in SKIP_EXTENSIONS):
+                    # 跳过临时/编译文件 + 敏感配置文件
+                    if f in SKIP_FILES or any(f.endswith(ext) for ext in SKIP_EXTENSIONS):
                         continue
                     src = os.path.join(root, f)
                     rel = os.path.relpath(src, internal)
