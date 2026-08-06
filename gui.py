@@ -1433,11 +1433,15 @@ class App(SettingsUIMixin):
                 elif _c == '补货量':
                     row_vals.append(p.get('qty', '') or '')
                 elif _map.get(_c) == 'name':
+                    # 商品名：用解析后的 name（去掉 ID 后缀），比 _raw 原文干净
                     row_vals.append(p.get('name', '') or '')
                 elif _map.get(_c) == 'stock':
-                    row_vals.append(p.get('stock', '') or '')
+                    # 仓库总库存：优先 _raw 原文（带单位'69份'），与客户看到的后台一致
+                    row_vals.append(_raw.get(_c) or p.get('stock', '') or '')
                 elif _map.get(_c) == 'sales':
-                    row_vals.append(p.get('sales', '') or '')
+                    # plans 里销量存 daily（_calc_from_items 没有 'sales' 键），
+                    # 且 sales 原始值带单位（'78份'）——显示 _raw 原文更准确
+                    row_vals.append(_raw.get(_c) or p.get('daily', '') or '')
                 else:
                     # 其他勾选列（仓库信息/仓库销售库存等）：显示 OCR 原文
                     row_vals.append(_raw.get(_c, '') or '')
