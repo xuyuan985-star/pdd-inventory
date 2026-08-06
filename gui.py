@@ -306,7 +306,7 @@ class App(SettingsUIMixin):
         self._wh_filter = '全部仓库'       # 结果表"仓库筛选"（来自 OCR 仓库信息列）
         self._suppress_auto_append = False  # 清空输入时临时禁用自动加行
         self._batch_stop = threading.Event()  # 紧急停止信号
-        self.status_text = tk.StringVar(self.win, value="就绪‑识别后可直接编辑表格")
+        self.status_text = tk.StringVar(self.win, value="就绪｜确认数据后导出，识别结果表格可直接编辑，右键行可删除条目")
         self.regions = self._load_regions()
         first = list(self.regions.keys())[0] if self.regions else '（首次使用，截图后自动识别）'
         self.region_var = tk.StringVar(self.win, value=first)
@@ -577,13 +577,12 @@ class App(SettingsUIMixin):
         for _ in range(3):
             self._add_row()
         
-        # 全局工具栏（页面最上方独立行，不属于任何卡片）
+        # ── 全局工具栏（单行：左组功能 / 右组截图+当前地区，不再放置加行/删行按钮）──
         btn_row = tk.Frame(self.page_home, bg=self.C_BG)
-        btn_row.pack(fill="x", padx=15, pady=(6, 4))
-        self._mk_btn(btn_row, "+ 加行", self._add_row, kind='ghost', pack_side="left")
-        self._mk_btn(btn_row, "- 删行", self._del_row, kind='ghost', pack_side="left", padx=5)
+        btn_row.pack(fill="x", padx=15, pady=(8, 6))
+        # 左组：功能按钮
         self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
-                     font=(self.FONT[0], 9, 'bold'), pack_side="left", padx=15)
+                     font=(self.FONT[0], 9, 'bold'), pack_side="left")
         self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='dark',
                      pack_side="left", padx=8)
         # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
@@ -591,28 +590,21 @@ class App(SettingsUIMixin):
         tk.Checkbutton(btn_row, text="🛡 双模型", variable=self._single_dual_var,
                        font=(self.FONT[0], 8), bg=self.C_SURFACE, fg=self.C_MUTED,
                        selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE).pack(side="left", padx=10)
+        # 右组：截图识别 + 实时截图 + 当前地区（同一行最右）
+        tk.Label(btn_row, text="当前地区:", font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="right")
+        tk.Label(btn_row, textvariable=self.region_var,
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="right", padx=(0, 10))
         self._mk_btn(btn_row, "截图识别", self._ocr_fill, kind='text', pack_side="right")
         self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='text',
                      pack_side="right", padx=5)
         
-        # ── 当前地区（识别后自动显示，次级信息：缩小变灰）──
-        region_frame = tk.Frame(self.page_home)
-        region_frame.pack(pady=2)
-        tk.Label(region_frame, text="当前地区:", font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
-        tk.Label(region_frame, textvariable=self.region_var,
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=4)
-        
-        # ── 导出按钮（适度尺寸，上下留白压缩）──
+        # ── 导出按钮 + 单条合并状态行（导出正下方，不拆分）──
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
                   kind='primary', font=(self.FONT[0], 13, 'bold'), width=16, height=2,
                   pack_side=None)
-        self.export_btn.pack(pady=(6, 2))
-        tk.Label(self.page_home, text="确认数据后再导出", font=(self.FONT[0], 7),
-                 fg="#9E9E9E").pack(pady=(0, 2))
-        
-        # ── 状态栏（精简文案，与导出按钮间距收窄）──
+        self.export_btn.pack(pady=(12, 4))
         tk.Label(self.page_home, textvariable=self.status_text,
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(2, 3))
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0, 4))
         
         # ── 结果表（纯炭黑卡片，无任何轮廓线）──
         self.result_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR)
@@ -698,6 +690,8 @@ class App(SettingsUIMixin):
         
         # 可编辑表格：双击前 3 列（商品/总库存/总销量）→ overlay Entry → 回写 rows → 重算
         self.tree.bind("<Double-1>", self._tree_edit_cell)
+        # 右键菜单：右键数据行删除该行；右键空白处新增空白行
+        self.tree.bind("<Button-3>", self._tree_context_menu)
         
         # Treeview 行高加大，避免计算结果条目上下拥挤；表头黑底白字（不依赖主题）
         style = ttk.Style()
@@ -799,7 +793,7 @@ class App(SettingsUIMixin):
             messagebox.showerror("出错", msg)
     
     def _clear_error(self):
-        self.status_text.set("就绪‑识别后可直接编辑表格")
+        self.status_text.set("就绪｜确认数据后导出，识别结果表格可直接编辑，右键行可删除条目")
     
     def _auto_expand(self, row_count: int):
         """结果出来后自动展开窗口，动态测量确保 Treeview 可见，封顶屏幕 82%"""
@@ -2531,6 +2525,21 @@ class App(SettingsUIMixin):
             return
         frac = x / w
         self.tree.xview_moveto(max(0.0, min(1.0, frac - total / 2)))
+
+    def _tree_context_menu(self, event):
+        """右键表格：数据行→删除该行；空白处→新增空白行"""
+        menu = tk.Menu(self.win, tearoff=0)
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.selection_set(iid)
+            menu.add_command(label="删除该行", command=self._del_row)
+            menu.add_command(label="新增空白行", command=self._add_row)
+        else:
+            menu.add_command(label="新增空白行", command=self._add_row)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     def _tree_edit_cell(self, event):
         """双击识别结果表格前 3 列（商品/总库存/总销量）→ overlay Entry 编辑 → 回写 rows → 重算"""
