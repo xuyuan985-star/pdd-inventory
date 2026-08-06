@@ -306,7 +306,7 @@ class App(SettingsUIMixin):
         self._wh_filter = '全部仓库'       # 结果表"仓库筛选"（来自 OCR 仓库信息列）
         self._suppress_auto_append = False  # 清空输入时临时禁用自动加行
         self._batch_stop = threading.Event()  # 紧急停止信号
-        self.status_text = tk.StringVar(self.win, value="就绪 — 输入库存和预估销量后点计算")
+        self.status_text = tk.StringVar(self.win, value="就绪 — 截图识别完成后，可直接在表格手动修改数据")
         self.regions = self._load_regions()
         first = list(self.regions.keys())[0] if self.regions else '（首次使用，截图后自动识别）'
         self.region_var = tk.StringVar(self.win, value=first)
@@ -564,56 +564,22 @@ class App(SettingsUIMixin):
         self.page_api = tk.Frame(self.content_frame)
         self._current_page = self.page_home
         
-        # ── 输入表格 ──
-        table_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR, highlightthickness=1,
-                               highlightbackground=self.C_BORDER, highlightcolor=self.C_BORDER)
-        table_frame._skip_theme = True  # 深色卡片：_walk_force 不刷白，重绘表按 token 更新
-        table_frame.pack(fill="x", padx=15, pady=5)
-        self._register_redraw(lambda f=table_frame: f.configure(bg=self.tc('table.header_bg', '#1F1F1F')))
-        
-        # 标题头
-        # 标题头（炭黑表头，底部细黄装饰线——不贴卡片边缘，避免黄描边感）
-        hdr_bg = tk.Frame(table_frame, bg=self.C_CARD_HDR, height=32)
-        hdr_bg._skip_theme = True  # 深色表头：_walk_force 不刷白
-        hdr_bg.pack(fill="x")
-        hdr_bg.pack_propagate(False)
-        tk.Label(hdr_bg, text="1  输入数据", font=(self.FONT[0], 10, 'bold'),
-                 fg='#FFFFFF', bg=self.C_CARD_HDR).pack(side="left", padx=12, pady=4)
-        tk.Label(hdr_bg, text="—  照着 PDD 后台页面填写",
-                 font=self.FONT, fg='#BDBDBD', bg=self.C_CARD_HDR).pack(side="left")
-        # 表头底部细黄装饰线（在炭黑表头内，不贴卡片顶部）
-        _ln = tk.Frame(table_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.accent_line", "#FFE600")))
-        
-        # 列头（深色卡片内：深灰底白字）
-        col_hdr = tk.Frame(table_frame, bg=self.C_CARD_HDR)
-        col_hdr._skip_theme = True
-        col_hdr.pack(fill="x")
-        col_hdr.grid_columnconfigure(0, weight=1)
-        col_hdr.grid_columnconfigure(1, minsize=80)
-        col_hdr.grid_columnconfigure(2, minsize=80)
-        _ln = tk.Frame(col_hdr, bg="#3A3A3A", height=1); _ln._skip_theme = True; _ln.grid(row=1, column=0, columnspan=3, sticky="ew"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("table.col_sep", "#3A3A3A")))
-        tk.Label(col_hdr, text="商品名称", font=self.FONT_BOLD, bg=self.C_CARD_HDR,
-                 fg="#E0E0E0", anchor="w").grid(row=0, column=0, sticky="w", padx=10, pady=4)
-        tk.Label(col_hdr, text="总库存", font=self.FONT_BOLD, bg=self.C_CARD_HDR,
-                 fg="#E0E0E0").grid(row=0, column=1, padx=4, pady=4)
-        tk.Label(col_hdr, text="总销量", font=self.FONT_BOLD, bg=self.C_CARD_HDR,
-                 fg="#E0E0E0").grid(row=0, column=2, padx=4, pady=4)
-        
-        # 数据行容器
+        # ── 数据容器（隐藏：识别结果表承载显示与编辑，rows 仅存数据对象）──
+        table_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR)  # 不 pack（隐藏输入卡）
+        table_frame._skip_theme = True
         self.table_area = tk.Frame(table_frame, bg=self.C_CARD_HDR)
-        self.table_area._skip_theme = True  # 深色卡内：_walk_force 不刷白
-        self.table_area.pack(fill="x")
+        self.table_area._skip_theme = True  # _walk_force 不刷白
         self.table_area.grid_columnconfigure(0, weight=1)
         self.table_area.grid_columnconfigure(1, minsize=80)
         self.table_area.grid_columnconfigure(2, minsize=80)
         
-        # 初始 3 行
+        # 初始 3 行（数据对象，UI 隐藏）
         for _ in range(3):
             self._add_row()
         
-        # 全局工具栏（独立于卡片外，操作整张表格）
+        # 全局工具栏（页面最上方独立行，不属于任何卡片）
         btn_row = tk.Frame(self.page_home, bg=self.C_BG)
-        btn_row.pack(fill="x", padx=15, pady=14)
+        btn_row.pack(fill="x", padx=15, pady=(14, 8))
         self._mk_btn(btn_row, "+ 加行", self._add_row, kind='ghost', pack_side="left")
         self._mk_btn(btn_row, "- 删行", self._del_row, kind='ghost', pack_side="left", padx=5)
         self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
@@ -659,7 +625,7 @@ class App(SettingsUIMixin):
         self._register_redraw(lambda f=self.result_frame: f.configure(bg=self.tc('table.header_bg', '#1F1F1F')))
         
         _ln = tk.Frame(self.result_frame, bg=self.C_ACCENT, height=2); _ln._skip_theme = True; _ln.pack(fill="x"); self._register_redraw(lambda f=_ln: f.configure(bg=self.tc("result.accent_line", "#FFE600")))
-        tk.Label(self.result_frame, text="2  计算结果", font=(self.FONT[0], 10, 'bold'),
+        tk.Label(self.result_frame, text="识别结果", font=(self.FONT[0], 11, 'bold'),
                  bg=self.C_CARD_HDR, fg='#FFFFFF').pack(fill="x", pady=(0,0))
         
         # 地区切换标签
@@ -670,14 +636,33 @@ class App(SettingsUIMixin):
         tk.Label(self.tab_frame, text="截图识别后此处显示地区标签",
                  font=(self.FONT[0], 8), fg="#A0A0A0", bg=self.C_CARD_HDR).pack(side="left")
         
-        columns = ("商品", "库存", "预估销量", "可售卖天数", "状态", "补货量")
+        columns = ("商品", "总库存", "总销量", "预估销量", "可售卖天数", "状态", "补货量")
         # 结果表放入带滚动条的容器（勾选列多时右侧列不再被截断）
         tree_frame = tk.Frame(self.result_frame, bg=self.C_CARD_HDR)
         tree_frame._skip_theme = True
         tree_frame.pack(fill="both", expand=True, padx=3, pady=3)
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=15)
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        # 美化滚动条：细、低对比度深色（替换原生粗丑滚动条）
+        try:
+            _st = ttk.Style()
+            _st.theme_use('clam')  # clam 支持自定义滚动条配色
+        except Exception:
+            pass
+        try:
+            _st.configure('Pdd.Vertical.TScrollbar', background='#555555', troughcolor=self.C_CARD_HDR,
+                          bordercolor=self.C_CARD_HDR, arrowcolor='#999999',
+                          lightcolor='#555555', darkcolor='#555555',
+                          arrowsize=10, relief='flat', borderwidth=0)
+            _st.configure('Pdd.Horizontal.TScrollbar', background='#555555', troughcolor=self.C_CARD_HDR,
+                          bordercolor=self.C_CARD_HDR, arrowcolor='#999999',
+                          lightcolor='#555555', darkcolor='#555555',
+                          arrowsize=10, relief='flat', borderwidth=0)
+        except Exception:
+            pass
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview,
+                            style='Pdd.Vertical.TScrollbar')
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview,
+                            style='Pdd.Horizontal.TScrollbar')
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
@@ -713,7 +698,7 @@ class App(SettingsUIMixin):
         self.wh_combo.pack(side="left")
         self.wh_combo.bind('<<ComboboxSelected>>', toggle_wh_filter)
         
-        for col, w in zip(columns, [260, 110, 110, 110, 100, 90]):
+        for col, w in zip(columns, [260, 110, 110, 100, 110, 100, 90]):
             self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
             self.tree.column(col, width=w, anchor="center")
         
@@ -723,6 +708,9 @@ class App(SettingsUIMixin):
         # 排序状态
         self._sort_col = None
         self._sort_reverse = False
+        
+        # 可编辑表格：双击前 3 列（商品/总库存/总销量）→ overlay Entry → 回写 rows → 重算
+        self.tree.bind("<Double-1>", self._tree_edit_cell)
         
         # Treeview 行高加大，避免计算结果条目上下拥挤
         style = ttk.Style()
@@ -819,7 +807,7 @@ class App(SettingsUIMixin):
             messagebox.showerror("出错", msg)
     
     def _clear_error(self):
-        self.status_text.set("就绪 — 输入库存和预估销量后点计算")
+        self.status_text.set("就绪 — 截图识别完成后，可直接在表格手动修改数据")
     
     def _auto_expand(self, row_count: int):
         """结果出来后自动展开窗口，动态测量确保 Treeview 可见，封顶屏幕 82%"""
@@ -911,6 +899,10 @@ class App(SettingsUIMixin):
         row['name'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
         row['stock'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
         row['sales'].trace_add('write', lambda *a, r=row: _auto_append(r, *a))
+        
+        # 加行后立即反映到识别结果表格（UI 输入卡已隐藏，表格即唯一展示）
+        if hasattr(self, 'tree') and self.tree.winfo_exists():
+            self.win.after(0, self._recalc_from_rows)
     
     def _load_regions(self):
         """加载地区→商品运输时效映射，兼容旧格式 {region: days} → {region: {product: days}}"""
@@ -1386,7 +1378,9 @@ class App(SettingsUIMixin):
                 'name': name, 'sku': name, 'stock': stock,
                 'daily': daily, 'ratio': round(ratio, 1),
                 'days_left': round(ratio, 1),
+                'est_sales': int(round(daily * (shipping + _off))) if daily > 0 else 0,
                 'status': status, 'color': color, 'qty': qty,
+                '_row_idx': len(plans),  # 原始 rows 索引（筛选/排序后编辑仍回写正确行）
                 'stat_date': f'{today.month}.{today.day}',
                 'warehouse': item.get('warehouse', ''),
                 # 通用列原始数据：客户勾选列从 _raw 取原文显示
@@ -1436,6 +1430,8 @@ class App(SettingsUIMixin):
         except Exception:
             pass
         self.tree.delete(*self.tree.get_children())
+        # iid → rows 索引映射（排序/筛选后编辑仍回写正确行）
+        self._row_index_map = {}
         # 仓库筛选选项：从当前 plans 收集去重（每次渲染刷新，地区切换后自动更新）
         try:
             _whs = sorted({p.get('warehouse', '') for p in plans if p.get('warehouse')})
@@ -1458,18 +1454,18 @@ class App(SettingsUIMixin):
             tags = ()
             if p['color'] == 'red': tags = ('urgent',)
             elif p['color'] == 'yellow': tags = ('warning',)
-            raw = p['_raw'] or {}
-            row_vals = []
-            from ocr import strip_tail_noise  # 去「查看地址/查看」词条噪音（OCR 识别不稳定，展示层统一清）
-            for col in _sel_cols:
-                v = raw.get(col)
-                if v is None or v == '':
-                    v = p.get(col, '')
-                if isinstance(v, str):
-                    v = strip_tail_noise(v)
-                row_vals.append(v)
-            row_vals += [p['ratio'], p['status'], p['qty']]
-            self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
+            # 固定 7 列：商品｜总库存｜总销量｜预估销量｜可售卖天数｜状态｜补货量
+            row_vals = [
+                p.get('name', '') or '',
+                p.get('stock', '') or '',
+                p.get('daily', '') if p.get('daily') else (p.get('sales', '') or ''),
+                p.get('est_sales', p.get('ratio', '')) or '',
+                p.get('days_left', p.get('ratio', '')) or '',
+                p.get('status', '') or '',
+                p.get('qty', '') or '',
+            ]
+            iid = self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
+            self._row_index_map[iid] = p.get('_row_idx', len(self._row_index_map))
     
     def _update_tabs(self):
         """更新地区切换标签"""
@@ -1506,12 +1502,30 @@ class App(SettingsUIMixin):
         self.status_text.set(f"已切换到 {region} — {len(data['plans'])} 个商品{suffix}")
         self._auto_expand(len(data['plans']))
     
-    def _del_row(self):
-        if len(self.rows) > 1:
-            row = self.rows.pop()
+    def _del_row(self, force_last=False):
+        """删行：优先删识别结果表格选中行（排序/筛选后经 _row_index_map 还原 rows 索引）；
+        force_last=True 供清空逻辑删末尾行。至少保留 1 行。"""
+        if len(self.rows) <= 1:
+            return
+        if force_last:
+            idxs = [len(self.rows) - 1]
+        else:
+            sel = self.tree.selection() if hasattr(self, 'tree') else ()
+            if sel:
+                idxs = sorted({self._row_index_map.get(i) for i in sel
+                               if self._row_index_map.get(i) is not None}, reverse=True)
+            else:
+                idxs = [len(self.rows) - 1]
+        for idx in idxs:
+            if len(self.rows) <= 1:
+                break
+            self.rows.pop(idx)
+            # 同步删隐藏数据容器里的 UI 行（每行一个 Frame）
             children = list(self.table_area.winfo_children())
-            if children:
-                children[-1].destroy()
+            if 0 <= idx < len(children):
+                children[idx].destroy()
+        if hasattr(self, 'tree') and self.tree.winfo_exists():
+            self._recalc_from_rows()
     
     def _clear_input_rows(self):
         """清空所有输入行，同时清除 Treeview 结果"""
@@ -1528,7 +1542,7 @@ class App(SettingsUIMixin):
         while len(self.rows) > 3 and all(
                 not r['name'].get().strip() and not r['stock'].get().strip()
                 and not r['sales'].get().strip() for r in self.rows[-1:]):
-            self._del_row()
+            self._del_row(force_last=True)
         # 也清掉 Treeview 旧结果
         self.tree.delete(*self.tree.get_children())
     
@@ -2462,6 +2476,52 @@ class App(SettingsUIMixin):
         except Exception as e:
             self._show_error(f"计算出错: {e}", popup=True)
             import traceback; traceback.print_exc()
+    
+    def _tree_edit_cell(self, event):
+        """双击识别结果表格前 3 列（商品/总库存/总销量）→ overlay Entry 编辑 → 回写 rows → 重算"""
+        iid = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+        if not iid or not col_id:
+            return
+        col_idx = int(col_id[1:]) - 1
+        if col_idx > 2:  # 计算列（预估/天数/状态/补货）只读
+            return
+        row_idx = getattr(self, '_row_index_map', {}).get(iid)
+        if row_idx is None or row_idx >= len(self.rows):
+            return
+        bbox = self.tree.bbox(iid, col_id)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        var = self.rows[row_idx][('name', 'stock', 'sales')[col_idx]]
+        entry = tk.Entry(self.tree, font=self.FONT, relief='flat', bd=0,
+                         highlightthickness=1, highlightbackground='#CCCCCC',
+                         highlightcolor='#FFE600',
+                         bg='#FFFFFF', fg='#111111', insertbackground='#111111')
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.insert(0, var.get())
+        entry.focus_set()
+        entry.select_range(0, 'end')
+        
+        def _commit(*_a):
+            val = entry.get().strip()
+            ok = True
+            if col_idx == 0:
+                var.set(val)
+            else:
+                ok = (val == '' or _validate_num_entry(val))
+                if ok:
+                    var.set(val)
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+            if ok:
+                self._recalc_from_rows()
+        
+        entry.bind('<Return>', _commit)
+        entry.bind('<FocusOut>', _commit)
+        entry.bind('<Escape>', lambda *_a: entry.destroy())
     
     def _sort_tree(self, col):
         """点击列头排序（v1.3 动态列：按当前 tree 列名找索引）"""
