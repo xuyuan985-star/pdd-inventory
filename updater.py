@@ -106,6 +106,37 @@ def main():
     ap.add_argument("--pid", type=int, default=0)
     args = ap.parse_args()
     
+    # ── 自我转移：若更新器运行在"将要被整体替换的目录"里（同目录有主 exe），
+    # 必须先从目录里复制到 %TEMP% 再运行——否则 Windows 不允许 rename 包含
+    # 运行中 exe 的目录（WinError 32），目录整体替换会失败（v1.4 修复） ──
+    import subprocess
+    if not args.resume_update:
+        try:
+            _tmp_self = os.path.join(tempfile.gettempdir(), 'PDD_EZ_Updater_tmp.exe')
+            # 判定：当前目录下有"任何" PDD 主 exe（不管版本）→ 即将整体替换此目录
+            _any_main = [f for f in os.listdir(me_dir)
+                         if f.lower().startswith('pdd ez') and f.lower().endswith('.exe')
+                         and 'updater' not in f.lower()]
+            _in_temp = me_dir.lower().startswith(os.path.abspath(tempfile.gettempdir()).lower())
+            if _any_main and not _in_temp:
+                shutil.copy2(me, _tmp_self)
+                # 显式把目标指向原目录的主 exe（temp 副本的 me_dir 是 %TEMP%，
+                # 不带 --target 会找不到主程序；直接双击或 GUI 调用都能正确替换）
+                _orig_main = os.path.join(me_dir, _any_main[0])
+                _args = [_tmp_self] + ['--target', _orig_main]
+                if args.target:
+                    _args = [_tmp_self] + ['--target', args.target]
+                if args.restart:
+                    _args += ['--restart']
+                if args.pid:
+                    _args += ['--pid', str(args.pid)]
+                _args += ['--resume-update']
+                subprocess.Popen(_args, cwd=os.path.dirname(_tmp_self))
+                print(f"[更新器] 已转移到临时目录运行: {_tmp_self} → 目标 {args.target or _orig_main}")
+                return
+        except Exception as _e:
+            print(f"[更新器] 自我转移失败（继续原目录运行）: {_e}")
+
     if args.resume_update:
         print("[更新器] 自升级完成，继续更新流程...")
     
@@ -239,6 +270,19 @@ def main():
                     single_exe = item_path
             if new_dir:
                 print("[更新器] 覆盖程序文件夹...")
+                # ⚠️ 安全底线：target_dir 必须是"PDD EZ 程序目录"才允许整体替换。
+                # 判断：目录名含 'PDD EZ' 或目录内有 'PDD EZ*.exe'。
+                # 防止更新器被放到任意目录（如用户下载目录）导致 rename/rmtree 误删用户文件（v1.4 修复）
+                _td_name = os.path.basename(os.path.normpath(target_dir))
+                _td_has_main = any(
+                    f.lower().startswith('pdd ez') and f.lower().endswith('.exe') and 'updater' not in f.lower()
+                    for f in os.listdir(target_dir)
+                ) if os.path.isdir(target_dir) else False
+                if not (_td_name.startswith('PDD EZ') or _td_has_main):
+                    print(f"[更新器] [拒绝] 目标目录不是 PDD EZ 程序目录（{target_dir}）")
+                    print("[更新器] 请把更新器放到 PDD EZ 主程序所在的文件夹后再运行")
+                    input("按回车退出...")
+                    return
                 # 备份旧版本
                 backup_dir = target_dir + "_backup"
                 if os.path.exists(backup_dir):
@@ -269,24 +313,18 @@ def main():
                     print(f"[更新器] 已更新: {target_dir}")
                     shutil.rmtree(backup_dir, ignore_errors=True)
                 except Exception:
-                    # 回滚：先确保目标目录不存在（改名让位，避免 rmtree 失败残留导致恢复失败）
+                    # 回滚：不物理删除 target_dir（防误删用户文件）——直接改名让位后从备份恢复。
+                    # 旧目录保留为 _stale_* 供人工清理，绝不 rmtree（v1.4 安全修复）
                     print("[更新器] 更新失败，正在回滚...")
                     if os.path.exists(target_dir):
+                        stale = target_dir + "_stale_" + str(int(time.time()))
                         try:
-                            shutil.rmtree(target_dir, ignore_errors=True)
+                            os.rename(target_dir, stale)
                         except Exception:
-                            pass
-                        if os.path.exists(target_dir):
-                            # rmtree 失败（文件被占用）→ 改名让位，保证恢复路径干净
-                            stale = target_dir + "_stale_" + str(int(time.time()))
                             try:
-                                os.rename(target_dir, stale)
+                                shutil.move(target_dir, stale)
                             except Exception:
-                                # Windows 下 rename 非空目录可能失败 → shutil.move 兜底
-                                try:
-                                    shutil.move(target_dir, stale)
-                                except Exception:
-                                    print(f"[更新器] 警告: 无法清理残留目录 {target_dir}，回滚可能不完整")
+                                print(f"[更新器] 警告: 无法清理残留目录 {target_dir}，回滚可能不完整")
                     if os.path.exists(backup_dir):
                         rollback_skipped = 0
                         for root, dirs, files in os.walk(backup_dir):
