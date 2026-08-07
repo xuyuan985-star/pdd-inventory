@@ -8,6 +8,7 @@ from datetime import datetime
 
 from utils import get_base_dir, get_api_config, VERSION, version_newer
 from settings_ui import SettingsUIMixin
+from logger import log
 
 # ── 抢先设置 DPI 感知，防止 pyautogui 截图后窗口缩放 ──
 if sys.platform == 'win32':
@@ -51,7 +52,7 @@ def _validate_num_entry(p) -> bool:
 
 def _strip_name_decor(name: str) -> str:
     """剥离 _fill_from_ocr 写入显示名时的装饰：
-    '⚠盐渍鞭炮笋 [烟台1仓]' → '盐渍鞭炮笋'。
+    '⚠示例商品A [示例仓库]' → '示例商品A'。
     ⚠ 为低置信前缀；[xxx] 为分仓库显示后缀。两者都可能进入 rows 供编辑/重算回读。"""
     if not name:
         return name
@@ -291,6 +292,12 @@ class App(SettingsUIMixin):
         return btn
 
     def __init__(self):
+        # 日志：程序启动记录（按天分文件 logs/YYYY-MM-DD.log）
+        try:
+            log.hr(f"PDD EZ 启动 v{VERSION}", 0)
+            log.info(f"frozen={getattr(sys, 'frozen', False)}")
+        except Exception:
+            pass
         # 任务栏图标：必须在 Tk() 之前设置，否则源码运行时显示 python 图标
         if sys.platform == 'win32':
             import ctypes
@@ -313,7 +320,8 @@ class App(SettingsUIMixin):
                 self.win.iconbitmap(default=ico)
         except Exception:
             pass
-        # 首次启动清理旧版本 EXE
+        # 首次启动清理旧版本 EXE（v1.4+ 固定名 PDD EZ.exe，这里清理历史遗留的
+        # PDD EZ vX.Y.exe——旧版升级客户首次启动自动清掉版本号 exe 残留）
         if getattr(sys, 'frozen', False):
             exe_dir = os.path.dirname(sys.executable)
             import re as _re
@@ -363,6 +371,60 @@ class App(SettingsUIMixin):
         
         self._build_ui()
         self._check_update()  # 后台检查更新
+        self._check_announcement()  # 后台检查公告（v1.4 新增，借鉴 March7th）
+
+    def _check_announcement(self):
+        """后台拉取公告，有则弹窗展示（静默失败不打扰客户）"""
+        from announcement import check_announcement
+        try:
+            check_announcement(self.win, self._show_announcement)
+        except Exception:
+            pass
+
+    def _show_announcement(self, title, content, image_url=''):
+        """展示公告弹窗（Toplevel，支持可选图片）"""
+        try:
+            from PIL import Image as PILImage
+            from PIL import ImageTk
+            import urllib.request as _ur
+            from io import BytesIO as _BytesIO
+            dlg = tk.Toplevel(self.win)
+            dlg.title(title or "公告")
+            dlg.geometry("480x420")
+            dlg.resizable(False, False)
+            dlg.configure(bg=self.C_BG)
+            dlg.transient(self.win)
+            # 公告内容
+            tk.Label(dlg, text=title or "公告", font=self.FONT_HEADING,
+                    bg=self.C_BG, fg=self.C_TEXT).pack(pady=(15, 5))
+            txt_frame = tk.Frame(dlg, bg=self.C_BG, highlightthickness=1,
+                                 highlightbackground=self.C_BORDER)
+            txt_frame.pack(fill="both", expand=True, padx=15, pady=5)
+            txt = tk.Text(txt_frame, font=(self.FONT[0], 9), wrap="word",
+                          bg=self.C_BG, fg=self.C_TEXT, relief="flat")
+            txt.insert("1.0", content or "")
+            txt.configure(state="disabled")
+            txt.pack(fill="both", expand=True, padx=5, pady=5)
+            # 可选图片
+            if image_url:
+                try:
+                    req = _ur.Request(image_url, headers={"User-Agent": "PDD-EZ"})
+                    img_data = _ur.urlopen(req, timeout=10).read()
+                    img = PILImage.open(_BytesIO(img_data))
+                    img.thumbnail((440, 160))
+                    photo = ImageTk.PhotoImage(img)
+                    lbl = tk.Label(dlg, image=photo, bg=self.C_BG)
+                    lbl.image = photo  # 防 GC
+                    lbl.pack(pady=5)
+                except Exception:
+                    pass
+            _btn_frame = tk.Frame(dlg, bg=self.C_BG)
+            _btn_frame.pack(pady=10)
+            self._mk_btn(_btn_frame, "知道了", dlg.destroy,
+                         kind='primary', font=self.FONT_BOLD, width=12,
+                         pack_side="left", padx=5)
+        except Exception:
+            pass  # 公告展示失败不影响主程序
         
     def _migrate_config(self):
         """配置文件版本迁移：阶梯式按版本号补全，每步立即原子写回"""
@@ -463,14 +525,10 @@ class App(SettingsUIMixin):
         threading.Thread(target=self._do_check_update, daemon=True).start()
     
     def _fetch_latest_release(self):
-        """从 GitHub API 获取最新 release 的 tag 和 body"""
-        from urllib.request import urlopen, Request
-        import json as _json
-        req = Request("https://api.github.com/repos/xuyuan985-star/pdd-inventory/releases/latest",
-                     headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "PDD-EZ"})
-        with urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read().decode())
-            return data.get("tag_name", ""), data.get("body", "")
+        """从 GitHub API 获取最新 release 的 tag 和 body（多镜像测速选最快）"""
+        from github_api import fetch_latest_release
+        tag, body, _assets = fetch_latest_release(timeout=10)
+        return tag, body
     
     def _do_check_update(self):
         try:
@@ -480,8 +538,11 @@ class App(SettingsUIMixin):
                 self._latest_body = body
                 msg = f"🔄 有新版本 {latest}，点击「更新」查看详情"
                 self.win.after(0, lambda: self.status_text.set(msg))
-        except Exception:
-            pass
+            else:
+                log.debug(f"更新检查: 已是最新 ({latest})")
+        except Exception as e:
+            # 静默 UI + 留日志（客户报"点更新没反应"时可定位网络/镜像问题）
+            log.warning(f"更新检查失败: {e}")
     
     def _build_ui(self):
         # ── 全局热键 ──
@@ -948,7 +1009,7 @@ class App(SettingsUIMixin):
         self.status_text.set("已打开商家后台 → 请手动登录")
     
     def _run_updater(self):
-        """显示更新详情 + 进度 + 错误处理"""
+        """显示更新详情 + 进度 + 错误处理（v1.4 修复：下载在主程序内完成，进度实时显示）"""
         latest = getattr(self, '_latest_tag', '')
         body = getattr(self, '_latest_body', '')
         if not latest:
@@ -970,7 +1031,7 @@ class App(SettingsUIMixin):
         
         dlg = tk.Toplevel(self.win)
         dlg.title("软件更新")
-        dlg.geometry("450x300")
+        dlg.geometry("480x360")
         dlg.resizable(False, False)
         dlg.configure(bg=self.C_BG)
         dlg.transient(self.win)
@@ -982,55 +1043,254 @@ class App(SettingsUIMixin):
         # 更新日志
         log_frame = tk.Frame(dlg, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         log_frame.pack(fill="both", expand=True, padx=15, pady=5)
-        log_text = tk.Text(log_frame, font=(self.FONT[0], 8), wrap="word", height=8,
+        log_text = tk.Text(log_frame, font=(self.FONT[0], 8), wrap="word", height=6,
                           bg=self.C_BG, fg=self.C_TEXT, relief="flat")
         log_text.insert("1.0", changelog)
         log_text.configure(state="disabled")
         log_text.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # 进度条
-        progress = ttk.Progressbar(dlg, mode="indeterminate", length=380)
-        progress.pack(pady=8)
-        status_lbl = tk.Label(dlg, text="", font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED)
-        status_lbl.pack()
+        # 状态 + 进度条（v1.4 修复：下载进度实时显示，替换旧版假进度）
+        status_lbl = tk.Label(dlg, text="准备下载...", font=(self.FONT[0], 9),
+                              bg=self.C_BG, fg=self.C_MUTED)
+        status_lbl.pack(pady=(4, 0))
+        progress = ttk.Progressbar(dlg, mode="determinate", length=440)
+        progress.pack(pady=6)
         
-        def do_update():
-            progress.start(10)
-            status_lbl.configure(text="正在下载...")
-            dlg.update()
+        # 按钮区
+        btn_frame = tk.Frame(dlg, bg=self.C_BG)
+        btn_frame.pack(pady=8)
+        
+        state = {"cancelled": False, "running": False, "ready_install": False,
+                 "downloaded_zip": "", "sha_ok": False}
+        
+        def _set_status(text, pct=None):
+            status_lbl.configure(text=text)
+            if pct is not None:
+                progress.configure(value=pct)
+            dlg.update_idletasks()
+        
+        def _fail(msg, err=""):
+            state["running"] = False
+            state["ready_install"] = False
+            _set_status("")
+            messagebox.showerror("更新失败", f"{msg}\n{err}" if err else msg, parent=dlg)
+            # 恢复按钮
+            for b in (btn_dl, btn_cancel):
+                b.configure(state="normal")
+            btn_dl.configure(text="重试")
+        
+        def _do_download():
+            """后台线程：拉取资产 → 流式下载 → SHA256 校验 → 更新状态"""
+            import subprocess, tempfile, json as _json, hashlib as _hashlib
+            from urllib.request import urlopen as _urlopen, Request as _Request
             
-            import subprocess, tempfile
-            updater = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else get_base_dir(),
-                                  'PDD EZ Updater.exe')
-            if not os.path.exists(updater):
-                progress.stop()
-                messagebox.showerror("更新失败", "未找到更新器，请重新下载完整安装包", parent=dlg)
-                dlg.destroy()
-                return
+            class _CancelledDownload(Exception):
+                """用户取消下载：静默中止，不弹错误"""
             
             try:
-                # 兼容旧版更新器：先探测是否支持 --pid（v1.0 更新器不认识该参数会直接报错退出）
-                _args = [updater, '--help']
-                _probe = subprocess.run(_args, capture_output=True, timeout=5)
-                _help_out = (_probe.stdout + _probe.stderr).decode('utf-8', errors='replace')
-                _cmd = [updater, '--target', sys.executable, '--restart']
-                if '--pid' in _help_out:
-                    _cmd += ['--pid', str(os.getpid())]
+                # 1) 获取资产列表（多镜像测速选最快）
+                from github_api import fetch_latest_release, mirror_download_url
+                _tag, _body, assets = fetch_latest_release(timeout=15)
+                
+                exe_asset = None
+                sha_asset = None
+                # 跨版本策略：本地程序目录有固定名 PDD EZ.exe（v1.4+）→ 增量包；
+                # 否则（旧版 PDD EZ vX.Y.exe）→ 全量包——旧版 _internal 结构可能不同，增量会崩
+                local_main = os.path.join(
+                    os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else get_base_dir(),
+                    'PDD EZ.exe')
+                use_incremental = os.path.exists(local_main)
+                for a in assets:
+                    name = a.get("name", "")
+                    if use_incremental and name.endswith("_update.zip"):
+                        exe_asset = a
+                    elif not use_incremental and name.endswith(".zip") and "_update" not in name:
+                        exe_asset = a
+                if exe_asset:
+                    for a in assets:
+                        if a.get("name", "") == exe_asset["name"] + ".sha256":
+                            sha_asset = a
+                            break
+                if not exe_asset:
+                    # 兜底：增量找不到就全量，反之亦然（release 资产不全时保底）
+                    for a in assets:
+                        name = a.get("name", "")
+                        if use_incremental and name.endswith(".zip") and "_update" not in name:
+                            exe_asset = a
+                            break
+                        if not use_incremental and name.endswith("_update.zip"):
+                            exe_asset = a
+                            break
+                    if exe_asset:
+                        for a in assets:
+                            if a.get("name", "") == exe_asset["name"] + ".sha256":
+                                sha_asset = a
+                                break
+                if not exe_asset:
+                    self.win.after(0, lambda: _fail("Release 中未找到更新包"))
+                    return
+                
+                # 2) 下载到临时目录（流式 + 进度上报）
+                tmp = os.path.join(tempfile.gettempdir(), "pdd_update")
+                os.makedirs(tmp, exist_ok=True)
+                asset_name = os.path.basename(exe_asset["name"].replace('\\', '/'))
+                dest = os.path.join(tmp, asset_name)
+                # 下载 URL：优先镜像（国内网络通常更快），失败回退官方直连
+                url = mirror_download_url(exe_asset["browser_download_url"], prefer_mirror=True)
+                fallback_url = exe_asset["browser_download_url"]
+                total = exe_asset.get("size", 0)
+                
+                # 流式下载 + 进度上报（镜像/官方共用）
+                def _download_stream(resp, dest, total, asset_name):
+                    if total == 0:
+                        try:
+                            total = int(resp.headers.get('Content-Length', 0) or 0)
+                        except Exception:
+                            total = 0
+                    downloaded = 0
+                    last_pct = -1
+                    with open(dest, 'wb') as f:
+                        while True:
+                            if state["cancelled"]:
+                                f.close()
+                                try:
+                                    os.remove(dest)
+                                except Exception:
+                                    pass
+                                raise _CancelledDownload()
+                            chunk = resp.read(65536)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0:
+                                pct = int(downloaded * 100 / total)
+                                if pct != last_pct:
+                                    last_pct = pct
+                                    self.win.after(0, lambda p=pct, d=downloaded, t=total:
+                                                   _set_status(f"正在下载 {asset_name} ({d//1024//1024}MB/{t//1024//1024}MB)...", p))
+                
+                self.win.after(0, lambda: _set_status(f"正在下载 {asset_name}...", 0))
+                try:
+                    req = _Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ"})
+                    with _urlopen(req, timeout=120) as resp:
+                        _download_stream(resp, dest, total, asset_name)
+                except _CancelledDownload:
+                    raise  # 取消透传，不尝试官方兜底
+                except Exception:
+                    # 镜像失败 → 官方直连兜底
+                    req = _Request(fallback_url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ"})
+                    with _urlopen(req, timeout=120) as resp:
+                        _download_stream(resp, dest, total, asset_name)
+                
+                # 3) SHA256 校验（有 sha256 资产时）
+                if sha_asset:
+                    self.win.after(0, lambda: _set_status("正在校验下载完整性..."))
+                    sha_path = dest + ".sha256"
+                    try:
+                        req = _Request(sha_asset["browser_download_url"],
+                                       headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ"})
+                        with _urlopen(req, timeout=30) as resp:
+                            with open(sha_path, 'wb') as f:
+                                f.write(resp.read())
+                        expected = open(sha_path, 'r').read().strip().split()[0]
+                        h = _hashlib.sha256()
+                        with open(dest, 'rb') as f:
+                            while True:
+                                if state["cancelled"]:
+                                    raise _CancelledDownload()
+                                c = f.read(65536)
+                                if not c:
+                                    break
+                                h.update(c)
+                        if h.hexdigest().lower() != expected.lower():
+                            os.remove(dest)
+                            self.win.after(0, lambda: _fail("SHA256 校验失败，更新包可能被篡改，已删除"))
+                            return
+                        os.remove(sha_path)
+                    except _CancelledDownload:
+                        raise  # 取消透传，不弹"校验文件下载失败"
+                    except Exception as e:
+                        os.remove(dest)
+                        self.win.after(0, lambda: _fail("SHA256 校验文件下载失败，已拒绝安装（安全策略）", str(e)))
+                        return
+                
+                state["downloaded_zip"] = dest
+                state["sha_ok"] = True
+                self.win.after(0, lambda: _set_status("下载完成，准备安装...", 100))
+                self.win.after(0, _ask_install)
+                
+            except _CancelledDownload:
+                # 用户取消：静默返回，不弹错误
+                return
+            except Exception as e:
+                self.win.after(0, lambda: _fail("下载失败，请检查网络", str(e)))
+        
+        def _ask_install():
+            """下载完成 → 确认安装 → 关窗拉起 updater finalize"""
+            state["running"] = False
+            state["ready_install"] = True
+            for b in (btn_dl, btn_cancel):
+                b.configure(state="normal")
+            btn_dl.configure(text="立即安装")
+            _set_status("下载完成，点击「立即安装」将关闭主程序并安装新版本", 100)
+        
+        def _do_install():
+            """拉起 updater finalize：主程序即将退出，安装由独立更新器完成。
+            关键：先把 updater 复制到 %TEMP% 再运行（对齐 auto 模式自我转移）——
+            若直接在程序目录运行，更新包含新 updater 时 _ensure_self_renamed 无法
+            rename 运行中的自身 exe（Windows ERROR_ACCESS_DENIED），更新会中止。"""
+            import subprocess, tempfile, shutil
+            updater = os.path.join(
+                os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else get_base_dir(),
+                'PDD EZ Updater.exe')
+            if not os.path.exists(updater):
+                messagebox.showerror("更新失败", "未找到更新器，请重新下载完整安装包", parent=dlg)
+                return
+            try:
+                # 复制到 %TEMP% 再运行：target_dir 内无运行中的 updater，自身可被覆盖
+                _tmp_updater = os.path.join(tempfile.gettempdir(), 'PDD_EZ_Updater_tmp.exe')
+                shutil.copy2(updater, _tmp_updater)
+                _cmd = [_tmp_updater, '--mode', 'finalize',
+                        '--file', state["downloaded_zip"],
+                        '--extract-dir', os.path.join(tempfile.gettempdir(), "pdd_update", "extracted"),
+                        '--target', sys.executable,
+                        '--wait-pid', str(os.getpid())]
                 subprocess.Popen(_cmd)
-                progress.stop()
-                status_lbl.configure(text="更新器已启动，主程序即将关闭...")
+                _set_status("更新器已启动，主程序即将关闭...")
                 self.win.destroy()
             except Exception as e:
-                progress.stop()
                 messagebox.showerror("启动失败", f"无法启动更新器：{e}\n请手动下载最新版本", parent=dlg)
+        
+        def _do_click():
+            if state["ready_install"]:
+                _do_install()
+                return
+            if state["running"]:
+                return
+            state["running"] = True
+            state["cancelled"] = False
+            btn_dl.configure(state="disabled", text="更新中...")
+            btn_cancel.configure(state="normal")
+            _set_status("准备下载...", 0)
+            threading.Thread(target=_do_download, daemon=True).start()
+        
+        def _cancel():
+            if state["running"]:
+                state["cancelled"] = True
+                state["running"] = False
+                _set_status("已取消")
+                btn_dl.configure(state="normal", text="重试")
+            else:
                 dlg.destroy()
         
-        btn_frame = tk.Frame(dlg, bg=self.C_BG)
-        btn_frame.pack(pady=10)
-        self._mk_btn(btn_frame, "立即更新", do_update, kind='primary',
-                     font=self.FONT_BOLD, width=12, pack_side="left", padx=5)
-        self._mk_btn(btn_frame, "稍后再说", dlg.destroy, kind='ghost',
-                     font=self.FONT, width=12, pack_side="left", padx=5)
+        btn_dl = self._mk_btn(btn_frame, "立即更新", _do_click, kind='primary',
+                              font=self.FONT_BOLD, width=12, pack_side="left", padx=5)
+        btn_cancel = self._mk_btn(btn_frame, "取消", _cancel, kind='ghost',
+                                  font=self.FONT, width=12, pack_side="left", padx=5)
+        
+        # 下载完成时：按钮变为「立即安装」，点击拉起 updater
+        btn_dl.configure(command=_do_click)
     
     def tc(self, path, default=None):
         """Token Resolver：读组件 token（'btn.primary.bg' → components.btn.primary.bg）、
@@ -1484,7 +1744,7 @@ class App(SettingsUIMixin):
                     row_vals.append(_sv)
                 elif _map.get(_c) == 'warehouse':
                     # 仓库信息：用 parse 已过滤的 warehouse（strip_tail_noise 已去"查看地址"等词条），
-                    # 不用 _raw 原文——原文带词条噪音会显示成"烟台1仓 查看地址"
+                    # 不用 _raw 原文——原文带词条噪音会显示成"示例仓库 查看地址"
                     row_vals.append(p.get('warehouse', '') or _raw.get(_c, '') or '')
                 else:
                     # 其他勾选列（仓库销售库存等）：显示 OCR 原文
@@ -1786,9 +2046,12 @@ class App(SettingsUIMixin):
             def _batch_thread_wrapper():
                 """线程包装：任何异常都写日志 + 提示，避免静默死掉（窗口不恢复）"""
                 try:
+                    log.hr(f"批量识别开始：{len(selected)} 个地区", 1)
                     self._run_batch_sequence(selected, hud, hud_text, _dual_mode)
+                    log.hr("批量识别完成", 1)
                 except Exception as _e:
                     import traceback
+                    log.error("批量识别异常:\n" + traceback.format_exc())
                     try:
                         with open(os.path.join(get_base_dir(), 'output', 'ocr_dlog.txt'),
                                   'a', encoding='utf-8') as _f:
@@ -1830,6 +2093,7 @@ class App(SettingsUIMixin):
             return
         
         def dlog(msg):
+            """批量识别过程日志：HUD 弹窗 + 状态栏 + ocr_dlog.txt 三路输出（线程安全，after 调度）"""
             if hud_text:
                 # HUD 可能被用户手动关闭：insert 前先确认窗口存活，防 TclError
                 self.win.after(0, lambda m=msg: (
@@ -1902,8 +2166,9 @@ class App(SettingsUIMixin):
                 except Exception:
                     pass
                 dlog(f"AI 定位完成 置信度:{result['confidence']:.0%}")
-        except Exception:
-            pass  # 失败静默回退，用旧坐标继续
+        except Exception as _e:
+            # 失败静默回退旧坐标，但留日志（客户识别错乱时可定位是定位失败）
+            log.warning(f"AI 定位失败，回退旧坐标: {_e}")
 
         # 获取有效坐标（v1.4 起只保留 AI 定位；绝对坐标模式已移除）
         def _get_coords():
@@ -2359,8 +2624,10 @@ class App(SettingsUIMixin):
         except Exception:
             pass
         
+        # 子线程启动前缓存 Tk 变量（_single_dual_var.get() 是 Tcl 调用，子线程读未定义行为）
+        _dual_mode_cache = self._single_dual_var.get()
+        
         def task():
-            import time, os
             try:
                 self.win.after(0, self.win.iconify)
                 time.sleep(0.5)
@@ -2373,15 +2640,17 @@ class App(SettingsUIMixin):
                 found_window = capture_pdd_screenshot(ss_path)
                 
                 # 截图完成立即恢复窗口（OCR 可能耗时数秒，不必等）
-                try:
-                    if self.win.state() == 'iconic':
-                        self.win.after(0, lambda: (
-                            self.win.deiconify(),
-                            self.win.lift(),
-                            self.win.attributes('-topmost', True),
-                            self.win.after(500, lambda: self.win.attributes('-topmost', False))))
-                except Exception:
-                    pass
+                # 注意：win.state() 是 Tk 调用，必须放主线程（after）——子线程直接读 Tcl 未定义行为
+                def _restore_if_iconic():
+                    try:
+                        if self.win.state() == 'iconic':
+                            self.win.deiconify()
+                            self.win.lift()
+                            self.win.attributes('-topmost', True)
+                            self.win.after(500, lambda: self.win.attributes('-topmost', False))
+                    except Exception:
+                        pass
+                self.win.after(0, _restore_if_iconic)
                 
                 if not found_window:
                     self.win.after(0, lambda: (
@@ -2391,7 +2660,7 @@ class App(SettingsUIMixin):
                 
                 self.win.after(0, lambda: self.status_text.set('OCR识别中...'))
                 
-                items = self._ocr_generic_to_items(ss_path, dual_verify=self._single_dual_var.get())
+                items = self._ocr_generic_to_items(ss_path, dual_verify=_dual_mode_cache)
                 
                 if not items:
                     self.win.after(0, lambda: self.status_text.set('未识别到商品'))
@@ -2415,10 +2684,12 @@ class App(SettingsUIMixin):
         
         self.status_text.set("识别中...")
         self.win.update()
+        # 子线程启动前缓存 Tk 变量（子线程读 Tcl 变量未定义行为）
+        _dual_mode_cache = self._single_dual_var.get()
         
         def task():
             try:
-                items = self._ocr_generic_to_items(path, dual_verify=self._single_dual_var.get())
+                items = self._ocr_generic_to_items(path, dual_verify=_dual_mode_cache)
                 self.win.after(0, lambda i=items: self._fill_from_ocr(i))
             except Exception as e:
                 self.win.after(0, self._show_error, str(e))
@@ -2785,6 +3056,7 @@ class App(SettingsUIMixin):
             messagebox.showerror("导出失败", str(e))
     
     def run(self):
+        """程序主入口：启动 Tk 主循环"""
         self.win.mainloop()
 
 

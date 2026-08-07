@@ -3,11 +3,8 @@ PDD EZ — 配置常量与偏好读写
 皮肤系统 / 分辨率预设 / 主题偏好持久化
 主题 = 完整设计 spec：C_* 语义色 + components 组件 token + decor 装饰 token
 """
-import json
-import os
-from utils import get_base_dir
 
-# ── 皮肤系统 — 完整设计 token（颜色 + 组件 + 装饰全跟随）────────────────────
+# ── 皮肤系统 — 完整设计 token（颜色 + 组件 + 装饰全跟随）────────────────────────────────────────
 THEMES = {
     "极简白": {
         "label": "极简白",
@@ -198,50 +195,22 @@ def _merge_theme(spec):
     return {**spec, "components": base["components"], "decor": base["decor"]}
 
 
-def _read_settings():
-    """读取 settings.json，失败返回 {}"""
-    try:
-        with open(os.path.join(get_base_dir(), 'settings.json'), 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError, OSError):
-        return {}
-
-
-def _write_settings(s):
-    """写入 settings.json（原子替换 + 失败重试 + .bak 备份，防 Windows 文件锁丢配置）"""
-    import os, time
-    path = os.path.join(get_base_dir(), 'settings.json')
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(s, f, ensure_ascii=False, indent=2)
-    # 写入前备份现有配置（杀毒/云同步短暂锁定时可恢复）
-    try:
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as _f:
-                _bak = _f.read()
-            with open(path + '.bak', 'w', encoding='utf-8') as _f:
-                _f.write(_bak)
-    except Exception:
-        pass
-    # os.replace 原子替换；Windows 上目标被短暂锁定会抛 PermissionError → 重试 3 次
-    for _attempt in range(3):
-        try:
-            os.replace(tmp, path)
-            return
-        except OSError as _e:
-            if _attempt >= 2:
-                raise  # 重试耗尽：显式抛给调用方提示，不静默吞（避免用户无感知丢设置）
-            time.sleep(0.2)
-
-
 def load_theme_pref() -> str:
-    """读取皮肤偏好，返回主题名"""
-    name = _read_settings().get('theme', '终末地')
-    return name if name in THEMES else '终末地'
+    """读取皮肤偏好，返回主题名（统一走 utils.Config 通道，避免双写漂移）"""
+    try:
+        from utils import Config
+        name = Config.load().get('theme', '终末地')
+        return name if name in THEMES else '终末地'
+    except Exception:
+        return '终末地'
 
 
 def save_theme_pref(name: str):
-    """保存皮肤偏好"""
-    s = _read_settings()
-    s['theme'] = name
-    _write_settings(s)
+    """保存皮肤偏好（统一走 utils.Config 通道）"""
+    try:
+        from utils import Config
+        data = Config.load()
+        data['theme'] = name
+        Config.save(data)
+    except Exception:
+        pass

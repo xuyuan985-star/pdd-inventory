@@ -1,6 +1,8 @@
 build/
 dist/
 output/
+logs/
+*.log
 *.pyc
 __pycache__/
 venv/
