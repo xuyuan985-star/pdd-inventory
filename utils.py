@@ -106,25 +106,97 @@ def save_secondary_model(name: str):
 
 
 class Config:
-    """配置单例：唯一读写 settings.json，原子写入。"""
+    """配置单例：唯一读写 settings.json，原子写入。
+    v1.4 升级（借鉴 March7thAssistant config.py）：加载时与 settings_template.json
+    递归合并——用户配置优先，缺失字段从模板补全并写回（配置自愈，损坏/缺字段不崩）。"""
+
+    _template_cache = None
+
+    @staticmethod
+    def _load_template():
+        """加载 settings_template.json 默认结构（缓存，失败返回 {}）"""
+        if Config._template_cache is not None:
+            return Config._template_cache
+        tpl = {}
+        try:
+            # 打包后模板在 _MEIPASS；源码在脚本目录
+            for cand in [os.path.join(get_base_dir(), 'settings_template.json'),
+                         os.path.join(sys._MEIPASS, 'settings_template.json') if getattr(sys, 'frozen', False) else '']:
+                if cand and os.path.exists(cand):
+                    with open(cand, 'r', encoding='utf-8') as f:
+                        tpl = json.load(f)
+                    break
+        except Exception:
+            tpl = {}
+        Config._template_cache = tpl
+        return tpl
+
+    @staticmethod
+    def _merge(base: dict, override: dict) -> dict:
+        """递归合并：override 优先，base 提供默认（March7th _update_config 同款）。
+        用户 null 值按缺字段处理（补模板默认），防手动损坏配置崩程序。"""
+        out = dict(base)
+        for key, value in override.items():
+            if value is None:
+                continue  # 用户 null 视为缺字段，保留模板默认
+            if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+                out[key] = Config._merge(out[key], value)
+            else:
+                out[key] = value
+        return out
+
     @staticmethod
     def load():
+        """读取 settings.json，与模板递归合并（用户配置优先，缺字段补默认）"""
+        data = {}
         try:
             sf = os.path.join(get_base_dir(), 'settings.json')
             if os.path.exists(sf):
                 with open(sf, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
         except Exception:
-            pass
-        return {}
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        # 模板合并：补全缺失字段
+        tpl = Config._load_template()
+        if tpl:
+            merged = Config._merge(tpl, data)
+            # 有补全 → 写回自愈（用户配置缺失字段被补上）
+            if merged != data:
+                try:
+                    Config.save(merged)
+                except Exception:
+                    pass
+            return merged
+        return data
 
     @staticmethod
     def save(data: dict):
+        """原子写 settings.json + 写前 .bak 备份 + 重试（防 Windows 文件锁丢配置）"""
+        import time as _time
         sf = os.path.join(get_base_dir(), 'settings.json')
         tmp = sf + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, sf)
+        # 写前备份现有配置（杀毒/云同步短暂锁定时可恢复）
+        try:
+            if os.path.exists(sf):
+                with open(sf, 'r', encoding='utf-8') as _f:
+                    _bak = _f.read()
+                with open(sf + '.bak', 'w', encoding='utf-8') as _f:
+                    _f.write(_bak)
+        except Exception:
+            pass
+        # os.replace 原子替换；Windows 上目标被短暂锁定会抛 PermissionError → 重试 3 次
+        for _attempt in range(3):
+            try:
+                os.replace(tmp, sf)
+                return
+            except OSError:
+                if _attempt >= 2:
+                    raise
+                _time.sleep(0.2)
 
     @staticmethod
     def get(key, default=None):
@@ -191,6 +263,8 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
     在全屏坐标系中的位置）。滚动/点击坐标换算时用窗口位置还原全屏偏移，
     避免窗口未最大化时坐标错位（如 1920 窗口在 4K 屏上）。
     实测耗时 ~0.7s，无需线程超时包装；窗口恢复由调用方主线程 after 负责。
+    v1.4 修复：优先 PrintWindow 后台截图（借鉴 March7thAssistant screenshot.py）——
+    不抢焦点、窗口被遮挡也能截到内容；失败才回退前台截图。
     """
     import os as _os, time as _time
     _os.makedirs(_os.path.dirname(output_path) or '.', exist_ok=True)
@@ -209,12 +283,19 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
             if wins:
                 win = wins[0]
                 found_window = True
-                if win.isMinimized:
-                    win.restore()
-                win.activate()
-                _time.sleep(0.2)
                 win_left, win_top = win.left, win.top
-                img = pg.screenshot(region=(win.left, win.top, win.width, win.height))
+                # 1) 优先后台截图（PrintWindow）：不抢焦点、不遮挡、窗口被盖住也能截
+                try:
+                    img = _capture_window_background(win)
+                except Exception:
+                    img = None
+                if img is None:
+                    # 2) 后台失败 → 前台截图（激活窗口，pyautogui region）
+                    if win.isMinimized:
+                        win.restore()
+                    win.activate()
+                    _time.sleep(0.2)
+                    img = pg.screenshot(region=(win.left, win.top, win.width, win.height))
                 break
     except Exception:
         pass
@@ -239,3 +320,108 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
         img = img.resize((2560, int(ch * 2560 / cw)), PILImage.LANCZOS)
     img.save(output_path)
     return found_window
+
+
+def _capture_window_background(win) -> object:
+    """PrintWindow 后台截图（借鉴 March7thAssistant capture_window_background）。
+    纯 ctypes 实现，零 pywin32 依赖——保证增量包（仅 exe+updater）对旧 v1.4 客户可用
+    （旧版 _internal 无 win32，引入 pywin32 会导致旧客户升级后 ImportError 崩溃）。
+    不激活窗口、不抢焦点、窗口被其他窗口遮挡时仍能截到内容。
+    返回 PIL Image；失败返回 None（调用方回退前台截图）。
+    flag=3：强制完整渲染 + 只抓客户区（不含标题栏/边框）。
+    """
+    import ctypes
+    from ctypes import wintypes
+    from PIL import Image as PILImage
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    kernel32 = ctypes.windll.kernel32
+
+    hwnd = win._hWnd if hasattr(win, '_hWnd') else None
+    if not hwnd:
+        return None
+
+    # 最小化窗口无法后台截图，回退（调用方会 restore + 前台）
+    if win.isMinimized:
+        return None
+
+    # 客户区尺寸（不含标题栏边框）
+    rect = wintypes.RECT()
+    if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+        return None
+    width = rect.right - rect.left
+    height = rect.bottom - rect.top
+    if width <= 0 or height <= 0:
+        return None
+
+    # 设备上下文链：窗口 DC → 兼容 DC → 位图（每资源独立释放，防异常路径泄漏 GDI）
+    hwndDC = memDC = None
+    hBitmap = None
+    try:
+        hwndDC = user32.GetWindowDC(hwnd)
+        if not hwndDC:
+            return None
+        memDC = gdi32.CreateCompatibleDC(hwndDC)
+        if not memDC:
+            return None
+        hBitmap = gdi32.CreateCompatibleBitmap(hwndDC, width, height)
+        if not hBitmap:
+            return None
+        gdi32.SelectObject(memDC, hBitmap)
+
+        # PrintWindow flag=3：强制完整渲染 + 客户区
+        result = user32.PrintWindow(hwnd, memDC, 3)
+        if result != 1:
+            return None
+
+        # 位图 → PIL（BGRX raw：CreateCompatibleBitmap 是 32bpp BGRA，去掉 alpha）
+        # ctypes.wintypes 无 BITMAPINFO，手动定义（GDI 标准结构）
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ('biSize', wintypes.DWORD),
+                ('biWidth', wintypes.LONG),
+                ('biHeight', wintypes.LONG),
+                ('biPlanes', wintypes.WORD),
+                ('biBitCount', wintypes.WORD),
+                ('biCompression', wintypes.DWORD),
+                ('biSizeImage', wintypes.DWORD),
+                ('biXPelsPerMeter', wintypes.LONG),
+                ('biYPelsPerMeter', wintypes.LONG),
+                ('biClrUsed', wintypes.DWORD),
+                ('biClrImportant', wintypes.DWORD),
+            ]
+        class BITMAPINFO(ctypes.Structure):
+            _fields_ = [('bmiHeader', BITMAPINFOHEADER)]
+
+        bmpinfo = BITMAPINFO()
+        bmpinfo.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmpinfo.bmiHeader.biWidth = width
+        bmpinfo.bmiHeader.biHeight = -height  # 负值 = 自上而下（顶行在前）
+        bmpinfo.bmiHeader.biPlanes = 1
+        bmpinfo.bmiHeader.biBitCount = 32
+        bmpinfo.bmiHeader.biCompression = 0  # BI_RGB
+        buf = ctypes.create_string_buffer(width * height * 4)
+        gdi32.GetDIBits(hwndDC, hBitmap, 0, height, buf,
+                        ctypes.byref(bmpinfo), 0)
+        img = PILImage.frombuffer('RGB', (width, height),
+                                  buf.raw, 'raw', 'BGRX', 0, 1)
+        return img
+    except Exception:
+        return None
+    finally:
+        # 逆序释放：位图 → 兼容 DC → 窗口 DC（各自独立 try，防连锁）
+        if hBitmap:
+            try:
+                gdi32.DeleteObject(hBitmap)
+            except Exception:
+                pass
+        if memDC:
+            try:
+                gdi32.DeleteDC(memDC)
+            except Exception:
+                pass
+        if hwndDC:
+            try:
+                user32.ReleaseDC(hwnd, hwndDC)
+            except Exception:
+                pass

@@ -2,7 +2,6 @@
 PDD EZ — 设置页 UI 构建器 (Mixin)
 从 gui.py 拆分：通用/商品/皮肤/校准/分辨率/后台 六个设置页面的构建逻辑。
 """
-import os, json
 from tkinter import messagebox, ttk
 import tkinter as tk
 

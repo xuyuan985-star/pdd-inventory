@@ -39,6 +39,16 @@ def _run(cmd: list) -> str:
         return ''
 
 
+def _read_version_from_utils() -> str:
+    """从 utils.py 读取 VERSION = "vX.Y"（固定目录名后版本号来源）。失败返回空串"""
+    try:
+        src = open(os.path.join(REPO_ROOT, 'utils.py'), encoding='utf-8').read()
+        m = re.search(r'VERSION\s*=\s*["\'](v[\d.]+)["\']', src)
+        return m.group(1) if m else ''
+    except Exception:
+        return ''
+
+
 def get_last_release_tag(exclude: str = '') -> str:
     """获取最近一次 Release 对应的 tag（按版本号排序），排除当前构建版本"""
     tags = _run(['git', 'tag', '--sort=-version:refname'])
@@ -129,7 +139,8 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
     # ── 1. 确定变更范围 ──
     # 基准 = 最近一个『不是当前版本』的 tag（刚打 v1.2 tag 时不能拿自己当基准）
-    current_version = name.replace('PDD EZ ', '').strip()
+    # v1.4+ 固定目录名（PDD EZ）后，版本号从 utils.py 的 VERSION 读取，不再从目录名推断
+    current_version = _read_version_from_utils()
     tag = get_last_release_tag(exclude=current_version)
     changed_files = get_changed_files_since(tag)
 
@@ -170,17 +181,14 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
             dirs = PIP_TO_INTERNAL.get(pkg, [])
             include_dirs.update(dirs)
 
-    # 业务资源目录
-    if templates_changed:
-        include_dirs.add('templates')
-
     # ── 3. 打包 zip ──
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         added = 0
 
         # 主 EXE / 壳 EXE — 始终包含；PyInstaller 每次构建都会重新生成，
         # 内含编译后的 PYZ，是代码变更的核心载体。
-        exe = os.path.join(onedir, f'{name}.exe')
+        # v1.4+ 固定名：exe 名不再依赖目录名（防目录被改名后拼错）
+        exe = os.path.join(onedir, 'PDD EZ.exe')
         if os.path.exists(exe):
             arcname = os.path.join(name, os.path.basename(exe))
             zf.write(exe, arcname)
@@ -202,6 +210,22 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
                         zf.write(src, os.path.join(name, res))
                         added += 1
                         print(f"  + {res}")
+
+        # templates 目录（onedir 根，spec datas 放这里）— 仅当变更时进包，
+        # 否则客户永远拿旧模板（v1.4 修复：此前从未打包）
+        if templates_changed:
+            tpl_src = os.path.join(onedir, 'templates')
+            if os.path.isdir(tpl_src):
+                for root, dirs, files in os.walk(tpl_src):
+                    dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+                    for f in files:
+                        if f in SKIP_FILES or any(f.endswith(ext) for ext in SKIP_EXTENSIONS):
+                            continue
+                        src = os.path.join(root, f)
+                        rel = os.path.relpath(src, onedir)
+                        zf.write(src, os.path.join(name, rel))
+                        added += 1
+                        print(f"  + templates/{os.path.relpath(src, tpl_src)}")
 
         # _internal 目录内容 — 仅在全量模式或依赖变更时才遍历
         need_internal = include_all or bool(include_dirs)
@@ -253,7 +277,7 @@ if __name__ == '__main__':
     if not os.path.isdir(dist):
         print(f'错误: dist/ 目录不存在: {dist}\n请先执行 PyInstaller 打包')
         sys.exit(1)
-    # 自动发现 dist 下最新的 PDD EZ onedir
+    # 自动发现 dist 下的 PDD EZ onedir（固定目录名 PDD EZ）
     candidates = [
         d for d in os.listdir(dist)
         if d.startswith('PDD EZ') and os.path.isdir(os.path.join(dist, d))
@@ -265,7 +289,11 @@ if __name__ == '__main__':
         key=lambda d: os.path.getmtime(os.path.join(dist, d)), reverse=True
     )
     onedir = os.path.join(dist, candidates[0])
-    version = candidates[0].replace('PDD EZ ', '')
+    # zip 文件名仍带版本号（GitHub 资产名区分版本），版本号从 utils.py 读取
+    version = _read_version_from_utils()
+    if not version:
+        print('错误: 无法从 utils.py 读取 VERSION')
+        sys.exit(1)
     output = os.path.join(dist, f'PDD_EZ_{version}_update.zip')
     print(f'[增量打包] 源: {onedir}')
     print(f'[增量打包] 输出: {output}')
