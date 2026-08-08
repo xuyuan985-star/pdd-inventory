@@ -951,8 +951,18 @@ class App(SettingsUIMixin):
         
         if target_h > current_h:
             current_w = max(self.win.winfo_width(), 200)
-            x = (self.win.winfo_screenwidth() - current_w) // 2
-            y = max(0, (screen_h - target_h) // 3)
+            # DPI 感知下：geometry 参数与 winfo widget 坐标都是【逻辑单位】，
+            # 但 winfo_screenwidth/screenheight 返回【物理】屏尺寸——max_h 按物理
+            # 计算会与逻辑 target_h 混比，高 DPI 下窗口展开不足/越界（v1.4 审查修复）。
+            # 统一换算：物理屏高 ÷ dpi_scale → 逻辑屏高，再算 82% 上限。
+            _ds = getattr(self, 'dpi_scale', 1.0) or 1.0
+            _logic_screen_h = screen_h / _ds if _ds else screen_h
+            max_h = int(_logic_screen_h * 0.82)
+            target_h = min(ideal_height, max_h)
+            # 位置也按逻辑单位居中（winfo_screenwidth 是物理，转逻辑）
+            _logic_sw = (self.win.winfo_screenwidth() / _ds) if _ds else self.win.winfo_screenwidth()
+            x = int((_logic_sw - current_w) // 2)
+            y = max(0, int((_logic_screen_h - target_h) // 3))
             self.win.geometry(f"{current_w}x{target_h}+{x}+{y}")
             self.win.update()  # 立即生效
     
@@ -1858,7 +1868,25 @@ class App(SettingsUIMixin):
         for idx in idxs:
             if len(self.rows) <= 1:
                 break
+            # 越界保护：表格选中行索引可能因排序/筛选已陈旧（v1.4 审查修复）
+            if not (0 <= idx < len(self.rows)):
+                continue
             self.rows.pop(idx)
+        # 删除后重建 _row_index_map：旧映射里的索引整体后移已失效，
+        # 残留会导致下次右键删除删错行（v1.4 审查修复）
+        try:
+            _old_map = dict(getattr(self, '_row_index_map', {}) or {})
+            _del_set = set(idxs)
+            self._row_index_map = {}
+            for _iid, _iid_idx in _old_map.items():
+                if _iid_idx is None or _iid_idx in _del_set:
+                    continue  # 被删行自身的 iid 失效，必须丢弃（否则指向错行）
+                # 平移：原 rows 索引 > 删除位置 → 减 1
+                _new_idx = _iid_idx - sum(1 for _d in idxs if _d < _iid_idx)
+                if 0 <= _new_idx < len(self.rows):
+                    self._row_index_map[_iid] = _new_idx
+        except Exception:
+            pass
         if hasattr(self, 'tree') and self.tree.winfo_exists():
             self._recalc_from_rows()
     
@@ -2174,12 +2202,18 @@ class App(SettingsUIMixin):
             result = ai_locate_elements(_shot)
             if result:
                 _ox, _oy = _pos.get('left', 0), _pos.get('top', 0)
+                # 4K/带鱼屏还原：AI 坐标基于保存后的截图（宽≤2560），
+                # 先 ×scale 还原到原始窗口像素，再加窗口偏移转全屏（v1.4 审查修复）
+                _sx = _pos.get('scale_x', 1.0) or 1.0
+                _sy = _pos.get('scale_y', 1.0) or 1.0
                 import pyautogui as _pg_batch
                 _sw, _sh = _pg_batch.size()
                 _cal['ai'] = {
                     'last_time': now,
-                    'dropdown': {'x': int(result['dropdown']['x']) + _ox, 'y': int(result['dropdown']['y']) + _oy},
-                    'query': {'x': int(result['query']['x']) + _ox, 'y': int(result['query']['y']) + _oy},
+                    'dropdown': {'x': int(result['dropdown']['x'] * _sx) + _ox,
+                                 'y': int(result['dropdown']['y'] * _sy) + _oy},
+                    'query': {'x': int(result['query']['x'] * _sx) + _ox,
+                              'y': int(result['query']['y'] * _sy) + _oy},
                     'confidence': result['confidence'],
                     'screen_width': _sw,
                     'screen_height': _sh,
@@ -2348,13 +2382,17 @@ class App(SettingsUIMixin):
                     _re_loc = _relocate(_re_shot)
                     if _re_loc:
                         _ox2, _oy2 = _re_pos.get('left', 0), _re_pos.get('top', 0)
-                        _dx2 = int(_re_loc['dropdown']['x']) + _ox2
-                        _dy2 = int(_re_loc['dropdown']['y']) + _oy2
+                        # 4K/带鱼屏还原：截图已缩到 ≤2560，AI 坐标先还原再偏移（v1.4 审查修复）
+                        _rsx = _re_pos.get('scale_x', 1.0) or 1.0
+                        _rsy = _re_pos.get('scale_y', 1.0) or 1.0
+                        _dx2 = int(_re_loc['dropdown']['x'] * _rsx) + _ox2
+                        _dy2 = int(_re_loc['dropdown']['y'] * _rsy) + _oy2
                         dlog(f"3.↻ 重新AI定位下拉框({_dx2},{_dy2}) 置信度:{_re_loc.get('confidence', 0):.0%}")
                         # 同时刷新坐标，后续省份/查询按钮也用新定位
                         dd_coord = {'x': _dx2, 'y': _dy2}
                         if _re_loc.get('query'):
-                            qq_coord = {'x': int(_re_loc['query']['x']) + _ox2, 'y': int(_re_loc['query']['y']) + _oy2}
+                            qq_coord = {'x': int(_re_loc['query']['x'] * _rsx) + _ox2,
+                                        'y': int(_re_loc['query']['y'] * _rsy) + _oy2}
                     else:
                         dlog("3.✗ 重新AI定位失败，跳过")
                         break
@@ -2961,12 +2999,18 @@ class App(SettingsUIMixin):
             if col_idx < 0 or col_idx >= len(_cols):
                 return
             _col_name = _cols[col_idx]
-            _map = getattr(self, '_tree_col_map', None)
-            if _map is None:
-                from utils import get_ocr_columns
-                _m = (get_ocr_columns().get('mapping') or {})
+            from utils import get_ocr_columns
+            _m = (get_ocr_columns().get('mapping') or {})
+            # 缓存按 mapping 内容做 key：用户改「识别列配置」后 mapping 变化，
+            # 旧缓存自动失效重建——否则双击新勾选列被误判只读（v1.4 审查修复）
+            _map_key = tuple(sorted((str(k), str(v)) for k, v in _m.items() if v))
+            _cached = getattr(self, '_tree_col_map', None)
+            if not _cached or _cached.get('_key') != _map_key:
                 _map = {v: k for k, v in _m.items() if v}
+                _map['_key'] = _map_key
                 self._tree_col_map = _map
+            else:
+                _map = _cached
             _field = _map.get(_col_name)
         except Exception:
             return

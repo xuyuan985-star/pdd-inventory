@@ -22,7 +22,9 @@ def version_newer(remote: str, local: str) -> bool:
         l += [0] * (n - len(l))
         return tuple(r) > tuple(l)
     except Exception:
-        return remote != local  # fallback: 不相等即视为更新
+        # 解析失败（如 v1.4.0-beta 非纯数字段）不视为更新——静默判"有更新"
+        # 会导致每次启动都弹提示（v1.4 审查修复）
+        return False
 
 
 # 核心列映射默认值：真实 PDD 后台表头（glm-4.6v 实测确认）
@@ -319,6 +321,12 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
     if cw > 2560:
         img = img.resize((2560, int(ch * 2560 / cw)), PILImage.LANCZOS)
     img.save(output_path)
+    # 截图缩放系数：AI 返回的是保存后图上的坐标（宽 ≤2560），
+    # 调用方要把坐标还原到原始窗口/全屏像素（4K/带鱼屏必须，v1.4 审查修复）
+    if isinstance(out_window_pos, dict):
+        _saved_w = img.size[0]
+        out_window_pos['scale_x'] = (cw / _saved_w) if _saved_w else 1.0
+        out_window_pos['scale_y'] = (ch / img.size[1]) if img.size[1] else 1.0
     return found_window
 
 

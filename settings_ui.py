@@ -554,9 +554,12 @@ class SettingsUIMixin:
                     _refresh_cards()
                     return
                 ox, oy = pos.get('left', 0), pos.get('top', 0)
-                # AI 返回的是截图内坐标；窗口截图要加窗口左上角偏移转回全屏坐标
-                dd = {'x': int(result['dropdown']['x']) + ox, 'y': int(result['dropdown']['y']) + oy}
-                qq = {'x': int(result['query']['x']) + ox, 'y': int(result['query']['y']) + oy}
+                # AI 返回的是截图内坐标；4K/带鱼屏截图已缩到 ≤2560，
+                # 先 ×scale 还原到原始窗口像素，再加窗口偏移转全屏（v1.4 审查修复）
+                sx = pos.get('scale_x', 1.0) or 1.0
+                sy = pos.get('scale_y', 1.0) or 1.0
+                dd = {'x': int(result['dropdown']['x'] * sx) + ox, 'y': int(result['dropdown']['y'] * sy) + oy}
+                qq = {'x': int(result['query']['x'] * sx) + ox, 'y': int(result['query']['y'] * sy) + oy}
                 screen_w, screen_h = pg.size()
                 cal['ai'] = {
                     'last_time': _time.time(),
