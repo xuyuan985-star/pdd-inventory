@@ -1044,6 +1044,13 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
             _rws = _data.get('rows') or _data.get('items') or []
             for _r in _rws:
                 if isinstance(_r, dict) and _r:
+                    # 程序端过滤表头行：prompt 明确"含表头"，模型可能把表头
+                    # （商品信息|仓库总库存|…）当数据行输出——表头行的值恰好是
+                    # 列名本身，name 非空会被 parse_items_generic 录成幽灵商品
+                    # （v1.4 审查修复）
+                    _first_val = str(next(iter(_r.values()), '') or '').strip()
+                    if _first_val in columns:
+                        continue
                     all_rows.append(_r)
     return {'columns': columns, 'rows': all_rows}
 
