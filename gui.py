@@ -251,7 +251,6 @@ class App(SettingsUIMixin):
             w = max(width * 12, _tw + padx * 2 + 22)
         else:
             w = _tw + padx * 2 + 22
-        c = int(self.tc('btn.corner', 5))  # 几何微切角
         canvas = tk.Canvas(parent, width=w, height=h,
                            bg=parent.cget('bg') if parent.winfo_class() == 'Frame' else self.C_BG,
                            highlightthickness=0, bd=0)
@@ -700,11 +699,11 @@ class App(SettingsUIMixin):
         # ── 全局工具栏（单行：左组功能 / 右组截图+当前地区，不再放置加行/删行按钮）──
         btn_row = tk.Frame(self.page_home, bg=self.C_BG)
         btn_row.pack(fill="x", padx=15, pady=(8, 6))
-        # 左组：功能按钮
+        # 左组：功能按钮（间距统一，防视觉不均）
         self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
                      font=(self.FONT[0], 9, 'bold'), pack_side="left")
         self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='dark',
-                     pack_side="left", padx=8)
+                     pack_side="left", padx=10)
         # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
         self._single_dual_var = tk.BooleanVar(self.win, value=True)
         tk.Checkbutton(btn_row, text="🛡 双模型", variable=self._single_dual_var,
@@ -2916,16 +2915,20 @@ class App(SettingsUIMixin):
         self._draw_hsb()
 
     def _draw_vsb(self):
-        """纤细深色纵向滚动条：3px 滑轨 + 深灰滑块"""
+        """纤细深色纵向滚动条：3px 滑轨 + 深灰滑块（深炭表头区内的暗色系，随主题 token）"""
         c = self._vsb_canvas
         c.delete('all')
         h = c.winfo_height()
         if h <= 0:
             return
-        c.create_rectangle(4, 0, 5, h, fill='#3A3A3A', outline='')  # 滑轨
+        # 深炭 #1F1F1F 表头区内：滑轨/滑块保持暗色语义（终末地风格不变），
+        # 色值走主题 token 便于其他主题覆写
+        _track = self.tc('table.scroll_track', '#3A3A3A')
+        _thumb = self.tc('table.scroll_thumb', '#5A5A5A')
+        c.create_rectangle(4, 0, 5, h, fill=_track, outline='')  # 滑轨
         y0 = self._vsb_first * h; y1 = self._vsb_last * h
         if y1 - y0 >= 4:
-            c.create_rectangle(3, y0, 6, y1, fill='#5A5A5A', outline='')  # 滑块
+            c.create_rectangle(3, y0, 6, y1, fill=_thumb, outline='')  # 滑块
 
     def _draw_hsb(self):
         c = self._hsb_canvas
@@ -2933,10 +2936,12 @@ class App(SettingsUIMixin):
         w = c.winfo_width()
         if w <= 0:
             return
-        c.create_rectangle(0, 4, w, 5, fill='#3A3A3A', outline='')
+        _track = self.tc('table.scroll_track', '#3A3A3A')
+        _thumb = self.tc('table.scroll_thumb', '#5A5A5A')
+        c.create_rectangle(0, 4, w, 5, fill=_track, outline='')
         x0 = self._hsb_first * w; x1 = self._hsb_last * w
         if x1 - x0 >= 4:
-            c.create_rectangle(x0, 3, x1, 6, fill='#5A5A5A', outline='')
+            c.create_rectangle(x0, 3, x1, 6, fill=_thumb, outline='')
 
     def _click_vsb(self, event):
         self._scroll_vsb_to(event.y)
