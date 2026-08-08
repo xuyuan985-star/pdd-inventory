@@ -52,14 +52,31 @@ def _read_version_from_utils() -> str:
 
 
 def get_last_release_tag(exclude: str = '') -> str:
-    """获取最近一次 Release 对应的 tag（按版本号排序），排除当前构建版本"""
+    """获取最近一次 Release 对应的 tag（按版本号排序），排除当前构建版本。
+
+    只取 ≤ 当前版本的 tag 作基准：历史遗留的"更大版本号"干扰 tag
+    （如 api_keys 时代的 v2.2）会劫持基准导致增量包退化成全量（v1.4 修复）。
+    exclude 传当前版本号（如 v1.4）时，基准 = 最新一个 ≤v1.4 且 ≠v1.4 的 tag。
+    """
     tags = _run(['git', 'tag', '--sort=-version:refname'])
     if not tags:
         return ''
+    # 版本元组比较，跳过非 vX.Y[.Z] 格式（如 v2.2-beta）
+    import re as _re
+    def _key(t):
+        m = _re.search(r'^v(\d+)\.(\d+)(?:\.(\d+))?', t.strip())
+        if not m:
+            return None
+        return tuple(int(x) for x in m.groups(default='0'))
+    cur = _key(exclude)
     for t in tags.split('\n'):
         t = t.strip()
-        if t and t != exclude:
-            return t
+        k = _key(t)
+        if not k or t == exclude:
+            continue
+        if cur is not None and k > cur:
+            continue  # 排除大于当前版本的 tag（防 v2.2 之类劫持）
+        return t
     return ''
 
 
