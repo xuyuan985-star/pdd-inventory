@@ -186,7 +186,7 @@ class SettingsUIMixin:
             return
         dlg = tk.Toplevel(self.win)
         dlg.title("配置识别列")
-        dlg.geometry("480x560")
+        dlg.geometry(self._geo(480, 560))
         dlg.configure(bg=self.C_BG)
         self._lbl(dlg, text="勾选要识别的列", font=self.FONT_HEADING,
                  bg=self.C_BG, fg=self.C_TEXT).pack(pady=(10,2))

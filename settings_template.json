@@ -39,5 +39,9 @@
   "calibrate": {
     "mode": "ai",
     "ai": {}
+  },
+  "announcement": {
+    "url": "",
+    "mirror_url": ""
   }
 }

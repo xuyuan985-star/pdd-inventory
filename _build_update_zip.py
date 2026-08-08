@@ -10,15 +10,17 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 # ── pip 包名 → _internal 目录映射 ──
 # 只有带原生扩展的包才会在 _internal 下产生独立目录；
 # 纯 Python 包（pyautogui/openpyxl/requests 等）编译进 PYZ，由壳 EXE 承载。
+# ⚠️ key 统一小写：get_changed_packages 解析 requirements 时 pkg.lower()，
+# 大写 key（Pillow/PyYAML）会导致匹配失败漏打包（v1.4 审查修复）
 PIP_TO_INTERNAL = {
     'opencv-python':        ['cv2'],
     'numpy':                ['numpy', 'numpy.libs'],          # + numpy-*.dist-info 通配
-    'Pillow':               ['PIL'],
+    'pillow':               ['PIL'],
     'pywin32':              ['win32', 'pywin32_system32'],
     'lxml':                 ['lxml'],
     'cryptography':         ['cryptography'],                 # + cryptography-*.dist-info
     'certifi':              ['certifi'],
-    'PyYAML':               ['yaml'],
+    'pyyaml':               ['yaml'],
     'charset-normalizer':   ['charset_normalizer'],
 }
 
@@ -62,15 +64,24 @@ def get_last_release_tag(exclude: str = '') -> str:
 
 
 def get_changed_files_since(tag: str) -> set:
-    """返回从 tag 到当前工作区的变更文件列表（含暂存和未暂存）"""
+    """返回从 tag 到当前工作区的变更文件列表（含暂存、未暂存、未跟踪）。
+
+    未跟踪（untracked）文件不会出现在 git diff 里——新增的模板/模块
+    未 git add 时会被漏掉，导致更新包缺文件（v1.4 审查修复）。
+    """
     if not tag:
         return set()
-    # git diff tag 比较到工作区（含 staged + unstaged）
+    changed = set()
+    # 1) 已跟踪文件的变更（staged + unstaged）
     # core.quotepath=false：中文/特殊字符文件名不被转义成 \xxx，否则变更列表会错（漏包/多包）
     out = _run(['git', '-c', 'core.quotepath=false', 'diff', '--name-only', tag])
-    if not out:
-        return set()
-    return set(out.split('\n'))
+    if out:
+        changed.update(out.split('\n'))
+    # 2) 未跟踪文件（未 add 的新文件，含被 .gitignore 忽略的除外）
+    out = _run(['git', '-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard'])
+    if out:
+        changed.update(out.split('\n'))
+    return changed
 
 
 def get_changed_packages(changed_files: set, exclude_tag: str = '') -> set:
@@ -170,6 +181,14 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
         f in changed_files for f in ('icon.ico', 'regions.json')
     )
 
+    # 主 EXE（含编译后 PYZ）是否变更：代码/依赖/打包配置变更才需要——
+    # 纯模板/资源变更时 EXE 内容没变，塞进增量包只会白白拉大体积
+    # （v1.4 审查修复：此前无条件包含，老客户升级体积被撑大）
+    main_exe_changed = include_all or any(
+        f.endswith(('.py', '.spec')) or f == 'requirements.txt' or f.startswith('gui')
+        for f in changed_files
+    )
+
     # ── 2. 确定需要打包的 _internal 目录 ──
     include_dirs = set()
 
@@ -185,15 +204,17 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         added = 0
 
-        # 主 EXE / 壳 EXE — 始终包含；PyInstaller 每次构建都会重新生成，
+        # 主 EXE / 壳 EXE — 仅代码/依赖变更时包含；PyInstaller 每次构建都会重新生成，
         # 内含编译后的 PYZ，是代码变更的核心载体。
+        # 纯模板/资源变更不塞 EXE（增量体积优化，v1.4 审查修复）
         # v1.4+ 固定名：exe 名不再依赖目录名（防目录被改名后拼错）
-        exe = os.path.join(onedir, 'PDD EZ.exe')
-        if os.path.exists(exe):
-            arcname = os.path.join(name, os.path.basename(exe))
-            zf.write(exe, arcname)
-            added += 1
-            print(f"  + {os.path.basename(exe)}")
+        if main_exe_changed:
+            exe = os.path.join(onedir, 'PDD EZ.exe')
+            if os.path.exists(exe):
+                arcname = os.path.join(name, os.path.basename(exe))
+                zf.write(exe, arcname)
+                added += 1
+                print(f"  + {os.path.basename(exe)}")
 
         # 更新器 EXE（仅源码变更时）— 放入 name/ 目录，与 updater.py 自升级查找逻辑一致
         updater_exe = os.path.join(dist_parent, 'PDD EZ Updater.exe')

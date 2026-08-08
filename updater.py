@@ -71,7 +71,9 @@ def _pause():
 
 
 def _stream_to_file(resp, dest, size, name, progress_stage):
-    """流式下载到文件 + 进度上报（镜像/官方共用）"""
+    """流式下载到文件 + 进度上报（镜像/官方共用）。
+    下载结束校验大小：服务器声明 Content-Length 但实际只传了一部分时
+    必须失败（否则 zip 解压/exe 损坏，v1.4 审查修复）。"""
     total = size or 0
     if total == 0:
         try:
@@ -96,6 +98,11 @@ def _stream_to_file(resp, dest, size, name, progress_stage):
                 last_reported = downloaded
                 last_report_time = now
     _write_progress(progress_stage, f"正在下载 {name}", downloaded, total)
+    # 大小校验：声明的总大小与实际下载不一致 → 下载不完整，抛错
+    if total and downloaded != total:
+        raise IOError(
+            f"下载不完整: 声明 {total} 字节，实际 {downloaded} 字节"
+        )
 
 
 
@@ -161,7 +168,7 @@ def _wait_pid_exit(pid: int, expected_exe: str = '', timeout: float = 30.0):
 
     h = kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not h:
-        return True  # 进程已不存在
+        return True  # 进程已不存在（无句柄可泄漏）
 
     try:
         # 校验路径（如果提供了期望路径）
@@ -175,7 +182,8 @@ def _wait_pid_exit(pid: int, expected_exe: str = '', timeout: float = 30.0):
                     actual = buf.value.lower().rstrip('\\')
                     expected = expected_exe.lower().rstrip('\\')
                     if actual != expected:
-                        return True  # PID 已被回收，原进程已死
+                        # PID 已被回收/复用（原进程已死，句柄由 finally 释放）
+                        return True
 
         ret = kernel32.WaitForSingleObject(h, int(timeout * 1000))
         if ret == 0:  # WAIT_OBJECT_0
@@ -326,7 +334,9 @@ def _emit_cover_progress(stage: str, completed: int, total: int):
 
 def _extract_zip(zip_path: str, extract_dir: str) -> str:
     """解压更新包到 extract_dir，返回解压出的 PDD EZ 程序目录。
-    保留 v1.4 的防护：symlink 拒绝、zip-bomb 上限、路径遍历校验。"""
+    保留 v1.4 的防护：symlink 拒绝、zip-bomb 上限、路径遍历校验。
+    v1.4 审查加固：不用 zf.extract()（Windows 下可能先建文件再产生链接行为），
+    改 open+copyfileobj 手动写文件，只接受常规文件，从根上杜绝链接逃逸。"""
     # 清理已有解压目录，防上次残留污染根目录识别（March7th extractor 同款）
     if os.path.isdir(extract_dir):
         shutil.rmtree(extract_dir, ignore_errors=True)
@@ -336,9 +346,12 @@ def _extract_zip(zip_path: str, extract_dir: str) -> str:
     _MAX_EXTRACT = 2 * 1024**3  # 解压总量上限 2GB，防 zip-bomb
     with zipfile.ZipFile(zip_path, 'r') as zf:
         for zi in zf.infolist():
-            # 拒绝 symlink/链接成员，防符号链接逃逸
-            if (zi.external_attr >> 16) & 0o170000 == 0o120000:
-                print(f"[更新器] 拒绝 symlink 成员: {zi.filename}")
+            # 拒绝 symlink/链接/特殊类型成员（Unix symlink 0120000；
+            # Windows junction/reparse point 常以 dir 类型出现——统一只放行
+            # 常规文件 0100000 与目录 0040000，其余全部拒绝）
+            _mode = (zi.external_attr >> 16) & 0o170000
+            if _mode == 0o120000 or (_mode and _mode not in (0o100000, 0o040000)):
+                print(f"[更新器] 拒绝链接/特殊成员: {zi.filename}")
                 continue
             # 解压总量上限，防 zip-bomb
             _total_size += zi.file_size
@@ -350,7 +363,19 @@ def _extract_zip(zip_path: str, extract_dir: str) -> str:
             if not member_path.startswith(extract_dir_real):
                 print(f"[更新器] 拒绝路径遍历: {zi.filename}")
                 continue
-            zf.extract(zi, extract_dir)
+            # 手动解压：目录 mkdir，常规文件 open+copyfileobj 流式写入
+            if zi.is_dir():
+                os.makedirs(member_path, exist_ok=True)
+                continue
+            if not zi.filename:
+                continue
+            try:
+                os.makedirs(os.path.dirname(member_path), exist_ok=True)
+                with zf.open(zi, 'r') as _src, open(member_path, 'wb') as _dst:
+                    shutil.copyfileobj(_src, _dst, length=1024 * 256)
+            except Exception as e:
+                print(f"[更新器] 解压成员失败 {zi.filename}: {e}")
+                raise
     # 找 PDD EZ 程序目录
     for item in os.listdir(extract_dir):
         item_path = os.path.join(extract_dir, item)
@@ -388,13 +413,16 @@ def _pick_main_exe(target_dir: str) -> str:
 
 def _is_program_dir(target_dir: str) -> bool:
     """安全底线：target_dir 必须是 PDD EZ 程序目录。
-    判断：目录名含 'PDD EZ' 或目录内有 'PDD EZ*.exe'。"""
-    _td_name = os.path.basename(os.path.normpath(target_dir))
+    判断（v1.4 审查收紧）：目录内必须有 PDD EZ 主 exe——
+    仅目录名以 'PDD EZ' 开头（如 C:\\PDD EZ Backup / D:\\PDD EZ Documents）
+    不再放行，防止整体替换覆盖到非程序目录。"""
+    if not os.path.isdir(target_dir):
+        return False
     _td_has_main = any(
         f.lower().startswith('pdd ez') and f.lower().endswith('.exe') and 'updater' not in f.lower()
         for f in os.listdir(target_dir)
-    ) if os.path.isdir(target_dir) else False
-    return _td_name.startswith('PDD EZ') or _td_has_main
+    )
+    return _td_has_main
 
 
 def _ensure_self_renamed(files) -> bool:
@@ -420,14 +448,30 @@ def _ensure_self_renamed(files) -> bool:
 
 
 def _restore_self(backup: str) -> bool:
-    """覆盖失败时恢复自身备份（.old → 原名）。返回是否恢复成功。"""
+    """覆盖失败时恢复自身备份（.old → 原名）。返回是否恢复成功。
+
+    恢复失败（杀软占用/权限变化）时用 copy2 兜底——updater 绝不能
+    只剩 .old 名（主名缺失 = 更新器损坏，下次无法自升级）。
+    """
     if not backup or not os.path.exists(backup):
         return False
+    _target = os.path.abspath(sys.argv[0])
     try:
-        os.replace(backup, os.path.abspath(sys.argv[0]))
+        os.replace(backup, _target)
         return True
     except Exception as e:
-        print(f"[更新器] 恢复自身备份失败: {e}")
+        print(f"[更新器] 恢复自身备份 os.replace 失败: {e}，尝试 copy2 兜底")
+    try:
+        shutil.copy2(backup, _target)
+        # 兜底成功：清理 .old（失败也保留，下次更新 _ensure_self_renamed 会再清）
+        try:
+            os.remove(backup)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[更新器] 恢复自身备份 copy2 也失败: {e}")
+        print(f"[更新器] 警告: 更新器遗留为 {backup}，请手动恢复为 {_target}")
         return False
 
 
@@ -653,15 +697,14 @@ def main():
         try:
             _tmp_self = os.path.join(tempfile.gettempdir(), 'PDD_EZ_Updater_tmp.exe')
             # 判定：当前目录下有"任何" PDD 主 exe（不管版本）→ 即将整体替换此目录
-            _any_main = [f for f in os.listdir(me_dir)
-                         if f.lower().startswith('pdd ez') and f.lower().endswith('.exe')
-                         and 'updater' not in f.lower()]
+            # 复用 _pick_main_exe（固定名优先 + 版本号扫描），不自己列目录判断——
+            # 自写 startswith 判断会把 "PDD EZ Backup.exe" 这类非主程序误判为主程序（v1.4 审查修复）
+            _orig_main = _pick_main_exe(me_dir)
             _in_temp = me_dir.lower().startswith(os.path.abspath(tempfile.gettempdir()).lower())
-            if _any_main and not _in_temp:
+            if _orig_main and not _in_temp:
                 shutil.copy2(me, _tmp_self)
                 # 显式把目标指向原目录的主 exe（temp 副本的 me_dir 是 %TEMP%，
                 # 不带 --target 会找不到主程序；直接双击或 GUI 调用都能正确替换）
-                _orig_main = _pick_main_exe(me_dir) or os.path.join(me_dir, _any_main[0])
                 _args = [_tmp_self] + ['--target', _orig_main]
                 if args.target:
                     _args = [_tmp_self] + ['--target', args.target]
@@ -771,6 +814,15 @@ def main():
         if ok:
             with open(sha_path, 'r') as sf:
                 expected = sf.read().strip().split()[0]
+            # 校验文件格式合法性：必须是 64 位 hex，服务器给脏数据
+            # （如 "abc"）时明确报格式错误，而不是误导"文件可能被篡改"（v1.4 审查修复）
+            import re as _re_sha
+            if not _re_sha.fullmatch(r'[0-9a-fA-F]{64}', expected):
+                print(f"[更新器] SHA256 校验文件格式非法，已拒绝安装")
+                _write_progress("error", "SHA256 校验文件格式非法", error="sha256 format")
+                os.remove(new_exe)
+                _pause()
+                return 1
             if not _verify_sha256(new_exe, expected):
                 print("[更新器] SHA256 校验失败！文件可能被篡改，已拒绝安装")
                 _write_progress("error", "SHA256 校验失败，文件可能被篡改", error="sha256 mismatch")
@@ -891,8 +943,14 @@ def main():
                 # 写 bat 脚本等待当前进程退出后替换
                 _fd, bat = tempfile.mkstemp(prefix="pdd_upd_", suffix=".bat", dir=tempfile.gettempdir())
                 os.close(_fd)
-                _nu_esc = new_updater.replace('"', '""').replace('%', '%%')
-                _mp_esc = my_path.replace('"', '""').replace('%', '%%')
+                # CMD 元字符转义：除引号/百分号外，& | ^ < > 都会被 cmd 拆解——
+                # 路径含这些字符（如 C:\Users\Test&A\PDD）时 move 命令会错（v1.4 审查修复）
+                _nu_esc = (new_updater.replace('^', '^^').replace('&', '^&')
+                           .replace('|', '^|').replace('<', '^<').replace('>', '^>')
+                           .replace('"', '""').replace('%', '%%'))
+                _mp_esc = (my_path.replace('^', '^^').replace('&', '^&')
+                           .replace('|', '^|').replace('<', '^<').replace('>', '^>')
+                           .replace('"', '""').replace('%', '%%'))
                 with open(bat, 'w') as bf:
                     bf.write(f'''@echo off
 set cnt=0

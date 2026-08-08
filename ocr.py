@@ -76,9 +76,25 @@ def _prep_image_b64(image_path: str, max_side: int = 1280, quality: int = 80,
         return base64.b64encode(_buf.getvalue()).decode()
     except Exception as e:
         # 预处理失败则回退原图（记录警告便于排查识别率下降）
-        print(f"[OCR] 图片预处理失败，回退原图: {e} ({image_path})")
-        with open(image_path, 'rb') as f:
-            return base64.b64encode(f.read()).decode()
+        # ⚠️ 必须限制大小：PIL 损坏/模式异常时直接 base64 原图会把 20MB PNG
+        # 原样上传，API 超限/费用激增（v1.4 审查修复）——回退也用 PIL 压缩，
+        # 压缩再失败才返回 None 让调用方报错（不静默传大图）
+        print(f"[OCR] 图片预处理失败，回退压缩图: {e} ({image_path})")
+        try:
+            from PIL import Image as PILImg
+            import io as _io2
+            _fb = PILImg.open(image_path)
+            if _fb.mode != 'RGB':
+                _fb = _fb.convert('RGB')
+            _fb.thumbnail((max_side, max_side), PILImg.LANCZOS)
+            _buf2 = _io2.BytesIO()
+            _fb.save(_buf2, format='JPEG', quality=quality)
+            return base64.b64encode(_buf2.getvalue()).decode()
+        except Exception as e2:
+            # 连 PIL 都打不开：明确失败，不静默传原图（调用方会抛错）
+            raise RuntimeError(
+                f"图片预处理与压缩均失败，拒绝上传原图: {e2} ({image_path})"
+            ) from e2
 
 
 
@@ -136,7 +152,12 @@ def auto_crop_table(image_path: str):
         if len(best) < 3:
             return None
         y_top = max(0, int(best[0]) - 60)  # 往上多留空间，确保表头行不被裁掉（表头在第一条分隔线上方）
-        y_bottom = min(h, int(best[-1]) + 10)
+        # 底部预留：最后一条分隔线通常是【最后一行数据的上边界】，不是表格底边——
+        # 只 +10 会裁掉最后一行数据（v1.4 审查修复）。按平均行距向下扩展，
+        # 若下方不足则直接取图底（不截断）。
+        _avg_row = (best[-1] - best[0]) / max(1, len(best) - 1) if len(best) > 1 else 60
+        _margin_bottom = max(60, int(_avg_row * 1.2), h // 20)
+        y_bottom = min(h, int(best[-1]) + _margin_bottom)
 
         # x 范围：取该区域内横线的水平覆盖范围（贯穿线的端点即表格左右边界）
         region = h_lines[y_top:y_bottom, :]
@@ -258,6 +279,53 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
                             active, provider, key, model_name, endpoint, use_responses)
 
 
+def _extract_response_text(data: dict, mdl: str) -> str:
+    """从模型 API 响应中兼容提取正文文本（v1.4 审查加固）。
+
+    各模型/端点返回结构不统一：
+    - Chat Completions: data['choices'][0]['message']['content']（str 或 list[{'type','text'}]）
+    - Responses API:   data['output'][-1]['content'][0]['text']
+    统一兼容：先找 choices，再找 output；content 可能是 str/list[dict]/None，
+    递归提取文本片段，全部失败抛 RuntimeError 给出模型名与原始响应。
+    """
+    def _extract_text_part(part):
+        if isinstance(part, str):
+            return part
+        if isinstance(part, list):
+            return ''.join(_extract_text_part(p) for p in part)
+        if isinstance(part, dict):
+            if isinstance(part.get('text'), str):
+                return part['text']
+            if isinstance(part.get('content'), (str, list, dict)):
+                return _extract_text_part(part.get('content'))
+            return ''
+        return ''
+
+    # 1) Chat Completions 结构
+    try:
+        msg = data['choices'][0]['message']
+        content = _extract_text_part(msg.get('content'))
+        if content:
+            return content
+        # content 存在但为空（None/空串/空列表）：模型返回空内容是合法响应，
+        # 返回空串让上层按"无结果"处理，不视为格式错误
+        if 'content' in msg:
+            return ''
+    except (KeyError, IndexError, TypeError):
+        pass
+    # 2) Responses API 结构
+    try:
+        for out_item in reversed(data.get('output') or []):
+            content = _extract_text_part(out_item.get('content'))
+            if content:
+                return content
+    except (KeyError, IndexError, TypeError):
+        pass
+    # 3) 全部失败：明确报错（含响应摘要，便于排查格式变化）
+    _snippet = str(data)[:200]
+    raise RuntimeError(f"模型返回格式无法解析（{mdl}）: {_snippet}")
+
+
 def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                      active, provider, key, model_name, endpoint, use_responses):
     """_ocr_api_call 的请求执行段（可被 prefer_general 复用，传入已解析配置）。"""
@@ -360,8 +428,9 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 data = resp.json()
                 if not data.get('output'):
                     raise RuntimeError(f"OCR失败（{mdl}）: {data}")
-                # output[-1] = 最后一条消息（跳过 reasoning）
-                content = data['output'][-1]['content'][0]['text']
+                # output[-1] = 最后一条消息（跳过 reasoning）；兼容 content 为
+                # str / list[dict] / None 的结构差异（v1.4 审查加固）
+                content = _extract_response_text(data, mdl)
             else:
                 # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
                 # 必须显式禁用 thinking；glm-4v-flash 无 reasoning 但同样接受该参数。
@@ -381,7 +450,9 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 data = resp.json()
                 if not data.get('choices'):
                     raise RuntimeError(f"OCR失败（{mdl}）: {data}")
-                content = data['choices'][0]['message']['content']
+                # Chat Completions content 可能为 str 或 list[{'type','text'}] 或 None，
+                # 统一兼容解析（v1.4 审查加固）
+                content = _extract_response_text(data, mdl)
             return content, mdl
         except json.JSONDecodeError as e:
             raise RuntimeError(f"模型返回无法解析的内容（{mdl}）：{e}")
@@ -546,7 +617,14 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
                     hit = True
                     break
                 if not _id_near and _n != nm and _name_prefix and _lev(_n, nm) <= 6:
-                    hit = True
+                    # name 强相似兜底（sku 整段错位时靠 name）：距离≤2 视为同商品去重；
+                    # 距离 3~6 只标记不删除——不同规格商品（500ml vs 1L）前缀相同且
+                    # 编辑距离可能在 3~6，自动删会合并错库存（v1.4 审查收紧）
+                    if _lev(_n, nm) <= 2:
+                        hit = True
+                    else:
+                        it['_dup_suspect'] = True
+                        it['_dup_suspect_with'] = _s
                     break
             if hit:
                 continue
@@ -589,7 +667,7 @@ def _match_col_name(col: str, candidates: dict, norm_map: dict):
     编辑距离≤2，模糊会误配核心商品名列），name 由调用方精确匹配。"""
     _norm = normalize_col_name(col)
     if _norm in norm_map and norm_map[_norm] != 'name':
-        return norm_map[_norm]
+        return (norm_map[_norm], 1)  # 精确命中：高置信
     # 模糊兜底：与每个已配置列名比较，编辑距离小且长度接近的命中
     best, best_d = None, 99
     for _cfg_col, _field in norm_map.items():
@@ -606,7 +684,11 @@ def _match_col_name(col: str, candidates: dict, norm_map: dict):
             if len(_cfg_col) >= 3 and len(_norm) >= 3 and _cfg_col[:3] != _norm[:3]:
                 continue
             best, best_d = _field, _d
-    return best
+    # 距离 2 属于低置信匹配（仓库销售库存 vs 仓库总库存 距离 2 但业务列不同），
+    # 调用方需要据此标记低置信供用户复核（v1.4 审查修复）
+    if best is not None and best_d >= 2:
+        return (best, 2)
+    return (best, 1) if best is not None else None
 
 
 _SKU_ID_RE = None  # 延迟初始化（正则编译一次）
@@ -657,10 +739,15 @@ def map_columns_to_fields(row: dict, mapping: dict) -> dict:
         # 其他字段允许编辑距离≤2 模糊（全列模式列名可能抄错 1~2 字，v1.4 修复）
         _norm_col = normalize_col_name(col)
         field = norm_map.get(_norm_col)
+        _col_conf = 1  # 1=精确/高置信，2=模糊低置信（供 _low_confidence 标记）
         if field is None and _norm_col != normalize_col_name(mapping.get('name', '')):
-            field = _match_col_name(col, norm_map, norm_map)
+            _m = _match_col_name(col, norm_map, norm_map)
+            if _m:
+                field, _col_conf = _m
         if field and field in ('name', 'stock', 'sales', 'region', 'warehouse'):
             out[field] = '' if val is None else str(val)
+            if _col_conf >= 2:
+                out['_low_conf_col'] = col  # 模糊匹配的列，供调用方提示用户复核
     # 商品信息列拆分：name + sku_id
     if out.get('name'):
         _name, _sku = _split_name_id(out['name'])
@@ -684,10 +771,11 @@ def parse_items_generic(rows: list, mapping: dict) -> list:
         if not name:
             continue  # 无商品名 → 跳过该行（映射未配商品名列时可能全空）
         if not mapped.get('sku_id'):
-            # 无商品 ID 直接过滤：实测真实行 100% 带 ID（如 '示例商品A500g/袋 ID:12345678901'），
-            # 无 ID = 模型乱编名字 / 漏识别 ID（豆包常见），放行会污染结果表
-            _ocr_dlog(f"⏭ 无商品ID已过滤: {name[:40]}")
-            continue
+            # 无商品 ID 不再整行丢弃：OCR 场景 ID 可能因字号太小漏识别，
+            # 商品名正确时整行删除会丢真实数据（v1.4 审查修复）——
+            # 标记 _missing_id 保留，GUI/去重阶段决定展示与提示
+            mapped['_missing_id'] = True
+            _ocr_dlog(f"⚠ 无商品ID已标记: {name[:40]}")
         mapped['stock'] = _parse_num_text(mapped.get('stock', ''))
         mapped['sales'] = _parse_num_text(mapped.get('sales', ''))
         mapped['region'] = strip_region_suffix(mapped.get('region', ''))
@@ -1025,17 +1113,28 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     def _norm(n):
         return str(n).replace(' ', '').lower()
     sec_by_name = {}
+    sec_by_sku = {}
     for it in secondary:
-        key = _norm(it.get('name'))
-        if key and key not in sec_by_name:
-            sec_by_name[key] = it
+        # 优先按 sku_id 建索引：同名不同规格（可口可乐330ml 两个不同 SKU）
+        # 只按 name 会互相覆盖丢数据（v1.4 审查修复）
+        _sku = _norm(it.get('sku_id'))
+        _nm = _norm(it.get('name'))
+        if _sku and _sku not in sec_by_sku:
+            sec_by_sku[_sku] = it
+        if _nm and _nm not in sec_by_name:
+            sec_by_name[_nm] = it
 
     for item in primary:
         pn = _norm(item.get('name'))
-        match = sec_by_name.get(pn) if pn else None
-        # 主模型 name 单字误识别（如 结→丝）时精确匹配不上：
-        # 用编辑距离≤2 做近似配对（多字/串字场景，如"新鲜解火锅辣味"vs"新鲜火锅麻辣烫"），
-        # 配对后标记低置信度提示用户复核
+        ps = _norm(item.get('sku_id'))
+        match = None
+        # 1) SKU 精确配对（权威锚点，同名不同规格不会错配）
+        if ps and ps in sec_by_sku:
+            match = sec_by_sku[ps]
+        # 2) name 精确配对（无 SKU 或 SKU 未对上时）
+        if not match and pn:
+            match = sec_by_name.get(pn)
+        # 3) name 编辑距离≤2 近似配对（OCR 单字误识别），标记低置信
         if not match and pn:
             for skey, sit in sec_by_name.items():
                 if abs(len(skey) - len(pn)) <= 2 and _lev(skey, pn) <= 2:
@@ -1051,7 +1150,9 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
             item['_low_confidence'] = True
         for field in ('stock', 'sales'):
             a, b = item.get(field, 0), match.get(field, 0)
-            denom = max(b, 1)
+            # 方向对称：分母取 max(a,b)（原 max(b,1) 在 a=100/b=10 时 900%，
+            # a=10/b=100 时 90%，方向不对称；v1.4 审查修复）
+            denom = max(a, b, 1)
             if abs(a - b) / denom > 0.3:
                 item['_low_confidence'] = True
                 # 不自动取大/小值：差异可能是漏识别（取大对）也可能是多识别
