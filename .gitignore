@@ -25,3 +25,7 @@ keys.enc
 _trash/
 _trash_tmp/
 build_single/
+config.ini
+.env
+reports/*.json
+*_output.txt

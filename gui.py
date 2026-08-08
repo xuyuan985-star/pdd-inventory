@@ -27,6 +27,7 @@ sys.path.insert(0, get_base_dir())
 
 try:
     import tkinter as tk
+    import tkinter.font as tkfont  # 按钮宽度精确测量（DPI/中文/emoji 自适应）
     from tkinter import messagebox, ttk
 except ImportError:
     print("tkinter 未安装（Python 自带），请检查 Python 安装")
@@ -236,12 +237,20 @@ class App(SettingsUIMixin):
         kind='tag'     → 亮黄底黑粗字（角标标签）
         返回 _CanvasBtn（模拟 Button 接口）。"""
         colors = self.tc(f'btn.{kind}', {})
-        h = (height or 1) * 24 + 6  # height 按字符行高换算（24px/行）
+        # 高度按字体实际行高（metrics.linespace）换算，替代硬编码 24px/行——
+        # 高 DPI/大字体下文字渲染变高，固定高度会导致文字顶框挤框
+        _fnt = tkfont.Font(font=font or (self.FONT_BOLD if kind in ('tag',) else self.FONT))
+        _line_h = _fnt.metrics('linespace')
+        h = (height or 1) * _line_h + 8  # 行高 + 上下 padding
+        # 文字实际像素宽度：tkfont.measure 精确测量（DPI 缩放/中文 12px 每字/emoji 更宽
+        # 都自适应），替代 len(text)*(fs+1) 粗算——125% DPI 下原公式低估 ~20% 导致
+        # 按钮文字溢出被压/被裁（v1.4 UI 排版修复）
+        _tw = _fnt.measure(text)
         if width:
-            w = width * 9
+            # width 语义 = 字符数：9pt 中文约 12px/字，12px/字符 + measure 兜底取大
+            w = max(width * 12, _tw + padx * 2 + 22)
         else:
-            fs = (font or self.FONT)[1]
-            w = len(text) * (fs + 1) + padx * 2 + 22
+            w = _tw + padx * 2 + 22
         c = int(self.tc('btn.corner', 5))  # 几何微切角
         canvas = tk.Canvas(parent, width=w, height=h,
                            bg=parent.cget('bg') if parent.winfo_class() == 'Frame' else self.C_BG,
@@ -294,7 +303,7 @@ class App(SettingsUIMixin):
     def __init__(self):
         # 日志：程序启动记录（按天分文件 logs/YYYY-MM-DD.log）
         try:
-            log.hr(f"PDD EZ 启动 v{VERSION}", 0)
+            log.hr(f"PDD EZ 启动 {VERSION}", 0)
             log.info(f"frozen={getattr(sys, 'frozen', False)}")
         except Exception:
             pass
@@ -307,9 +316,20 @@ class App(SettingsUIMixin):
                 pass
         self.win = tk.Tk()
         self.win.title("PDD EZ")
-        self.win.geometry("900x620")
+        # DPI 感知下 Tk 把 geometry 当逻辑像素：物理窗口 = 参数 ÷ (实际DPI/96)。
+        # 本机 175% 缩放时 900x620 会被缩成 514x354，所有内容挤压被遮挡。
+        # 换算系数 dpi_scale = 实际DPI/96，geometry 传 目标物理尺寸 × dpi_scale。
+        try:
+            _dpi = self.win.winfo_fpixels('1i')
+            self.dpi_scale = max(1.0, _dpi / 96.0)
+        except Exception:
+            self.dpi_scale = 1.0
+        def _geo(w, h):
+            return f"{int(round(w * self.dpi_scale))}x{int(round(h * self.dpi_scale))}"
+        self._geo = _geo
+        self.win.geometry(_geo(900, 620))
         self.win.resizable(True, True)
-        self.win.minsize(750, 520)
+        self.win.minsize(int(750 * self.dpi_scale), int(520 * self.dpi_scale))
         # 窗口图标：打包后用 _MEIPASS，源码用脚本目录
         try:
             if getattr(sys, 'frozen', False):
@@ -390,7 +410,7 @@ class App(SettingsUIMixin):
             from io import BytesIO as _BytesIO
             dlg = tk.Toplevel(self.win)
             dlg.title(title or "公告")
-            dlg.geometry("480x420")
+            dlg.geometry(self._geo(480, 420))
             dlg.resizable(False, False)
             dlg.configure(bg=self.C_BG)
             dlg.transient(self.win)
@@ -583,7 +603,7 @@ class App(SettingsUIMixin):
                                  w - 88, 38, w - 190, 38, w - 190, 18,
                                  fill=tb.get('ver_bg', '#111111'), outline=tb.get('ver_edge', '#FFE600'),
                                  width=1, tags='deco')
-            _deco.create_text(w - 135, 24, text="V" + VERSION.upper(), fill=tb.get('ver_fg', '#FFE600'),
+            _deco.create_text(w - 135, 24, text=VERSION.upper(), fill=tb.get('ver_fg', '#FFE600'),
                               font=(self.FONT[0], 9, 'bold'), tags='deco')
         _deco.bind('<Configure>', _redraw_deco)
         def _retheme_topbar():
@@ -607,6 +627,11 @@ class App(SettingsUIMixin):
         providers = api_cfg.get('providers', {})
         provider = providers.get(active, {}) if isinstance(providers, dict) else {}
         bm = provider.get('model', '') or active
+        # 模型名超长截断：完整名（如 qwen3-omni-flash-2025-09-15 28字符）会撑满工具条
+        # 挤压右侧按钮，只显示前 18 字符 + …（v1.4 UI 排版修复）
+        _bm_full = bm
+        if len(bm) > 18:
+            bm = bm[:18] + '…'
         is_free = active == 'glm'
         # 模型标识胶囊（终末地：白底 + 切角标签）
         self.pill_frame = tk.Frame(tool_bar, bg=self.C_BG)
@@ -718,6 +743,35 @@ class App(SettingsUIMixin):
         self.tab_frame = tk.Frame(self.result_frame)
         self.tab_frame.pack(fill="x", padx=3, pady=(2,0))
         
+        # 仅显示预警筛选（必须先于 tree pack：expand 控件优先分配空间，
+        # 后 pack 的控件会被压缩到不可见——v1.4 修复）
+        filter_frame = tk.Frame(self.result_frame)
+        filter_frame.pack(side="bottom", fill="x", padx=3, pady=(0,3))
+        self._filter_var = tk.BooleanVar(self.win, value=False)
+        def toggle_filter():
+            self._filter_warning_only = self._filter_var.get()
+            if self.plans:
+                self._render_tree(self.plans)
+        tk.Checkbutton(filter_frame, text="仅显示预警（需补货/近期补货）", variable=self._filter_var,
+                       command=toggle_filter, font=(self.FONT[0], 8),
+                       bg=self.C_SURFACE, fg=self.C_TEXT, selectcolor=self.C_SURFACE,
+                       activebackground=self.C_SURFACE).pack(side="left")
+        tk.Label(filter_frame, text="商品过多时可筛选，减少渲染量",
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=8)
+        # 仓库筛选（v1.3：识别全部商品后按 OCR 仓库信息列过滤展示）
+        self._wh_filter_var = tk.StringVar(self.win, value='全部仓库')
+        def toggle_wh_filter(*_a):
+            self._wh_filter = self._wh_filter_var.get()
+            if self.plans:
+                self._render_tree(self.plans)
+        tk.Label(filter_frame, text="仓库:", font=(self.FONT[0], 8), bg=self.C_SURFACE,
+                 fg=self.C_TEXT).pack(side="left", padx=(14, 2))
+        self.wh_combo = ttk.Combobox(filter_frame, textvariable=self._wh_filter_var,
+                                     values=('全部仓库',), state='readonly', width=14,
+                                     font=(self.FONT[0], 8))
+        self.wh_combo.pack(side="left")
+        self.wh_combo.bind('<<ComboboxSelected>>', toggle_wh_filter)
+        
         columns = ("商品", "总库存", "总销量", "预估销量", "可售卖天数", "状态", "补货量")
         # 结果表放入带滚动条的容器（勾选列多时右侧列不再被截断）
         tree_frame = tk.Frame(self.result_frame, bg=self.C_CARD_HDR)
@@ -747,34 +801,6 @@ class App(SettingsUIMixin):
         self._hsb_canvas.grid(row=1, column=0, sticky="ew")
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
-        
-        # 仅显示预警筛选
-        filter_frame = tk.Frame(self.result_frame)
-        filter_frame.pack(fill="x", padx=3, pady=(0,3))
-        self._filter_var = tk.BooleanVar(self.win, value=False)
-        def toggle_filter():
-            self._filter_warning_only = self._filter_var.get()
-            if self.plans:
-                self._render_tree(self.plans)
-        tk.Checkbutton(filter_frame, text="仅显示预警（需补货/近期补货）", variable=self._filter_var,
-                       command=toggle_filter, font=(self.FONT[0], 8),
-                       bg=self.C_SURFACE, fg=self.C_TEXT, selectcolor=self.C_SURFACE,
-                       activebackground=self.C_SURFACE).pack(side="left")
-        tk.Label(filter_frame, text="商品过多时可筛选，减少渲染量",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=8)
-        # 仓库筛选（v1.3：识别全部商品后按 OCR 仓库信息列过滤展示）
-        self._wh_filter_var = tk.StringVar(self.win, value='全部仓库')
-        def toggle_wh_filter(*_a):
-            self._wh_filter = self._wh_filter_var.get()
-            if self.plans:
-                self._render_tree(self.plans)
-        tk.Label(filter_frame, text="仓库:", font=(self.FONT[0], 8), bg=self.C_SURFACE,
-                 fg=self.C_TEXT).pack(side="left", padx=(14, 2))
-        self.wh_combo = ttk.Combobox(filter_frame, textvariable=self._wh_filter_var,
-                                     values=('全部仓库',), state='readonly', width=14,
-                                     font=(self.FONT[0], 8))
-        self.wh_combo.pack(side="left")
-        self.wh_combo.bind('<<ComboboxSelected>>', toggle_wh_filter)
         
         for col, w in zip(columns, [260, 110, 110, 100, 110, 100, 90]):
             self.tree.heading(col, text=col, command=lambda c=col: self._sort_tree(c))
@@ -813,6 +839,8 @@ class App(SettingsUIMixin):
         providers = api_cfg.get('providers', {})
         provider = providers.get(active, {}) if isinstance(providers, dict) else {}
         model_name = provider.get('model', '') or active
+        if len(model_name) > 18:
+            model_name = model_name[:18] + '…'
         is_free = active == 'glm'
         self._pill_is_free = is_free
         self.pill_frame.configure(bg=self.C_BG)
@@ -1031,7 +1059,7 @@ class App(SettingsUIMixin):
         
         dlg = tk.Toplevel(self.win)
         dlg.title("软件更新")
-        dlg.geometry("480x360")
+        dlg.geometry(self._geo(480, 360))
         dlg.resizable(False, False)
         dlg.configure(bg=self.C_BG)
         dlg.transient(self.win)
@@ -1970,8 +1998,8 @@ class App(SettingsUIMixin):
         # 选择地区对话框
         dlg = tk.Toplevel(self.win)
         dlg.title("批量识别")
-        dlg.geometry("400x500")
-        dlg.minsize(380, 350)
+        dlg.geometry(self._geo(400, 500))
+        dlg.minsize(int(380 * self.dpi_scale), int(350 * self.dpi_scale))
         dlg.resizable(True, True)
         dlg.configure(bg=self.C_BG)
         
@@ -2030,7 +2058,7 @@ class App(SettingsUIMixin):
             hud.attributes('-topmost', True, '-alpha', 0.82)
             hud.configure(bg='#0F172A')
             sw_h, sh_h = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
-            hud.geometry(f"400x250+{sw_h-420}+30")
+            hud.geometry(f"{int(400*self.dpi_scale)}x{int(250*self.dpi_scale)}+{sw_h-int(420*self.dpi_scale)}+{int(30*self.dpi_scale)}")
             hud_text = tk.Text(hud, font=('Consolas', 9), bg='#0F172A', fg='#22D3EE',
                               wrap='word', relief='flat', borderwidth=0, padx=10, pady=10)
             hud_text.pack(fill='both', expand=True)
