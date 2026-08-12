@@ -390,18 +390,49 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
         return None
 
 
-def ai_read_selected_province(screenshot_path: str = None) -> str:
+def ai_read_selected_province(screenshot_path: str = None, region=None) -> str:
     """读筛选栏省份/地区下拉框当前显示的省份名（如 '云南'/'云南省'），失败返回 None。
 
     用于切换省份后验证筛选是否生效：粘贴省份+回车后读回当前值，
     与目标省份不一致说明切换失败（下拉框没选上/粘贴失败），需重新走 AI 定位+选择。
+    region: 可选 (cx, cy, w, h)，裁剪该区域识别（中心点+宽高，与截图同坐标系）。
+    省份下拉框是页面顶部小控件，整页截图压缩到 1280 宽后小字糊成一团，
+    模型经常读不出（实测粘贴成功但验证误报"无法识别"）——传下拉框坐标
+    裁剪放大后识别，识别率大幅提升。
     """
-    img_b64, _, _ = _load_screenshot_b64(screenshot_path)
-    if not img_b64:
-        return None
-    prompt = ('识别这张PDD商家后台「订货管理」页面顶部筛选栏的省份/地区下拉框'
-              '当前显示的省份名。只输出省份名（如 "云南" "广东省"），'
-              '如果显示 "全部"/"所有地区" 或无法识别，输出空字符串。')
+    import base64 as _b64, io as _io
+    if region:
+        # 特写路径：按下拉框坐标裁剪 → 放大 2 倍 → 高质量 JPEG
+        try:
+            from PIL import Image as PILImg
+            img = PILImg.open(screenshot_path)
+        except Exception:
+            return None
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        cx, cy, w, h = region
+        left = max(0, int(cx - w / 2))
+        top = max(0, int(cy - h / 2))
+        right = min(img.size[0], int(cx + w / 2))
+        bottom = min(img.size[1], int(cy + h / 2))
+        if right <= left or bottom <= top:
+            return None
+        img = img.crop((left, top, right, bottom))
+        img = img.resize((img.size[0] * 2, img.size[1] * 2), PILImg.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format='JPEG', quality=95)
+        img_b64 = _b64.b64encode(buf.getvalue()).decode()
+        prompt = ('识别这张图片中当前显示的文本内容（是省份/地区筛选框的特写图）。'
+                  '只输出文本本身，如 "云南" "云南省" "广东" "全部" 等；'
+                  '没有任何文字或无法辨认时，输出空字符串。')
+    else:
+        # 原路径：整图缩放压缩
+        img_b64, _, _ = _load_screenshot_b64(screenshot_path)
+        if not img_b64:
+            return None
+        prompt = ('识别这张PDD商家后台「订货管理」页面顶部筛选栏的省份/地区下拉框'
+                  '当前显示的省份名。只输出省份名（如 "云南" "广东省"），'
+                  '如果显示 "全部"/"所有地区" 或无法识别，输出空字符串。')
     try:
         content = _call_vision_api(img_b64, prompt, max_tokens=32, timeout=15)
         content = (content or '').strip().strip('"').strip("'").strip()

@@ -2341,14 +2341,46 @@ class App(SettingsUIMixin):
                 province_ok = False
                 _last_sel = None
                 _same_twice = False
+                _dx2 = _dy2 = None  # AI 重定位坐标（重试时更新，裁剪区域优先用它）
                 for _p_attempt in range(3):
                     _vshot = os.path.join(get_base_dir(), 'output', f'_wait_{i}_prov.png')
                     ss(_vshot)
-                    _sel = _read_province(_vshot)
+                    # v1.4 bugfix：省份下拉框是页面顶部小控件，整页截图压缩后小字
+                    # 糊成一团，模型读不出 → 粘贴成功也误报「无法识别」。按下拉框
+                    # 坐标裁剪区域（全屏坐标 → 窗口截图坐标，含 4K/带鱼屏 scale
+                    # 还原），特写放大后识别，识别率大幅提升。
+                    # 坐标来源：用「本次实际点击粘贴的位置」（dx/dy 或重试的
+                    # _dx2/_dy2）——粘贴成功说明该位置就是省份下拉框；模板匹配
+                    # 原始 tm 坐标是窗口截图坐标且可能匹配到销售区域等相似框，
+                    # 不能直接当裁剪中心。
+                    _bx = _by = None
+                    if _dx2 is not None:
+                        _bx, _by = _dx2, _dy2          # 重试：AI 重定位点击坐标（全屏）
+                    elif dx is not None:
+                        _bx, _by = dx, dy              # 首次：本次点击粘贴位置（全屏）
+                    _region = None
+                    if _bx is not None and _by is not None:
+                        _wl = win_pos.get('left', 0) or 0
+                        _wt = win_pos.get('top', 0) or 0
+                        _sx = win_pos.get('scale_x', 1.0) or 1.0
+                        _sy = win_pos.get('scale_y', 1.0) or 1.0
+                        _region = (int((_bx - _wl) / _sx), int((_by - _wt) / _sy),
+                                   max(160, int(360 / _sx)), max(80, int(100 / _sy)))
+                    _sel = _read_province(_vshot, region=_region)
                     if _sel and _strip_region(_sel) == reg:
                         province_ok = True
                         dlog(f"3.✓ 省份已切换为「{_sel}」")
                         break
+                    # 粘贴+回车后页面可能异步刷新（筛选栏值延迟更新）：读到值但
+                    # 不匹配 → 等 0.8s 重截重读一次再判失败，避免误报触发重选
+                    if _sel:
+                        time.sleep(0.8)
+                        ss(_vshot)
+                        _sel = _read_province(_vshot, region=_region)
+                        if _sel and _strip_region(_sel) == reg:
+                            province_ok = True
+                            dlog(f"3.✓ 省份已切换为「{_sel}」（刷新后确认）")
+                            break
                     dlog(f"3.⚠ 省份验证失败（第{_p_attempt+1}次，显示:{_sel or '无法识别'}，期望:{reg}）")
                     # v1.4：检测是否验证码/弹窗/横幅（这类异常重试无效，需人工处理）
                     from vision import ai_detect_anomaly as _detect_anomaly
