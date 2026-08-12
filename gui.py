@@ -2548,11 +2548,18 @@ class App(SettingsUIMixin):
                             _use_split = scroll_round == 0 and bool(_row_bboxes)
                             if _use_split and _total_hint:
                                 try:
-                                    _bd_rows = max(0, len(_row_bboxes) - 1)  # 减表头行
+                                    # 行边界可能含/不含表头行：首边界 top 与表格 bbox top
+                                    # 间隙 < 0.5 行高 → 视为含表头（v1.4 修正：不减表头
+                                    # 会把"仅内容行边界"误判漏行，误回退整表）
+                                    _bd0 = _row_bboxes[0][0]
+                                    _avg_h = max(1, _row_bboxes[1][0] - _bd0)
+                                    _has_hdr = (table_bbox or {}).get('top', 0) is not None \
+                                        and (_bd0 - int(table_bbox.get('top', 0))) < _avg_h * 0.5
+                                    _bd_rows = max(0, len(_row_bboxes) - (1 if _has_hdr else 0))
                                     if _bd_rows < int(_total_hint):
                                         dlog(f"6.⚠ 行边界{_bd_rows}数据行 < 页面总数{int(_total_hint)}，改整表识别防漏行")
                                         _use_split = False
-                                except (TypeError, ValueError):
+                                except (TypeError, ValueError, IndexError):
                                     pass
                             items = self._ocr_generic_to_items(sp2, table_bbox=table_bbox,
                                                               dual_verify=dual_verify,

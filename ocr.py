@@ -1022,12 +1022,14 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
             _rows.append((_rt2, _rb2))
     if len(_rows) < 2:
         raise RuntimeError('row_bboxes 无效')
-    # 行边界完整性校验：bbox 底部比最后一行底多出 >1.5 行高 → 行边界疑似
+    # 行边界完整性校验：bbox 底部比最后一行底多出 >2.5 行高 → 行边界疑似
     # 漏了底部行（AI 数行不全），行切分必然丢行 → 抛错回退整表识别
-    # （整表模型自己数行，与实时截图同路径；v1.4 修复）
+    # （整表模型自己数行，与实时截图同路径；v1.4 修复。
+    #  ⚠ 阈值 1.5→2.5 行：AI 的 bbox 常比表格实际范围画大 1~2 行，
+    #  过小阈值会把正常表格误判漏行，导致行切分机制失效）
     try:
         _avg_h = (_rows[-1][1] - _rows[0][0]) / max(1, len(_rows))
-        if (_b - _t) - _rows[-1][1] > 1.5 * _avg_h:
+        if (_b - _t) - _rows[-1][1] > 2.5 * _avg_h:
             raise RuntimeError('行边界未覆盖表格底部（疑似漏行），回退整表')
     except RuntimeError:
         raise
