@@ -1837,8 +1837,9 @@ class App(SettingsUIMixin):
                     r['_raw'] = it.get('_raw') or {}
             finally:
                 self._suppress_auto_append = False
-        except Exception:
-            pass  # 缓存 items 缺失时保持现状（只切显示）
+        except Exception as _e:
+            # 缓存 items 缺失时保持现状（只切显示），但留日志便于排查
+            log.warning(f"切地区重建 rows 失败({region}): {_e}")
         
         # 显示该地区的结果（v1.3 动态列 + 筛选：复用 _render_tree）
         self._render_tree(data['plans'])
@@ -2302,9 +2303,25 @@ class App(SettingsUIMixin):
                     pos = locate_element(sp, 'region_dropdown', threshold=0.80)
                     if pos:
                         tm_x, tm_y = pos[0], pos[1]
+                        # 模板匹配坐标是窗口截图坐标（宽≤2560），还原到全屏：
+                        # ×(窗口原始宽/截图宽) + 窗口偏移；偏移量按全屏宽度比例
+                        # （v1.4 全量审查修复：4K/带鱼屏下旧逻辑直接当全屏用整体偏左）
+                        try:
+                            _im = PILImage.open(sp)
+                            _imw, _imh = _im.size
+                        except Exception:
+                            _imw = _imh = 0
+                        _wl2 = int(win_pos.get('left', 0) or 0)
+                        _wt2 = int(win_pos.get('top', 0) or 0)
+                        _win_w = int(win_pos.get('width', _imw or sw) or sw)
+                        _win_h = int(win_pos.get('height', _imh or sh) or sh)
+                        if _imw > 0 and _imh > 0:
+                            dx = int(tm_x * _win_w / _imw) + _wl2
+                            dy = int(tm_y * _win_h / _imh) + _wt2
+                        else:
+                            dx, dy = tm_x, tm_y
                         # 点击偏移比例制：90px 相对 1920 参考宽度，按当前分辨率缩放
-                        dx = tm_x + int(90 * sw / 1920)
-                        dy = tm_y
+                        dx += int(90 * sw / 1920)
                         dlog(f"1.模板匹配({dx},{dy})")
                     else:
                         # v1.3 起完全依赖 AI 定位/模板匹配，无预设坐标兜底：
@@ -3164,7 +3181,9 @@ class App(SettingsUIMixin):
         """导出所有缓存地区到 Excel"""
         if not self.cache:
             if hasattr(self, 'plans') and self.plans:
-                self.cache[self.region_var.get()] = {'plans': self.plans, 'items': []}
+                # 兜底：cache 为空但有计算结果时补一份（items 用 plans 反填，
+                # 避免 items=[] 导致切地区 tab 时 rows 被清空——v1.4 全量审查修复）
+                self.cache[self.region_var.get()] = {'plans': self.plans, 'items': self.plans}
             else:
                 messagebox.showwarning("无数据", "请先识别至少一个地区")
                 return

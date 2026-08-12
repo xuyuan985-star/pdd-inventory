@@ -280,25 +280,42 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
     win_left = win_top = 0
     try:
         import pygetwindow as gw
-        for title in ['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox']:
-            wins = gw.getWindowsWithTitle(title)
-            if wins:
-                win = wins[0]
-                found_window = True
-                win_left, win_top = win.left, win.top
-                # 1) 优先后台截图（PrintWindow）：不抢焦点、不遮挡、窗口被盖住也能截
-                try:
-                    img = _capture_window_background(win)
-                except Exception:
-                    img = None
-                if img is None:
-                    # 2) 后台失败 → 前台截图（激活窗口，pyautogui region）
-                    if win.isMinimized:
-                        win.restore()
-                    win.activate()
-                    _time.sleep(0.2)
-                    img = pg.screenshot(region=(win.left, win.top, win.width, win.height))
-                break
+        # 窗口选择（v1.4 全量审查修复）：
+        # 1) 优先标题含「拼多多/pinduoduo」的窗口（商家后台标签激活时窗口标题带站点名）
+        # 2) 没有 → 所有浏览器窗口中选「当前激活」的那个（用户刚在看的就是 PDD 页面）
+        # 3) 再没有 → 第一个浏览器窗口（多窗口时可能有偏差，但比截错窗口好）
+        # 旧逻辑直接 wins[0]：用户开多个 Edge/Chrome 窗口时可能截到别的网站窗口。
+        def _pick_window(titles):
+            for title in titles:
+                wins = gw.getWindowsWithTitle(title)
+                if not wins:
+                    continue
+                if '拼多多' in title or 'pinduoduo' in title.lower():
+                    return wins[0]  # 精确站点名优先
+                for w in wins:      # 浏览器窗口：优先当前激活的
+                    try:
+                        if w.isActive:
+                            return w
+                    except Exception:
+                        pass
+                return wins[0]
+            return None
+        win = _pick_window(['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox'])
+        if win is not None:
+            found_window = True
+            win_left, win_top = win.left, win.top
+            # 1) 优先后台截图（PrintWindow）：不抢焦点、不遮挡、窗口被盖住也能截
+            try:
+                img = _capture_window_background(win)
+            except Exception:
+                img = None
+            if img is None:
+                # 2) 后台失败 → 前台截图（激活窗口，pyautogui region）
+                if win.isMinimized:
+                    win.restore()
+                win.activate()
+                _time.sleep(0.2)
+                img = pg.screenshot(region=(win.left, win.top, win.width, win.height))
     except Exception:
         pass
 
