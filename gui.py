@@ -2542,10 +2542,22 @@ class App(SettingsUIMixin):
                     for retry in range(3):
                         try:
                             # v1.3 通用列：走 _ocr_generic_to_items（勾选列 + 映射 + 可选双模型）
+                            # v1.4 修复：AI 行边界对 3 行小表格会漏最后一行（行切分只按边界
+                            # 切 → 静默丢行）。有页面总数时校验：行边界数据行数 < 总数 →
+                            # 回退整表识别（整表模型自己数行，与实时截图同路径，可靠）
+                            _use_split = scroll_round == 0 and bool(_row_bboxes)
+                            if _use_split and _total_hint:
+                                try:
+                                    _bd_rows = max(0, len(_row_bboxes) - 1)  # 减表头行
+                                    if _bd_rows < int(_total_hint):
+                                        dlog(f"6.⚠ 行边界{_bd_rows}数据行 < 页面总数{int(_total_hint)}，改整表识别防漏行")
+                                        _use_split = False
+                                except (TypeError, ValueError):
+                                    pass
                             items = self._ocr_generic_to_items(sp2, table_bbox=table_bbox,
                                                               dual_verify=dual_verify,
                                                               # 首轮全量数据走行切分防乱编；滚动轮次行少回整表控成本
-                                                              row_bboxes=_row_bboxes if scroll_round == 0 else None)
+                                                              row_bboxes=_row_bboxes if _use_split else None)
                             if items: break
                             dlog(f"  重试{retry+1}...")
                             time.sleep(2)

@@ -1011,16 +1011,30 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     if isinstance(table_bbox, dict):
         _l = int(table_bbox.get('left', 0)); _t = int(table_bbox.get('top', 0))
         _r = int(table_bbox.get('right', _W)); _b = int(table_bbox.get('bottom', _H))
-    _tbl_img = _img.crop((_l, _t, _r, _b))
-    # row_bboxes 相对原图 → 相对表格图
+    # row_bboxes 相对原图 → 相对表格图（v1.4 修复：行只需在原图内合法即可，
+    # 不被 bbox 底部截断——AI 对 3 行小表格的 bbox 可能画矮，行边界超出 bbox
+    # 会被旧逻辑过滤 → 静默丢最后一行）
     _rows = []
     for (_rt, _rb) in (row_bboxes or []):
         _rt2 = max(0, int(_rt) - _t)
-        _rb2 = min(_b, int(_rb)) - _t
-        if 0 <= _rt2 < _rb2 <= (_b - _t):
+        _rb2 = min(_H, int(_rb)) - _t
+        if 0 <= _rt2 < _rb2 <= (_H - _t):
             _rows.append((_rt2, _rb2))
     if len(_rows) < 2:
         raise RuntimeError('row_bboxes 无效')
+    # 行边界完整性校验：bbox 底部比最后一行底多出 >1.5 行高 → 行边界疑似
+    # 漏了底部行（AI 数行不全），行切分必然丢行 → 抛错回退整表识别
+    # （整表模型自己数行，与实时截图同路径；v1.4 修复）
+    try:
+        _avg_h = (_rows[-1][1] - _rows[0][0]) / max(1, len(_rows))
+        if (_b - _t) - _rows[-1][1] > 1.5 * _avg_h:
+            raise RuntimeError('行边界未覆盖表格底部（疑似漏行），回退整表')
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+    # 表格图裁剪：宽度聚焦 bbox；高度扩展到覆盖全部行边界（bbox 矮时不截行）
+    _tbl_img = _img.crop((_l, _t, _r, min(_H, _t + max(_rows[-1][1], _b - _t))))
     _groups = [_rows[i:i + _group_size] for i in range(0, len(_rows), _group_size)]
     _cols_txt = '、'.join(str(c) for c in columns) if columns else ''
     _ex_col = columns[0] if columns else '商品信息'
