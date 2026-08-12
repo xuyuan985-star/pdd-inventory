@@ -309,6 +309,18 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
                 img = _capture_window_background(win)
             except Exception:
                 img = None
+            if img is not None:
+                # v1.4 修复：PrintWindow 截的是**客户区**（不含标题栏/边框），
+                # 偏移必须用客户区左上角的全屏坐标（ClientToScreen）——外框坐标
+                # win.left/top 含边框/标题栏，非最大化窗口会系统性偏左上，
+                # 客户反馈"AI 定位后点击查询按钮偏左"即此因（本机测试窗口
+                # 最大化时外框≈客户区，偏差被掩盖）。DPI 感知进程返回物理像素。
+                try:
+                    _co = _client_origin(win)
+                    if _co:
+                        win_left, win_top = _co[0], _co[1]
+                except Exception:
+                    pass  # 客户区坐标失败则保留外框坐标（近似，最大化时无差）
             if img is None:
                 # 2) 后台失败 → 前台截图（激活窗口，pyautogui region）
                 if win.isMinimized:
@@ -345,6 +357,29 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
         out_window_pos['scale_x'] = (cw / _saved_w) if _saved_w else 1.0
         out_window_pos['scale_y'] = (ch / img.size[1]) if img.size[1] else 1.0
     return found_window
+
+
+def _client_origin(win) -> tuple:
+    """窗口客户区左上角的全屏坐标（物理像素）。
+
+    PrintWindow 截的是客户区（不含标题栏/边框），坐标换算偏移必须用客户区
+    起点而非窗口外框 win.left/top——非最大化窗口两者差一个边框/标题栏，
+    用外框会导致点击系统性偏左上（v1.4 修复：客户反馈查询按钮点击偏左）。
+    DPI 感知进程下返回物理像素，与 pyautogui/pygetwindow 一致。
+    """
+    import ctypes
+    from ctypes import wintypes
+    try:
+        hwnd = win._hWnd if hasattr(win, '_hWnd') else None
+        if not hwnd:
+            return None
+        user32 = ctypes.windll.user32
+        pt = wintypes.POINT(0, 0)
+        if not user32.ClientToScreen(hwnd, ctypes.byref(pt)):
+            return None
+        return int(pt.x), int(pt.y)
+    except Exception:
+        return None
 
 
 def _capture_window_background(win) -> object:

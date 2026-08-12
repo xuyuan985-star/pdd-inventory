@@ -2476,23 +2476,54 @@ class App(SettingsUIMixin):
                 # 5. 等待页面刷新：截图变化检测（最多 10 秒，检测到页面变化即提前继续）
                 _w0 = os.path.join(get_base_dir(), 'output', f'_wait_{i}_0.png')
                 _w1 = os.path.join(get_base_dir(), 'output', f'_wait_{i}_1.png')
+                _changed = False
                 try:
-                    ss(_w0)
-                    changed = False
-                    for _t in range(10):
-                        time.sleep(1.0)
-                        ss(_w1)
-                        try:
-                            im0 = PILImage.open(_w0).convert('L').resize((160, 90))
-                            im1 = PILImage.open(_w1).convert('L').resize((160, 90))
-                            diff = sum(1 for a, b in zip(im0.getdata(), im1.getdata()) if abs(a - b) > 12)
-                            if diff > 40:  # 超过 40 个像素点差异视为页面已刷新
-                                changed = True
-                                break
-                            _w0, _w1 = _w1, _w0  # 滚动基准
-                        except Exception:
-                            pass
-                    dlog(f"5.页面刷新完成{'（变化检测）' if changed else '（超时兜底）'}")
+                    for _rc in range(2):  # 点偏兜底：10 秒无变化 → 重定位 query 重点一次
+                        ss(_w0)
+                        _changed = False
+                        for _t in range(10):
+                            time.sleep(1.0)
+                            ss(_w1)
+                            try:
+                                im0 = PILImage.open(_w0).convert('L').resize((160, 90))
+                                im1 = PILImage.open(_w1).convert('L').resize((160, 90))
+                                diff = sum(1 for a, b in zip(im0.getdata(), im1.getdata()) if abs(a - b) > 12)
+                                if diff > 40:  # 超过 40 个像素点差异视为页面已刷新
+                                    _changed = True
+                                    break
+                                _w0, _w1 = _w1, _w0  # 滚动基准
+                            except Exception:
+                                pass
+                        if _changed:
+                            break
+                        # 页面没变化 = 查询可能没点中（坐标偏移/弹窗遮挡）：
+                        # 重定位 query 按钮 → 重点 → 再等一轮（v1.4 修复：
+                        # 客户反馈 AI 定位后点查询偏左；点偏后果是识别到旧省份数据）
+                        if _rc == 0:
+                            dlog("5.⚠ 查询后页面未变化，重定位查询按钮重试")
+                            try:
+                                import tempfile as _tf5
+                                from vision import ai_locate_elements as _reloc5
+                                _rs = os.path.join(_tf5.gettempdir(), 'pdd_reloc_query.png')
+                                _rp = {}
+                                capture_pdd_screenshot(_rs, _rp)
+                                _rl = _reloc5(_rs)
+                                if _rl and _rl.get('query'):
+                                    _rsx = _rp.get('scale_x', 1.0) or 1.0
+                                    _rsy = _rp.get('scale_y', 1.0) or 1.0
+                                    _wl5 = int(_rp.get('left', 0) or 0)
+                                    _wt5 = int(_rp.get('top', 0) or 0)
+                                    qx = int(_rl['query']['x'] * _rsx) + _wl5
+                                    qy = int(_rl['query']['y'] * _rsy) + _wt5
+                                    qq_coord = {'x': qx, 'y': qy}
+                                    dlog(f"5.↻ 重定位查询按钮({qx},{qy}) 置信度:{_rl.get('confidence', 0):.0%}")
+                                    pyautogui.click(qx, qy)
+                                    continue
+                                dlog("5.✗ 重定位查询按钮失败")
+                            except Exception as _e5:
+                                dlog(f"5.✗ 重试查询失败: {_e5}")
+                        break
+                    dlog(f"5.页面刷新完成{'（变化检测）' if _changed else '（超时兜底）'}")
                 finally:
                     for _p in (_w0, _w1):
                         try: os.remove(_p)
