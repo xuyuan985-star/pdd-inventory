@@ -982,6 +982,28 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
             _known = []
     if not row_bboxes:
         raise RuntimeError('row_split 缺少 row_bboxes')
+    # ── 模型输出上限自适应分组（v1.4 修复：全列模式下数量莫名变 2）──
+    # 每行 9 列全列 JSON ≈ 300 token；glm-4v-flash 输出上限 1024 token（API 硬限制，
+    # ocr.py _ocr_api_call_do 钳制），固定 6 行/组会截断 JSON → 每组只输出前 2 行。
+    # 按 上限/每行估算 动态缩小组，保证一组能完整输出；OCR 模型 4096 保持 6 行。
+    try:
+        from utils import get_api_config as _gac2
+        _acfg2 = _gac2()
+        _ap2 = _acfg2.get('active_provider', '')
+        _am2 = ((_acfg2.get('providers') or {}).get(_ap2, {}) or {}).get('model', '') or ''
+        _fm2 = forced_model or ''
+    except Exception:
+        _am2 = _fm2 = ''
+    _is_ocr = bool(_is_qwen_ocr(forced_model) or _is_qwen_ocr(_am2))
+    _is_flash = any(
+        (m or '').strip().lower().startswith('glm-4v-flash') or (m or '').strip().lower() == 'glm-4v-flash'
+        for m in (_am2, _fm2))
+    try:
+        _per_row_tok = 300 if not columns else 120 + 25 * len(columns)
+    except Exception:
+        _per_row_tok = 300
+    _cap_tok = 1024 if _is_flash else (4096 if _is_ocr else 2048)
+    _group_size = max(1, min(group_size, _cap_tok // (_per_row_tok + 60)))
     _img = PILImg.open(image_path).convert('RGB')
     _W, _H = _img.size
     _l, _t, _r, _b = 0, 0, _W, _H
@@ -998,7 +1020,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
             _rows.append((_rt2, _rb2))
     if len(_rows) < 2:
         raise RuntimeError('row_bboxes 无效')
-    _groups = [_rows[i:i + group_size] for i in range(0, len(_rows), group_size)]
+    _groups = [_rows[i:i + _group_size] for i in range(0, len(_rows), _group_size)]
     _cols_txt = '、'.join(str(c) for c in columns) if columns else ''
     _ex_col = columns[0] if columns else '商品信息'
     all_rows = []
@@ -1013,15 +1035,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
         _gimg.save(_buf, format='JPEG', quality=80)
         _b64 = base64.b64encode(_buf.getvalue()).decode()
         # Qwen OCR 专用模型：行切分每组小图，同样吃满 4096 token（输出更长更稳）
-        _is_ocr = _is_qwen_ocr(forced_model)
-        if not _is_ocr:
-            try:
-                from utils import get_api_config as _gac
-                _acfg = _gac()
-                _ap = _acfg.get('active_provider', '')
-                _is_ocr = _is_qwen_ocr(((_acfg.get('providers') or {}).get(_ap, {}) or {}).get('model', ''))
-            except Exception:
-                _is_ocr = False
+        # （_is_ocr 已在函数开头按 forced_model + 当前 provider 判定）
         _row_max_tok = 4096 if _is_ocr else 2048
         if columns:
             _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
