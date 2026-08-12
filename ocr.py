@@ -1035,7 +1035,24 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
         pass
     # 表格图裁剪：宽度聚焦 bbox；高度扩展到覆盖全部行边界（bbox 矮时不截行）
     _tbl_img = _img.crop((_l, _t, _r, min(_H, _t + max(_rows[-1][1], _b - _t))))
-    _groups = [_rows[i:i + _group_size] for i in range(0, len(_rows), _group_size)]
+    # 分组：避免"孤行组"——最后一组只剩 1 行时（5 行拆 4+1），单行图
+    # 无表头参照、图太矮，模型输出列不全（v1.4 修复：山东第4行数据不全），
+    # 改为从前一组拆 1 行过来组成 2 行组（4 行表拆 3+2）
+    _groups = []
+    _i = 0
+    while _i < len(_rows):
+        _take = min(_group_size, len(_rows) - _i)
+        if _take == 1 and _groups:
+            _prev = _groups.pop()
+            if len(_prev) > 1:
+                _groups.append(_prev[:-1])
+                _groups.append([_prev[-1], _rows[_i]])
+            else:
+                _groups.append(_prev + [_rows[_i]])
+            _i += 1
+            continue
+        _groups.append(_rows[_i:_i + _take])
+        _i += _take
     _cols_txt = '、'.join(str(c) for c in columns) if columns else ''
     _ex_col = columns[0] if columns else '商品信息'
     all_rows = []
