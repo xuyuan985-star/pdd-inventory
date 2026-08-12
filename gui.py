@@ -2853,6 +2853,20 @@ class App(SettingsUIMixin):
         if not items:
             self.status_text.set("OCR未识别到任何数据")
             return
+        # 按地区分组：多省份×多仓库批量时每个地区独立缓存（避免全混进第一个地区）
+        from ocr import strip_region_suffix as _srs
+        by_region = {}
+        detected_regions = set()
+        for it in items:
+            reg = _srs(it.get('region', '')) or self.region_var.get()
+            by_region.setdefault(reg, []).append(it)
+            if reg:
+                detected_regions.add(reg)
+        # v1.4 bugfix：表格只显示第一个地区的商品——之前把所有省份商品顺序
+        # 填进同一张表，第二个省份看起来"叠加"了前面省份的商品信息。
+        # 批量多省份时其余地区通过顶部地区 tab 切换查看（数据已按地区独立入缓存）
+        _first_reg = next(iter(by_region)) if by_region else ''
+        _display = by_region.get(_first_reg) or items
         # 清空所有现有行（临时禁用自动加行，避免 set('') 触发追加空行）
         self._suppress_auto_append = True
         try:
@@ -2863,14 +2877,13 @@ class App(SettingsUIMixin):
         finally:
             self._suppress_auto_append = False
         # 确保有足够行
-        while len(self.rows) < len(items):
+        while len(self.rows) < len(_display):
             self._add_row()
-        # 填入数据
-        detected_regions = set()
+        # 填入数据（detected_regions 已在分组时收集全部地区）
         low_conf_count = 0
         name_unmatched_count = 0
         dual_degraded = False
-        for i, item in enumerate(items):
+        for i, item in enumerate(_display):
             r = self.rows[i]
             # 双模型验证标记的低置信度商品：名称加 ⚠ 提示复核
             low_conf = item.get('_low_confidence', False)
@@ -2892,10 +2905,6 @@ class App(SettingsUIMixin):
             # 保留 OCR 原始列（仓库信息/仓库销售库存等勾选列），
             # 否则刷新计算时 _recalc_from_rows 只能回填 name/stock/sales，其他列全空白
             r['_raw'] = item.get('_raw') or {}
-            region = item.get('region', '')
-            if region:
-                from ocr import strip_region_suffix
-                detected_regions.add(strip_region_suffix(region))
         if low_conf_count:
             self.status_text.set(f"⚠ {low_conf_count} 个商品双模型结果不一致，已取保守值，请重点核对")
         elif name_unmatched_count:
@@ -2903,7 +2912,12 @@ class App(SettingsUIMixin):
         elif dual_degraded:
             self.status_text.set("⚠ 双模型副模型识别失败，本次为单模型结果，请留意准确性")
         # 自动匹配地区
-        msg = f"识别完成 — {len(items)} 个商品，请核对后点计算"
+        # v1.4：表格只显示第一个地区，多地区时提示其余走地区 tab 查看
+        if len(by_region) > 1:
+            msg = (f"识别完成 — 当前地区 {len(_display)} 个商品"
+                   f"（共{len(by_region)}个地区，其余见顶部地区切换）")
+        else:
+            msg = f"识别完成 — {len(_display)} 个商品，请核对后点计算"
         if detected_regions:
             newly_added = []
             for reg in detected_regions:
@@ -2919,7 +2933,7 @@ class App(SettingsUIMixin):
                     self.region_var.set(reg)
                     break
             # 提示新地区
-            msg = f"识别完成 — {len(items)} 个商品"
+            msg = f"识别完成 — {len(_display)} 个商品"
             if newly_added:
                 msg += f"\n\n⚠ 新增地区：{'、'.join(newly_added)}，各商品运输时间默认3天"
                 msg += "\n请点击「商品时效设置」按商品调整运输天数"
@@ -2929,16 +2943,20 @@ class App(SettingsUIMixin):
                     parent=self.win))
         self.status_text.set(msg)
         # 直接用OCR结果计算，不依赖行数据
-        # 按地区分组：多省份×多仓库批量时每个地区独立缓存（避免全混进第一个地区）
+        # 按地区分组（上面已构建 by_region）：多省份批量时每个地区独立缓存
         try:
-            by_region = {}
-            from ocr import strip_region_suffix
-            for it in items:
-                reg = strip_region_suffix(it.get('region', '')) or self.region_var.get()
-                by_region.setdefault(reg, []).append(it)
             for reg, sub in by_region.items():
                 self.region_var.set(reg)
                 self._calc_from_items(sub)
+            # 表格显示与结果表统一切回第一个地区（其余地区走地区 tab 查看）
+            if _first_reg:
+                self.region_var.set(_first_reg)
+                self.active_region = _first_reg
+                _fd = self.cache.get(_first_reg)
+                if _fd:
+                    self._render_tree(_fd['plans'])
+                    self.plans = _fd['plans']
+                self._update_tabs()
         except Exception as e:
             self._show_error(f"计算出错: {e}", popup=True)
             import traceback; traceback.print_exc()
