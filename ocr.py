@@ -1004,7 +1004,9 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     except Exception:
         _per_row_tok = 450
     _cap_tok = 1024 if _is_flash else (4096 if _is_ocr else 2048)
-    _group_size = max(1, min(group_size, _cap_tok // (_per_row_tok + 60)))
+    # 下限 2：组大小为 1 时下方"避免孤行组"的分组逻辑会把首行拆成孤组
+    # （行重复/漏行风险），任何模型都不允许单行组（v1.4 审查加固）
+    _group_size = max(2, min(group_size, _cap_tok // (_per_row_tok + 60)))
     _img = PILImg.open(image_path).convert('RGB')
     _W, _H = _img.size
     _l, _t, _r, _b = 0, 0, _W, _H
@@ -1029,7 +1031,8 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     #  过小阈值会把正常表格误判漏行，导致行切分机制失效）
     try:
         _avg_h = (_rows[-1][1] - _rows[0][0]) / max(1, len(_rows))
-        if (_b - _t) - _rows[-1][1] > 2.5 * _avg_h:
+        # 行边界异常（重叠/零高）时 _avg_h≈0，任何差值都会误触发——跳过校验
+        if _avg_h >= 1 and (_b - _t) - _rows[-1][1] > 2.5 * _avg_h:
             raise RuntimeError('行边界未覆盖表格底部（疑似漏行），回退整表')
     except RuntimeError:
         raise
@@ -1038,15 +1041,17 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     # 表格图裁剪：宽度聚焦 bbox；高度扩展到覆盖全部行边界（bbox 矮时不截行）
     _tbl_img = _img.crop((_l, _t, _r, min(_H, _t + max(_rows[-1][1], _b - _t))))
     # 分组：避免"孤行组"——最后一组只剩 1 行时（5 行拆 4+1），单行图
-    # 无表头参照、图太矮，模型输出列不全（v1.4 修复：山东第4行数据不全），
-    # 改为从前一组拆 1 行过来组成 2 行组（4 行表拆 3+2）
+    # 无表头参照、图太矮，模型输出列不全（v1.4 修复：山东第4行数据不全）。
+    # 拆组规则：前组剩余必须 ≥2 行；前组只有 2 行时直接并入孤行（3 行组，
+    # 容忍超组大小 1 行——超量 token 由"截断拆半重试"兜底；v1.4 审查加固：
+    # 组 2 场景下旧逻辑会拆出 [1,2] 首行孤组）
     _groups = []
     _i = 0
     while _i < len(_rows):
         _take = min(_group_size, len(_rows) - _i)
         if _take == 1 and _groups:
             _prev = _groups.pop()
-            if len(_prev) > 1:
+            if len(_prev) >= 3:
                 _groups.append(_prev[:-1])
                 _groups.append([_prev[-1], _rows[_i]])
             else:
@@ -1131,6 +1136,11 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
                 # （v1.4 审查修复；全列模式下用已知列名集合判断）
                 _first_val = str(next(iter(_r.values()), '') or '').strip()
                 if _known and _first_val in _known:
+                    continue
+                # 兜底（不依赖 _known）：表头行的每个值都等于自己的 key
+                # （{"商品信息": "商品信息", ...}）——客户未探测列时 _known 为空，
+                # 只靠 _known 会漏过滤（v1.4 审查加固）
+                if _r and all(str(v).strip() == str(k).strip() for k, v in _r.items()):
                     continue
                 all_rows.append(_r)
 
