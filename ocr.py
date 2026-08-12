@@ -589,7 +589,7 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
       - ID 近匹配（编辑距离≤2）且 name 前 6 字相同 + 总距离≤6 → 同商品（OCR 数字错位）；
       - **OR name 强相似（前 6 字相同 + 总距离≤6）→ 同商品**（sku 整段错位时靠 name 兜底；
         商品名比 sku 稳定——同商品核心名稳定、尾部描述词乱，相邻商品前缀通常不同不会误并）；
-      - 无 ID → name 精确去重。
+      - 无 ID → name 精确 + 模糊去重（前 6 字相同 + 距离≤2，防滚动轮 OCR 波动漏拦）。
     覆盖场景：同名不同ID保留 / 先无ID后有ID拦截 / 先有ID后无ID拦截 / 无ID同名去重 / 同ID名字波动 /
     **同商品ID错位波动** / **同商品sku整段错位但name相似**。
     seen_sku 为 dict {sku_id: name}（name 佐证）。
@@ -633,7 +633,23 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
                 continue
             seen_name_with_id.add(nm)
         else:
+            # 无 ID 商品：精确 + 模糊去重（v1.4.1 修复：客户滚动轮 name OCR
+            # 波动 1~2 字时精确匹配漏拦，同一商品反复入列 → 4 商品识别出 7 个。
+            # 阈值与有 ID 商品 name 强相似一致：前 6 字相同 + 编辑距离 ≤2；
+            # 距离 3~6 不删（无 ID 不同规格商品前缀相同，误并会合并错库存））
             if nm in seen_name_no_sku or nm in seen_name_with_id:
+                continue
+            _nm_hit = False
+            for _sn in seen_name_no_sku:
+                if _sn[:6] == nm[:6] and _lev(_sn, nm) <= 2:
+                    _nm_hit = True
+                    break
+            if not _nm_hit:
+                for _sn in seen_name_with_id:
+                    if _sn[:6] == nm[:6] and _lev(_sn, nm) <= 2:
+                        _nm_hit = True
+                        break
+            if _nm_hit:
                 continue
             seen_name_no_sku.add(nm)
         out.append(it)
