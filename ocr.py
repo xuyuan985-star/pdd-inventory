@@ -966,17 +966,22 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     """
     from PIL import Image as PILImg
     import io as _io
-    # columns=None → 全列模式：用探测到的列清单（客户勾选列 或 all 全列），
-    # 符合"模型识别全表、程序端筛选"的设计（v1.4 修复）
-    if not columns:
+    # columns=None → 全列模式（回归设计初衷：模型识别全表所有列，程序端按
+    # mapping/勾选列筛选）。⚠ 不能解析成 selected——把勾选列清单丢给模型当
+    # JSON key，勾选列漏配（如仓库信息）就丢列，列名交给模型对齐就串列
+    # （v1.4 回归修复，与 ocr_table 的 columns=None 语义保持一致）
+    _known = []  # 已知列名集合（表头行过滤用）：指定列=columns；全列=探测列/all
+    if columns:
+        _known = [str(c) for c in columns]
+    else:
         try:
             from utils import get_ocr_columns
             _cc = get_ocr_columns()
-            columns = [c for c in (_cc.get('selected') or []) if c] or [c for c in (_cc.get('all') or []) if c]
+            _known = [c for c in (_cc.get('all') or []) if c] or [c for c in (_cc.get('selected') or []) if c]
         except Exception:
-            columns = None
-    if not columns or not row_bboxes:
-        raise RuntimeError('row_split 缺少 columns/row_bboxes')
+            _known = []
+    if not row_bboxes:
+        raise RuntimeError('row_split 缺少 row_bboxes')
     _img = PILImg.open(image_path).convert('RGB')
     _W, _H = _img.size
     _l, _t, _r, _b = 0, 0, _W, _H
@@ -994,8 +999,8 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     if len(_rows) < 2:
         raise RuntimeError('row_bboxes 无效')
     _groups = [_rows[i:i + group_size] for i in range(0, len(_rows), group_size)]
-    _cols_txt = '、'.join(str(c) for c in columns)
-    _ex_col = columns[0]
+    _cols_txt = '、'.join(str(c) for c in columns) if columns else ''
+    _ex_col = columns[0] if columns else '商品信息'
     all_rows = []
     for _gi, _grp in enumerate(_groups):
         _gt = _grp[0][0]; _gb = _grp[-1][1]
@@ -1018,12 +1023,23 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
             except Exception:
                 _is_ocr = False
         _row_max_tok = 4096 if _is_ocr else 2048
-        _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
+        if columns:
+            _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
 只识别以下列（严格按这些列名作为 JSON key，列名原样）：{_cols_txt}
 输出严格 JSON：{{"rows": [{{"{_ex_col}": "值", ...}}, ...]}}
 要求：
 1. 按图中从上到下顺序逐行输出，一行不漏、不重复、不合并
 2. 每行 key 用上面列名原样；缺某列的值填 null，**不要编造图中没有的内容**
+3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
+4. 只输出 JSON，不要解释"""
+        else:
+            # 全列模式：模型识别所有列，key 用表头列名原样（程序端按 mapping 筛选）
+            _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
+识别每一行的**所有列**：JSON key 用图中表头列名原样（如"商品信息""仓库总库存""仓库预估总销售数""仓库信息"）。
+输出严格 JSON：{{"rows": [{{"商品信息": "值", "仓库总库存": "值", ...}}, ...]}}
+要求：
+1. 按图中从上到下顺序逐行输出，一行不漏、不重复、不合并
+2. 每行 key 用表头列名原样；某列缺值填 null，**不要编造图中没有的内容**
 3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
 4. 只输出 JSON，不要解释"""
         try:
@@ -1047,9 +1063,9 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
                     # 程序端过滤表头行：prompt 明确"含表头"，模型可能把表头
                     # （商品信息|仓库总库存|…）当数据行输出——表头行的值恰好是
                     # 列名本身，name 非空会被 parse_items_generic 录成幽灵商品
-                    # （v1.4 审查修复）
+                    # （v1.4 审查修复；全列模式下用已知列名集合判断）
                     _first_val = str(next(iter(_r.values()), '') or '').strip()
-                    if _first_val in columns:
+                    if _known and _first_val in _known:
                         continue
                     all_rows.append(_r)
     return {'columns': columns, 'rows': all_rows}
@@ -1071,21 +1087,15 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     mapping = cfg.get('mapping') or {}
     # 全列模式：columns=None → 模型识别整张表所有列，程序端按 mapping 筛选
     # （设计初衷：不把勾选列丢给模型，模型只负责完整抄表）
-    if columns:
-        sel = [c for c in columns if c]
-    else:
-        sel = [c for c in (cfg.get('all') or []) if c]
-        if not sel:
-            sel = [c for c in (cfg.get('selected') or []) if c]
-    if not sel:
-        sel = ['商品信息', '仓库总库存', '仓库预估总销售数']
 
     def _one(forced_model=None):
         """单模型识别：行切分优先，失败回退整表（v1.4 与单模型路径一致）。
-        全列模式（columns=None 时）：整表识别所有列，程序端后续按 mapping 筛选。"""
+        全列模式（columns=None 时）：行切分与整表都识别所有列（columns=None
+        传下去，row_split 内部全列模式），程序端后续按 mapping 筛选——
+        ⚠ 不能传 sel：把列清单丢给模型会丢列/串列（v1.4 回归修复）。"""
         if row_bboxes:
             try:
-                _r = ocr_table_row_split(image_path, columns=sel, table_bbox=table_bbox,
+                _r = ocr_table_row_split(image_path, columns=None, table_bbox=table_bbox,
                                          row_bboxes=row_bboxes, forced_model=forced_model)
                 return parse_items_generic(_r.get('rows') or [], mapping)
             except Exception:
