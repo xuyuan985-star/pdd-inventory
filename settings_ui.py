@@ -529,6 +529,46 @@ class SettingsUIMixin:
         ai_btn_frame = tk.Frame(ai_card, bg=self.C_BG)
         ai_btn_frame.pack(pady=8)
 
+        def _minimize_away():
+            """操作前让位：隐藏设置窗口 + 最小化主窗口，露出浏览器。
+            否则 PrintWindow 失败回退前台截图会截到 PDD EZ 窗口内容（定位错乱），
+            且定位后窗口一直盖住浏览器，用户无法手动核对定位精准度。"""
+            hidden = []
+            try:
+                _t = parent.winfo_toplevel()
+                if _t.winfo_exists() and _t.state() != 'withdrawn':
+                    _t.withdraw()
+                    hidden.append(_t)
+            except Exception:
+                pass
+            try:
+                if self.win.winfo_exists() and self.win.state() != 'iconic':
+                    self.win.iconify()
+                    hidden.append(self.win)
+            except Exception:
+                pass
+            return hidden
+
+        def _restore_windows(hidden):
+            for w in hidden:
+                try:
+                    w.deiconify()
+                    w.lift()
+                except Exception:
+                    pass
+
+        def _bring_browser_front():
+            try:
+                import pygetwindow as gw
+                for title in ['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox']:
+                    wins = gw.getWindowsWithTitle(title)
+                    if wins:
+                        wins[0].activate()
+                        return True
+            except Exception:
+                pass
+            return False
+
         def do_ai_locate():
             """手动定位：锁定商家后台窗口截图（自动前置该窗口），AI 识别坐标后转全屏坐标保存。
             失败一律弹窗提示，绝不静默。"""
@@ -539,12 +579,20 @@ class SettingsUIMixin:
                 from utils import capture_pdd_screenshot, Config as _CfgA
                 ai_status_lbl.configure(text="正在定位商家后台窗口...")
                 self.win.update()
-                shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_manual.png')
-                pos = {}
-                # 窗口截图：找到拼多多/浏览器窗口 → 只截该窗口并返回左上角偏移；
-                # 找不到 → fallback 全屏截图（pos 全 0）
-                capture_pdd_screenshot(shot, pos)
-                result = ai_locate_elements(shot)
+                # v1.4 bugfix：定位前让位（隐藏设置窗口+最小化主窗口），
+                # 露出浏览器再截图；完成后恢复并把浏览器置前，方便核对精准度
+                _hidden = _minimize_away()
+                try:
+                    _time.sleep(0.6)
+                    shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_manual.png')
+                    pos = {}
+                    # 窗口截图：找到拼多多/浏览器窗口 → 只截该窗口并返回左上角偏移；
+                    # 找不到 → fallback 全屏截图（pos 全 0）
+                    capture_pdd_screenshot(shot, pos)
+                    result = ai_locate_elements(shot)
+                finally:
+                    _restore_windows(_hidden)
+                    _bring_browser_front()
                 if not result:
                     messagebox.showwarning(
                         "定位失败",
@@ -613,8 +661,16 @@ class SettingsUIMixin:
             dd = ai_data.get('dropdown', {})
             if dd and 'x' in dd and 'y' in dd and dd['x'] is not None and dd['y'] is not None:
                 import pyautogui as pg
-                pg.click(dd['x'], dd['y'])
-                self.status_text.set(f"已点击下拉框 ({dd['x']}, {dd['y']})，请确认是否展开")
+                # v1.4 bugfix：点击前让位（隐藏设置窗口+最小化主窗口），
+                # 点击后恢复并把浏览器置前——用户需要看到下拉框是否真的展开
+                _hidden = _minimize_away()
+                try:
+                    _time.sleep(0.5)
+                    pg.click(dd['x'], dd['y'])
+                finally:
+                    _restore_windows(_hidden)
+                    _bring_browser_front()
+                self.status_text.set(f"已点击下拉框 ({dd['x']}, {dd['y']})，请确认浏览器中是否展开")
 
         _refresh_cards()
 

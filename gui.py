@@ -2291,21 +2291,26 @@ class App(SettingsUIMixin):
                         dlog(f"1.✋ 页面状态={_st.get('state')}：{_st_hint}，跳过该省份")
                         continue
                 tm_x = tm_y = None
-                pos = locate_element(sp, 'region_dropdown', threshold=0.80)
-                if pos:
-                    tm_x, tm_y = pos[0], pos[1]
-                    # 点击偏移比例制：90px 相对 1920 参考宽度，按当前分辨率缩放
-                    dx = tm_x + int(90 * sw / 1920)
-                    dy = tm_y
-                    dlog(f"1.模板匹配({dx},{dy})")
-                elif dd_coord:
+                # v1.4：优先 AI 定位坐标（批量启动时实时 AI 定位，最新最准），
+                # 模板匹配降为兜底——region_dropdown 模板在真实页面会误匹配
+                # 「销售区域」等相似下拉框（实测偏差最大 743px），且模板坐标是
+                # 窗口截图坐标，直接当全屏坐标用只在窗口最大化时近似成立。
+                if dd_coord:
                     dx, dy = dd_coord['x'], dd_coord['y']
-                    dlog(f"1.校准坐标({dx},{dy})")
+                    dlog(f"1.AI定位坐标({dx},{dy})")
                 else:
-                    # v1.3 起完全依赖 AI 定位/模板匹配，无预设坐标兜底：
-                    # 宁可显式失败让用户处理，也不猜测位置乱点
-                    dlog(f"1.✗ 未定位到地区下拉框（模板匹配+AI校准均失败），跳过 {reg}")
-                    continue
+                    pos = locate_element(sp, 'region_dropdown', threshold=0.80)
+                    if pos:
+                        tm_x, tm_y = pos[0], pos[1]
+                        # 点击偏移比例制：90px 相对 1920 参考宽度，按当前分辨率缩放
+                        dx = tm_x + int(90 * sw / 1920)
+                        dy = tm_y
+                        dlog(f"1.模板匹配({dx},{dy})")
+                    else:
+                        # v1.3 起完全依赖 AI 定位/模板匹配，无预设坐标兜底：
+                        # 宁可显式失败让用户处理，也不猜测位置乱点
+                        dlog(f"1.✗ 未定位到地区下拉框（AI校准+模板匹配均失败），跳过 {reg}")
+                        continue
                 # 点击+粘贴+回车，最多重试 3 次（PyAutoGUI 偶发失败）
                 op_ok = False
                 for _attempt in range(3):
