@@ -983,9 +983,10 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     if not row_bboxes:
         raise RuntimeError('row_split 缺少 row_bboxes')
     # ── 模型输出上限自适应分组（v1.4 修复：全列模式下数量莫名变 2）──
-    # 每行 9 列全列 JSON ≈ 300 token；glm-4v-flash 输出上限 1024 token（API 硬限制，
-    # ocr.py _ocr_api_call_do 钳制），固定 6 行/组会截断 JSON → 每组只输出前 2 行。
-    # 按 上限/每行估算 动态缩小组，保证一组能完整输出；OCR 模型 4096 保持 6 行。
+    # 每行 9 列全列 JSON ≈ 450 token（实测商品名 30+ 字 + ID + 仓库地址等长文本，
+    # 一行 400~500 token，旧估算 300 偏低导致 qwen-omni 2048 上限下 4 行即截断）；
+    # glm-4v-flash 输出上限 1024 token（API 硬限制，_ocr_api_call_do 钳制）。
+    # 按 上限/每行估算 动态缩小组；下方解析处另有"截断拆半重试"兜底（不依赖估算）。
     try:
         from utils import get_api_config as _gac2
         _acfg2 = _gac2()
@@ -999,9 +1000,9 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
         (m or '').strip().lower().startswith('glm-4v-flash') or (m or '').strip().lower() == 'glm-4v-flash'
         for m in (_am2, _fm2))
     try:
-        _per_row_tok = 300 if not columns else 120 + 25 * len(columns)
+        _per_row_tok = 450 if not columns else 140 + 40 * len(columns)
     except Exception:
-        _per_row_tok = 300
+        _per_row_tok = 450
     _cap_tok = 1024 if _is_flash else (4096 if _is_ocr else 2048)
     _group_size = max(1, min(group_size, _cap_tok // (_per_row_tok + 60)))
     _img = PILImg.open(image_path).convert('RGB')
@@ -1024,7 +1025,11 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     _cols_txt = '、'.join(str(c) for c in columns) if columns else ''
     _ex_col = columns[0] if columns else '商品信息'
     all_rows = []
-    for _gi, _grp in enumerate(_groups):
+    def _recognize_group(_grp, _gi):
+        """识别一组（递归）：调用模型 → 解析 JSON。
+        解析失败（输出截断/非 JSON）且组可拆 → 拆半递归重试（v1.4 兜底，
+        不依赖 token 估算——行长超预期时自动缩小粒度直到能完整解析）。
+        单行仍失败 → 抛 RuntimeError（调用方回退整表识别）。"""
         _gt = _grp[0][0]; _gb = _grp[-1][1]
         _gimg = _tbl_img.crop((0, _gt, _tbl_img.width, _gb))
         _w2, _h2 = _gimg.size
@@ -1069,19 +1074,35 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
                 if _p.startswith('{') or _p.startswith('['):
                     _text = _p
                     break
+        _ok = False
         if _text.startswith('{'):
-            _data = json.loads(_text)
-            _rws = _data.get('rows') or _data.get('items') or []
-            for _r in _rws:
-                if isinstance(_r, dict) and _r:
-                    # 程序端过滤表头行：prompt 明确"含表头"，模型可能把表头
-                    # （商品信息|仓库总库存|…）当数据行输出——表头行的值恰好是
-                    # 列名本身，name 非空会被 parse_items_generic 录成幽灵商品
-                    # （v1.4 审查修复；全列模式下用已知列名集合判断）
-                    _first_val = str(next(iter(_r.values()), '') or '').strip()
-                    if _known and _first_val in _known:
-                        continue
-                    all_rows.append(_r)
+            try:
+                _data = json.loads(_text)
+                _ok = True
+            except (json.JSONDecodeError, ValueError):
+                _ok = False
+        if not _ok:
+            # 截断/非 JSON：组可拆则拆半递归，单行仍失败才抛出
+            if len(_grp) >= 2:
+                _mid = len(_grp) // 2
+                _recognize_group(_grp[:_mid], _gi)
+                _recognize_group(_grp[_mid:], _gi)
+                return
+            raise RuntimeError(f'行组{_gi + 1}输出截断/非JSON无法解析')
+        _rws = _data.get('rows') or _data.get('items') or []
+        for _r in _rws:
+            if isinstance(_r, dict) and _r:
+                # 程序端过滤表头行：prompt 明确"含表头"，模型可能把表头
+                # （商品信息|仓库总库存|…）当数据行输出——表头行的值恰好是
+                # 列名本身，name 非空会被 parse_items_generic 录成幽灵商品
+                # （v1.4 审查修复；全列模式下用已知列名集合判断）
+                _first_val = str(next(iter(_r.values()), '') or '').strip()
+                if _known and _first_val in _known:
+                    continue
+                all_rows.append(_r)
+
+    for _gi, _grp in enumerate(_groups):
+        _recognize_group(_grp, _gi)
     return {'columns': columns, 'rows': all_rows}
 
 
