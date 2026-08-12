@@ -75,3 +75,7 @@ python _build_update_zip.py     # 增量更新包（git diff 驱动）
 见 [CHANGELOG.md](CHANGELOG.md)
 
 > 历史版本：v1.2 发布材料见 [RELEASE_v1.2.md](RELEASE_v1.2.md)
+
+## 设计标准
+
+**改代码前必读** [docs/DESIGN.md](docs/DESIGN.md) —— 全列识别+程序端筛选、模型选型规则、多省份独立、失败哲学、安全底线等拍板标准，防止跨会话曲解设计。
