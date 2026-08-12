@@ -4,7 +4,7 @@ PDD EZ — 公共工具函数
 """
 import os, sys, json
 
-VERSION = "v1.4"
+VERSION = "v1.4.1"
 
 
 def version_newer(remote: str, local: str) -> bool:
