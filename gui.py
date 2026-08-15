@@ -557,6 +557,11 @@ class App(SettingsUIMixin):
                 self._latest_body = body
                 msg = f"🔄 有新版本 {latest}，点击「更新」查看详情"
                 self.win.after(0, lambda: self.status_text.set(msg))
+                # v1.4.1：更新按钮直接标注新版本号（build_ui 里持有引用；构建失败时静默）
+                try:
+                    self.win.after(0, lambda: self.update_btn.configure(text=f"🔄 更新 {latest}"))
+                except Exception:
+                    pass
             else:
                 log.debug(f"更新检查: 已是最新 ({latest})")
         except Exception as e:
@@ -669,8 +674,9 @@ class App(SettingsUIMixin):
         self._register_redraw(_retheme_pill)
         self._mk_btn(tool_bar, "🏪 商家后台", self._open_backend, kind='ghost',
                      pack_side="right", padx=5)
-        self._mk_btn(tool_bar, "🔄 更新", self._run_updater, kind='ghost',
-                     pack_side="right", padx=5)
+        # v1.4.1：持有更新按钮引用，检查到新版本时按钮直接标注版本号（客户无需盯状态栏）
+        self.update_btn = self._mk_btn(tool_bar, "🔄 更新", self._run_updater, kind='ghost',
+                                       pack_side="right", padx=5)
         
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
@@ -1099,12 +1105,25 @@ class App(SettingsUIMixin):
         
         state = {"cancelled": False, "running": False, "ready_install": False,
                  "downloaded_zip": "", "sha_ok": False}
+        # v1.4.1：窗口关闭 = 取消进行中的下载（后台线程检查 state["cancelled"] 退出；
+        # 不设的话下载中关窗 → 后续 after 回调操作已销毁控件 → TclError 刷屏）
+        def _on_close():
+            state["cancelled"] = True
+            state["running"] = False
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
         
         def _set_status(text, pct=None):
-            status_lbl.configure(text=text)
-            if pct is not None:
-                progress.configure(value=pct)
-            dlg.update_idletasks()
+            try:
+                status_lbl.configure(text=text)
+                if pct is not None:
+                    progress.configure(value=pct)
+                dlg.update_idletasks()
+            except Exception:
+                pass  # 窗口已关闭：静默（下载线程会随 cancelled 退出）
         
         def _fail(msg, err=""):
             state["running"] = False
@@ -1225,11 +1244,22 @@ class App(SettingsUIMixin):
                     self.win.after(0, lambda: _set_status("正在校验下载完整性..."))
                     sha_path = dest + ".sha256"
                     try:
-                        req = _Request(sha_asset["browser_download_url"],
-                                       headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ"})
-                        with _urlopen(req, timeout=30) as resp:
-                            with open(sha_path, 'wb') as f:
-                                f.write(resp.read())
+                        # v1.4.1 修复：sha 文件与主包同走镜像（国内客户 github 直连
+                        # 不通时 sha 下载失败 → 之前直接拒绝安装，更新永远失败）
+                        _sha_url = mirror_download_url(sha_asset["browser_download_url"], prefer_mirror=True)
+                        _sha_fallback = sha_asset["browser_download_url"]
+                        try:
+                            req = _Request(_sha_url,
+                                           headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ"})
+                            with _urlopen(req, timeout=30) as resp:
+                                with open(sha_path, 'wb') as f:
+                                    f.write(resp.read())
+                        except Exception:
+                            req = _Request(_sha_fallback,
+                                           headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ"})
+                            with _urlopen(req, timeout=30) as resp:
+                                with open(sha_path, 'wb') as f:
+                                    f.write(resp.read())
                         expected = open(sha_path, 'r').read().strip().split()[0]
                         h = _hashlib.sha256()
                         with open(dest, 'rb') as f:

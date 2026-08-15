@@ -554,12 +554,18 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             return 1
 
         # 3) 收集待覆盖文件（仅变化的）
+        # ⚠ 更新包 zip 顶层是 "PDD EZ/" 目录（_build_update_zip.py arcname 带目录名），
+        #   必须剥掉再拼 target_dir——否则覆盖到 target_dir/PDD EZ/ 子目录，更新不生效
+        #   （auto 模式有剥目录逻辑，finalize 漏了，v1.4.1 修复）
         _write_progress("cover", "正在检测文件占用...")
         files = []
         for root, _, fnames in os.walk(extracted):
             for fname in fnames:
                 src = os.path.join(root, fname)
                 rel = os.path.relpath(src, extracted)
+                _parts = rel.split(os.sep)
+                if len(_parts) >= 2 and _parts[0].startswith('PDD EZ'):
+                    rel = os.path.join(*_parts[1:])
                 dest = os.path.join(target_dir, rel)
                 if _needs_overwrite(src, dest):
                     files.append((src, dest))
