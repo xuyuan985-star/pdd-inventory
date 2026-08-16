@@ -48,15 +48,19 @@ def _is_qwen_ocr(mdl) -> bool:
     return False
 
 
-def _prep_image_b64(image_path: str, max_side: int = 1280, quality: int = 80,
-                    table_bbox: dict = None) -> str:
+def _prep_image_b64(image_path: str, max_side: int = 1920, quality: int = 95,
+                    table_bbox: dict = None, enhance: bool = True) -> str:
     """
-    统一图片预处理：长边缩放 + JPEG 压缩 → base64。
+    统一图片预处理：画面增强（自适应对比度+锐化）→ 长边缩放 → 高质量 JPEG → base64。
     裁剪优先级：AI 定位 bbox（table_bbox）→ OpenCV auto_crop_table → 原图。
     所有提供商/模型共用，避免 doubao 压 1280 而 qwen/glm 直传原图的不一致。
+    v1.4.2 对齐手机端图文识别链路：①自适应对比度（PDD 浅底浅灰字，低对比度
+    让数字判读丢位）②文字边缘锐化（JPEG 有损糊掉数字末位 → 1234→123）
+    ③JPEG q80→95 + 降采样 1280→1920（保留小字高频细节，代价是上传体积增大，
+    对识别精准度收益远大于带宽成本）。
     """
     try:
-        from PIL import Image as PILImg
+        from PIL import Image as PILImg, ImageOps as _ImageOps, ImageFilter as _ImageFilter
         import io as _io
         # 自适应表格裁剪：优先外部传入的 AI bbox，其次 OpenCV 检测，失败回退原图
         cropped = None
@@ -67,6 +71,13 @@ def _prep_image_b64(image_path: str, max_side: int = 1280, quality: int = 80,
         _img = cropped if cropped is not None else PILImg.open(image_path)
         if _img.mode != 'RGB':
             _img = _img.convert('RGB')
+        # v1.4.2 画面增强：先增强再缩放（放大后增强会放大噪点）
+        if enhance:
+            try:
+                _img = _ImageOps.autocontrast(_img, cutoff=1)
+                _img = _img.filter(_ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=2))
+            except Exception:
+                pass  # 增强失败不影响识别（保持原图）
         _w, _h = _img.size
         _r = max_side / max(_w, _h)
         if _r < 1:
@@ -848,7 +859,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
     except Exception:
         _is_ocr = False
     img_b64 = _prep_image_b64(image_path, table_bbox=table_bbox,
-                              max_side=2560 if _is_ocr else 1280)
+                              max_side=2560 if _is_ocr else 1920)
 
     if columns:
         cols_txt = '、'.join(str(c) for c in columns)
@@ -864,7 +875,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 输出要求：
 1. 严格按表格从上到下顺序逐行输出，一行不漏、不重复、不合并
 2. 每行输出一个 JSON 对象，key 用上面给的列名原样（缺某列的值填 null，不要编造）
-3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）。**数字类列（库存/销量）只抄第一个数值，数值后如果还有其他数字串/时间，一律不要抄**（如"102份 12345"只抄"102份"）。**如果数字看起来异常多位（如 1109、100000），要核对是否把其他文字/格式读进去了，数字通常是简洁的整数**
+3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）。**数字类列（库存/销量）只抄第一个数值，数值后如果还有其他数字串/时间，一律不要抄**（如"102份 12345"只抄"102份"）。**如果数字看起来异常多位（如 1109、100000），要核对是否把其他文字/格式读进去了，数字通常是简洁的整数**；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
 4. 值为 0 是真实业务数据，该行必须保留，绝不能跳过
 5. 商品信息类列（如「商品信息」「商品名称」）包含商品名和商品ID（如"示例商品A500g/袋 ID:12345678901"），必须完整原样抄写，不得去掉 ID 部分——商品ID用于区分重名商品。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null。**ID 是纯数字串（ID: 后跟一串数字），必须逐位核对，数字识别不清时宁可省略 ID 也不要编造/改位**
 6. 整张截图没有有效表格时只输出 []
@@ -891,7 +902,7 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 要求：
 - columns 与表头完全一致（顺序、文字原样）
 - rows 每行一个对象，key 必须与 columns 完全一致
-- 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄。**数字类列（库存/销量）只抄第一个数值，数值后如果还有其他数字串/时间，一律不要抄**（如"102份 12345"只抄"102份"）。**如果数字看起来异常多位（如 1109、100000），要核对是否把其他文字/格式读进去了，数字通常是简洁的整数**
+- 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄。**数字类列（库存/销量）只抄第一个数值，数值后如果还有其他数字串/时间，一律不要抄**（如"102份 12345"只抄"102份"）。**如果数字看起来异常多位（如 1109、100000），要核对是否把其他文字/格式读进去了，数字通常是简洁的整数**；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
 - 商品信息类列（如「商品信息」）含商品名和商品ID（如"示例商品A500g/袋 ID:12345678901"），必须完整原样抄写，不得去掉 ID 部分。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null。**ID 是纯数字串，必须逐位核对，数字识别不清时宁可省略 ID 也不要编造/改位**
 - 值为 0 是真实业务数据，必须保留该行
 - 无法识别的单元格填 null，不要编造
@@ -1090,8 +1101,16 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
         _r2 = 1280.0 / max(_w2, _h2)
         if _r2 < 1:
             _gimg = _gimg.resize((int(_w2 * _r2), int(_h2 * _r2)), PILImg.LANCZOS)
+        # v1.4.2 组图增强（与整表同链路）：自适应对比度 + 锐化 + q95——
+        # 行切分数字丢位（1234→123）主因是低对比度+有损压缩糊掉末位
+        try:
+            from PIL import ImageOps as _ImgOps, ImageFilter as _ImgFilter
+            _gimg = _ImgOps.autocontrast(_gimg, cutoff=1)
+            _gimg = _gimg.filter(_ImgFilter.UnsharpMask(radius=1.5, percent=120, threshold=2))
+        except Exception:
+            pass
         _buf = _io.BytesIO()
-        _gimg.save(_buf, format='JPEG', quality=80)
+        _gimg.save(_buf, format='JPEG', quality=95)
         _b64 = base64.b64encode(_buf.getvalue()).decode()
         # Qwen OCR 专用模型：行切分每组小图，同样吃满 4096 token（输出更长更稳）
         # （_is_ocr 已在函数开头按 forced_model + 当前 provider 判定）
@@ -1103,7 +1122,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
 要求：
 1. 按图中从上到下顺序逐行输出，一行不漏、不重复、不合并
 2. 每行 key 用上面列名原样；缺某列的值填 null，**不要编造图中没有的内容**
-3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
+3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
 4. 只输出 JSON，不要解释"""
         else:
             # 全列模式：模型识别所有列，key 用表头列名原样（程序端按 mapping 筛选）
@@ -1113,7 +1132,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
 要求：
 1. 按图中从上到下顺序逐行输出，一行不漏、不重复、不合并
 2. 每行 key 用表头列名原样；某列缺值填 null，**不要编造图中没有的内容**
-3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）
+3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
 4. 只输出 JSON，不要解释"""
         try:
             content, _ = _ocr_api_call(_b64, _prompt, max_tok=_row_max_tok, forced_model=forced_model)
