@@ -2568,6 +2568,7 @@ class App(SettingsUIMixin):
                 seen_name_with_id = set()   # 有 ID 商品登记过的 name
                 _fps = []               # 滚动内容指纹（每轮 stock 集合，滚动到底后稳定）
                 round_items = []        # 该组合全部轮次的识别结果
+                _retried_no_new = False  # 防误停：本轮已重试过无新增（v1.4.2 滚动可靠性）
                 while scroll_round < MAX_SCROLL_ROUNDS:
                     if self._batch_stop.is_set(): break
                     sp2 = os.path.join(get_base_dir(), 'output', f'_result_{i}_{scroll_round}.png')
@@ -2662,6 +2663,15 @@ class App(SettingsUIMixin):
                     else:
                         should_scroll = new_in_round > 0
                         if not should_scroll:
+                            # v1.4.2 防误停：滚动轮无新增但 AI 未确认到底（has_more
+                            # 未知或 True）→ 单次 OCR 质量波动可能漏识别新商品，直接
+                            # 停会漏数据（客户反馈滚动机制"无法正常调用"即此类）。
+                            # 给一次重试：重新截图+识别本轮，仍无新增才停止。
+                            if ai_has_more is not False and not _retried_no_new:
+                                _retried_no_new = True
+                                dlog("6.⚠ 本轮无新增但未确认到底，重试识别一次防误停")
+                                time.sleep(1.0)
+                                continue  # 重走本轮（scroll_round 不变，_retried 防死循环）
                             dlog(f"6.⏹ 滚动{scroll_round}轮后无新增，结束")
                             break
                         # 连续3轮页面内容无变化 → 已到底，结束（doubao 等模型每轮"新增"可能永远>0）
