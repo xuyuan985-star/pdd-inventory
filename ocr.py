@@ -759,6 +759,20 @@ def map_columns_to_fields(row: dict, mapping: dict) -> dict:
     for field, col in (mapping or {}).items():
         if col:
             norm_map[normalize_col_name(col)] = field
+    # v1.4.2 列名别名兼容：PDD 页面列名随版本变化（实测"仓库销售库存" 与
+    # "仓库预估总销售数" 是同一业务列的不同页面版本），用户映射是主名时，
+    # 把该字段的全部已知别名也加入匹配（防止 sales 解析为 0 → 补货计算全乱）；
+    # 用户自定义列名（非主名/别名）不套用别名，尊重显式配置。
+    _FIELD_ALIASES = {
+        'sales': ('仓库预估总销售数', '仓库销售库存', '仓库预估总销量'),
+        'stock': ('仓库总库存', '仓库库存'),
+    }
+    for _field, _alts in _FIELD_ALIASES.items():
+        _cfg = (mapping or {}).get(_field) or ''
+        _cfg_norm = normalize_col_name(_cfg)
+        if _cfg_norm in {normalize_col_name(a) for a in _alts}:
+            for _a in _alts:
+                norm_map.setdefault(normalize_col_name(_a), _field)
     out = {'name': '', 'stock': '', 'sales': '', 'region': '', 'warehouse': '',
            'sku_id': '', '_raw': dict(row)}
     for col, val in row.items():
