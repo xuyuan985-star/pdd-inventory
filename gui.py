@@ -2951,7 +2951,24 @@ class App(SettingsUIMixin):
         else:
             result = ocr_table(image_path, columns=None, table_bbox=table_bbox)
         rows = result.get('rows') or []
-        return parse_items_generic(rows, cfg.get('mapping') or {})
+        items = parse_items_generic(rows, cfg.get('mapping') or {})
+        # v1.4.2 手机流程【7】容错机制：主识别出现无 ID / 低置信列的行 →
+        # 自动二次推理择优（强化 prompt 专注 ID 与数字完整性，按 name 匹配补全）。
+        # 只在质量信号触发时调用，常规路径零额外成本；失败保留首轮结果。
+        try:
+            if any(it.get('_missing_id') or it.get('_low_conf_col') for it in items):
+                from ocr import ocr_table_verify, merge_verify_items
+                _vrows = ocr_table_verify(image_path, table_bbox=table_bbox)['rows'] or []
+                _vitems = parse_items_generic(_vrows, cfg.get('mapping') or {})
+                items = merge_verify_items(items, _vitems)
+                _fixed = sum(1 for it in items if it.get('_verify_fixed'))
+                if _fixed:
+                    from ocr import _ocr_dlog
+                    _ocr_dlog(f"OK 二次识别补全 {_fixed} 行（ID/数字）")
+        except Exception as _e:
+            from ocr import _ocr_dlog
+            _ocr_dlog(f"WARN 二次识别择优失败（保留首轮结果）: {str(_e)[:100]}")
+        return items
 
     def _fill_from_ocr(self, items):
         """用OCR结果填充表格"""

@@ -990,6 +990,125 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
         raise RuntimeError("模型返回无法解析的 JSON")
 
 
+def _parse_ocr_response(content: str) -> dict:
+    """解析模型 OCR 响应 → {'columns': [...], 'rows': [...]}。
+    ocr_table / ocr_table_verify 共用（v1.4.2 抽取，二次择优复用同一套容错解析）：
+    兼容 ```json 包裹、{columns,rows} 结构、纯数组、数组行对齐、
+    行 key 多数票重定列、不可哈希 key 过滤、调试记录。
+    """
+    text = content.strip()
+    if '```' in text:
+        parts = text.split('```')
+        for p in parts:
+            p = p.strip()
+            if p.startswith('json'):
+                p = p[4:].strip()
+            if p.startswith('{') or p.startswith('['):
+                text = p
+                break
+    try:
+        if text.startswith('{'):
+            data = json.loads(text)
+            cols = data.get('columns') or []
+            rows = data.get('rows') or data.get('items') or []
+            # rows 可能是数组格式 [["a","b"],...]（glm-4.6v 偶发），按 columns 对齐转 dict
+            if cols and rows:
+                _n = len(cols)
+                def _norm_row(r):
+                    if isinstance(r, list):
+                        return dict(zip(cols, (r + [None] * _n)[:_n]))
+                    return r
+                rows = [_norm_row(r) for r in rows]
+            dict_rows = [r for r in rows if isinstance(r, dict) and r]
+            if dict_rows:
+                from collections import Counter as _C
+                _safe_rows = []
+                for _r in dict_rows:
+                    _k2 = [k for k in _r.keys() if isinstance(k, (str, int, float, bool, type(None)))]
+                    if _k2:
+                        _safe_rows.append({_k: _r[_k] for _k in _k2})
+                dict_rows = _safe_rows
+            if dict_rows:
+                _kc = _C(tuple(r.keys()) for r in dict_rows)
+                _top_keys = list(_kc.most_common(1)[0][0])
+                if set(cols) != set(_top_keys):
+                    cols = _top_keys
+                elif list(cols) != _top_keys:
+                    cols = _top_keys
+            _write_ocr_debug(cols, rows)
+            return {'columns': list(cols), 'rows': list(rows)}
+        rows = json.loads(text)
+        if rows and isinstance(rows[0], dict):
+            cols = list(rows[0].keys())
+            _write_ocr_debug(cols, rows)
+            return {'columns': cols, 'rows': rows}
+        _write_ocr_debug([], rows, 'no_columns')
+        return {'columns': [], 'rows': []}
+    except json.JSONDecodeError:
+        raise RuntimeError("模型返回无法解析的 JSON")
+
+
+def ocr_table_verify(image_path: str, table_bbox: dict = None,
+                     forced_model: str = None) -> dict:
+    """二次推理择优识别（v1.4.2 手机流程【7】容错机制）：主识别出现
+    无商品 ID / 低置信列时调用，强化 prompt 专注 ID 逐位与数字完整性，
+    返回 {'columns': [...], 'rows': [...]}（与 ocr_table 同结构）。
+    只在质量信号触发时使用，避免常规路径成本翻倍。
+    """
+    img_b64 = _prep_image_b64(image_path, table_bbox=table_bbox,
+                              max_side=2560 if _is_qwen_ocr(forced_model) else 1920)
+    prompt = """你是数据录入员，识别图中 PDD 后台表格的每一行数据（竖向列表）。
+识别每一行的所有列：JSON key 用图中表头列名原样（如"商品信息""仓库总库存""仓库预估总销售数""仓库信息"）。
+输出严格 JSON：{"rows": [{"商品信息": "值", "仓库总库存": "值", ...}, ...]}
+重点要求（本识别用于补全首轮缺漏）：
+1. **商品信息列必须完整抄写商品名 + ID 数字串**（如"示例商品A500g/袋 ID:12345678901"），ID 是纯数字串，必须逐位核对输出；看不清宁可填 null 也不要编造/改位
+2. **数字类列（库存/销量）完整输出，末位 0 必须保留（如 1230 不能写成 123），禁止丢位/截断/省略**
+3. 按图中从上到下顺序逐行输出，一行不漏；某列缺值填 null，不要编造
+4. 只输出 JSON，不要解释"""
+    try:
+        content, _ = _ocr_api_call(img_b64, prompt, max_tok=2048, forced_model=forced_model)
+        return _parse_ocr_response(content)
+    except Exception:
+        raise
+
+
+def merge_verify_items(items: list, verify_items: list) -> list:
+    """二次识别择优（v1.4.2 手机流程【7】）：主识别中缺 ID/低置信列的行，
+    用二次识别同名行的完整数据补全（ID、空数字）。返回补全后的新列表。
+    匹配按 name 精确（strip+小写）；二次识别没有同名行则保持原样。
+    """
+    if not verify_items:
+        return items
+    v_by_name = {}
+    for v in verify_items:
+        nm = str(v.get('name') or '').replace(' ', '').lower()
+        if nm and nm not in v_by_name:
+            v_by_name[nm] = v
+    out = []
+    for it in items:
+        need = bool(it.get('_missing_id') or it.get('_low_conf_col'))
+        if need:
+            nm = str(it.get('name') or '').replace(' ', '').lower()
+            v = v_by_name.get(nm)
+            if v:
+                fixed = False
+                if not it.get('sku_id') and v.get('sku_id'):
+                    it['sku_id'] = v['sku_id']
+                    it.pop('_missing_id', None)
+                    fixed = True
+                for _f in ('stock', 'sales'):
+                    a = str(it.get(_f) or '')
+                    b = str(v.get(_f) or '')
+                    if (not a or a == '0') and b and b != '0':
+                        it[_f] = v[_f]
+                        fixed = True
+                if fixed:
+                    it.pop('_low_conf_col', None)
+                    it['_verify_fixed'] = True  # GUI 可据此提示"经二次识别补全"
+        out.append(it)
+    return out
+
+
 
 
 
