@@ -2619,13 +2619,14 @@ class App(SettingsUIMixin):
                         if w > 2560: im = im.resize((2560, int(h*2560/w)), PILImage.LANCZOS); im.save(sp2)
                     except Exception as _e:
                         dlog(f"  截图压缩失败(继续): {_e}")
-                    # 首轮：AI 定位表格；后续轮复用 bbox，但每 3 轮重新定位一次
-                    # （滚动加载可能改变表格容器高度，且需刷新 has_more 状态）
+                    # 首轮：AI 定位表格；滚动轮每轮重新定位——滚动后表格内容/位置变化，
+                    # 旧 bbox 失效是滚动轮识别错乱（串名/重复/JSON截断）的根因（v1.4.2 修复）。
+                    # 滚动轮用 1 采样省成本（行切分不依赖高精度 bbox）；首屏 3 采样保稳
                     ai_has_more = None  # None=AI定位失败未知, True=还有更多, False=已到底
-                    _row_bboxes = None   # v1.4：表格行级边界（供首轮行切分识别）
-                    if scroll_round == 0 or table_bbox is None or scroll_round % 3 == 0:
+                    _row_bboxes = None   # v1.4：表格行级边界（供行切分识别，首轮+滚动轮）
+                    if scroll_round == 0 or table_bbox is None or scroll_round > 0:
                         from vision import ai_locate_table, ai_read_total_count
-                        loc = ai_locate_table(sp2)
+                        loc = ai_locate_table(sp2, samples=1 if scroll_round > 0 else 3)
                         if loc:
                             table_bbox = loc.get('table')
                             ai_has_more = bool(loc.get('has_more', False))
@@ -2648,7 +2649,10 @@ class App(SettingsUIMixin):
                             # v1.4 修复：AI 行边界对 3 行小表格会漏最后一行（行切分只按边界
                             # 切 → 静默丢行）。有页面总数时校验：行边界数据行数 < 总数 →
                             # 回退整表识别（整表模型自己数行，与实时截图同路径，可靠）
-                            _use_split = scroll_round == 0 and bool(_row_bboxes)
+                            # v1.4.2 修复：滚动轮也走行切分（每轮新鲜 row_bboxes）——
+                            # 整表识别滚动轮输出串名/重复/JSON截断是滚动轮质量差的根因；
+                            # 行切分每组小图独立识别，数字/名称稳定。仍保留总数校验防漏行
+                            _use_split = bool(_row_bboxes)
                             if _use_split and _total_hint:
                                 try:
                                     # 行边界可能含/不含表头行：首边界 top 与表格 bbox top
@@ -2668,8 +2672,26 @@ class App(SettingsUIMixin):
                                     pass
                             items = self._ocr_generic_to_items(sp2, table_bbox=table_bbox,
                                                               dual_verify=dual_verify,
-                                                              # 首轮全量数据走行切分防乱编；滚动轮次行少回整表控成本
+                                                              # 首轮+滚动轮都走行切分防乱编（v1.4.2）
                                                               row_bboxes=_row_bboxes if _use_split else None)
+                            # v1.4.2 幻觉行交叉校验：识别数 > 页面总数 → 模型编造了
+                            # 不存在的商品行（省1 3商品识别5个的根因）。二次识别后
+                            # 取两轮 name 交集——真商品两轮都出现（稳定），幻觉行
+                            # 随机生成两轮不同 → 被剔除
+                            try:
+                                if items and _total_hint and len(items) > int(_total_hint):
+                                    from ocr import ocr_table_verify
+                                    dlog(f"6.⚠ 识别{len(items)}个 > 页面总数{int(_total_hint)}，交叉校验剔除幻觉行")
+                                    _vr = ocr_table_verify(sp2, table_bbox=table_bbox)['rows'] or []
+                                    _vn = {str((it or {}).get('name', '')).replace(' ', '').lower()
+                                           for it in _vr}
+                                    _before = len(items)
+                                    items = [it for it in items
+                                             if str(it.get('name', '')).replace(' ', '').lower() in _vn]
+                                    if len(items) < _before:
+                                        dlog(f"6.✓ 幻觉行过滤: {_before} → {len(items)} 个")
+                            except Exception:
+                                pass  # 校验失败保留原结果（不阻断）
                             if items: break
                             dlog(f"  重试{retry+1}...")
                             time.sleep(2)
@@ -2732,8 +2754,8 @@ class App(SettingsUIMixin):
                         if len(_fps) >= 3 and _fps[-1] == _fps[-2] == _fps[-3]:
                             dlog("6.⏹ 连续3轮页面内容无变化，结束滚动")
                             break
-                        # 周期性重新定位后 AI 明确到底 → 提前结束（防跳屏漏商品后空转）
-                        if ai_has_more is False and scroll_round % 3 == 0:
+                        # 滚动轮每轮重新定位（v1.4.2）→ has_more 是新一轮准确判断
+                        if ai_has_more is False and scroll_round > 0:
                             dlog("6.✓ AI确认已到底，结束滚动")
                             break
                     scroll_round += 1
@@ -2761,15 +2783,19 @@ class App(SettingsUIMixin):
                                 _sx = _win_w / _ow if _ow > 0 else 1.0
                                 _sy = _win_h / _oh if _oh > 0 else 1.0
                                 cx = int(((table_bbox['left'] + table_bbox['right']) / 2) * _sx) + _wl
-                                cy = int((((table_bbox['top'] + table_bbox['bottom']) * 0.7) * _sy)) + _wt
+                                cy = int((((table_bbox['top'] + table_bbox['bottom']) * 0.82) * _sy)) + _wt
                             else:
                                 cx = sw // 2
-                                cy = int(sh * 0.6)
+                                cy = int(sh * 0.62)
+                            # v1.4.2 滚动增强：一次滚 4 格×2（原 2 格易无感/不触发加载），
+                            # 位置放到表格下部 82%（确保在可滚内容区，bbox 顶/底偏移容错）
                             pyautogui.moveTo(cx, cy); time.sleep(0.3)
-                            pyautogui.scroll(-2)
+                            pyautogui.scroll(-4); time.sleep(0.2)
+                            pyautogui.scroll(-4)
                         else:
-                            pyautogui.moveTo(sw // 2, int(sh * 0.6)); time.sleep(0.3)
-                            pyautogui.scroll(-2)
+                            pyautogui.moveTo(sw // 2, int(sh * 0.62)); time.sleep(0.3)
+                            pyautogui.scroll(-4); time.sleep(0.2)
+                            pyautogui.scroll(-4)
                         time.sleep(1.5)  # 等滚动加载渲染
                     except Exception as ex:
                         dlog(f"  滚动失败: {ex}")
