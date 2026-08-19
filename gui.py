@@ -2677,17 +2677,27 @@ class App(SettingsUIMixin):
                             # v1.4.2 幻觉行交叉校验：识别数 > 页面总数 → 模型编造了
                             # 不存在的商品行（省1 3商品识别5个的根因）。二次识别后
                             # 取两轮 name 交集——真商品两轮都出现（稳定），幻觉行
-                            # 随机生成两轮不同 → 被剔除
+                            # 随机生成两轮不同 → 被剔除。⚠ 匹配用模糊（编辑距离≤2+前4字
+                            # 相同）：整表 verify 与行切分首轮的 name 可能有 OCR 波动，
+                            # 严格相等会误删真实行（find-bugs 审查发现）
                             try:
                                 if items and _total_hint and len(items) > int(_total_hint):
-                                    from ocr import ocr_table_verify
+                                    from ocr import ocr_table_verify, _lev as _lev2
                                     dlog(f"6.⚠ 识别{len(items)}个 > 页面总数{int(_total_hint)}，交叉校验剔除幻觉行")
                                     _vr = ocr_table_verify(sp2, table_bbox=table_bbox)['rows'] or []
-                                    _vn = {str((it or {}).get('name', '')).replace(' ', '').lower()
-                                           for it in _vr}
+                                    _vn = [str((it or {}).get('name', '')).replace(' ', '').lower()
+                                           for it in _vr if (it or {}).get('name')]
+                                    def _name_hit(_nm):
+                                        _m = _nm.replace(' ', '').lower()
+                                        for _v in _vn:
+                                            if _v == _m:
+                                                return True
+                                            if (abs(len(_v) - len(_m)) <= 2 and _v[:4] == _m[:4]
+                                                    and _lev2(_v, _m) <= 2):
+                                                return True
+                                        return False
                                     _before = len(items)
-                                    items = [it for it in items
-                                             if str(it.get('name', '')).replace(' ', '').lower() in _vn]
+                                    items = [it for it in items if _name_hit(str(it.get('name', '')))]
                                     if len(items) < _before:
                                         dlog(f"6.✓ 幻觉行过滤: {_before} → {len(items)} 个")
                             except Exception:
