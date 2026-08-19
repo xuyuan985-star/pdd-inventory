@@ -2787,8 +2787,25 @@ class App(SettingsUIMixin):
                             else:
                                 cx = sw // 2
                                 cy = int(sh * 0.62)
-                            # v1.4.2 滚动增强：一次滚 4 格×2（原 2 格易无感/不触发加载），
-                            # 位置放到表格下部 82%（确保在可滚内容区，bbox 顶/底偏移容错）
+                            # v1.4.2 滚动修复：先确保浏览器窗口在前台——scroll 事件作用到
+                            # 光标下窗口，若浏览器失焦/最小化/被 PDD EZ 遮挡则滚动全打空
+                            # （客户实测滚动循环在跑但页面不动，即此因）
+                            try:
+                                import pygetwindow as _gw2
+                                for _t2 in ['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox']:
+                                    _ws2 = _gw2.getWindowsWithTitle(_t2)
+                                    if _ws2:
+                                        _w2 = _ws2[0]
+                                        if _w2.isMinimized:
+                                            _w2.restore()
+                                        _w2.activate()
+                                        break
+                            except Exception:
+                                pass
+                            time.sleep(0.3)
+                            # HUD 置顶在右上角：滚动目标若撞进 HUD 几何区 → 下移到表格下部
+                            if cx > sw - int(430 * self.dpi_scale) and cy < int(320 * self.dpi_scale):
+                                cy = int(sh * 0.75)
                             pyautogui.moveTo(cx, cy); time.sleep(0.3)
                             pyautogui.scroll(-4); time.sleep(0.2)
                             pyautogui.scroll(-4)
