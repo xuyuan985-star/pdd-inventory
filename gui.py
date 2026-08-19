@@ -2952,11 +2952,15 @@ class App(SettingsUIMixin):
             result = ocr_table(image_path, columns=None, table_bbox=table_bbox)
         rows = result.get('rows') or []
         items = parse_items_generic(rows, cfg.get('mapping') or {})
-        # v1.4.2 手机流程【7】容错机制：主识别出现无 ID / 低置信列的行 →
+        # v1.4.2 手机流程【7】容错机制：主识别出现无 ID / 低置信列 / 数字可疑
+        # （年份/日期串串位，如行切分把"商品创建时间 2026-08-04"抄进 stock）的行 →
         # 自动二次推理择优（强化 prompt 专注 ID 与数字完整性，按 name 匹配补全）。
         # 只在质量信号触发时调用，常规路径零额外成本；失败保留首轮结果。
         try:
-            if any(it.get('_missing_id') or it.get('_low_conf_col') for it in items):
+            from ocr import _suspect_number
+            if any(it.get('_missing_id') or it.get('_low_conf_col')
+                   or _suspect_number(it.get('stock')) or _suspect_number(it.get('sales'))
+                   for it in items):
                 from ocr import ocr_table_verify, merge_verify_items
                 _vrows = ocr_table_verify(image_path, table_bbox=table_bbox)['rows'] or []
                 _vitems = parse_items_generic(_vrows, cfg.get('mapping') or {})

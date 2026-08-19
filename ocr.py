@@ -188,6 +188,19 @@ def auto_crop_table(image_path: str):
         return None
 
 
+def _suspect_number(v) -> bool:
+    """数字可疑检测（v1.4.2 温度稳定性）：年份模式（1900-2100 四位数）或
+    含日期分隔符（2026-08-04）→ 疑似列串位（行切分小图把"商品创建时间"
+    等日期列抄进 stock/sales），触发二次识别择优补全。"""
+    s = str(v or '').strip()
+    if not s:
+        return False
+    digits = ''.join(ch for ch in s if ch.isdigit())
+    if len(digits) == 4 and 1900 <= int(digits) <= 2100:
+        return True
+    return '-' in s and any(ch.isdigit() for ch in s)
+
+
 def _parse_num_text(v) -> int:
     """
     从单元格原始文字解析整数。
@@ -1027,7 +1040,8 @@ def merge_verify_items(items: list, verify_items: list) -> list:
             v_by_name[nm] = v
     out = []
     for it in items:
-        need = bool(it.get('_missing_id') or it.get('_low_conf_col'))
+        need = bool(it.get('_missing_id') or it.get('_low_conf_col')
+                    or _suspect_number(it.get('stock')) or _suspect_number(it.get('sales')))
         if need:
             nm = str(it.get('name') or '').replace(' ', '').lower()
             v = v_by_name.get(nm)
@@ -1040,7 +1054,8 @@ def merge_verify_items(items: list, verify_items: list) -> list:
                 for _f in ('stock', 'sales'):
                     a = str(it.get(_f) or '')
                     b = str(v.get(_f) or '')
-                    if (not a or a == '0') and b and b != '0':
+                    # 空值/0/数字可疑（年份日期串位）→ 用二次识别的值覆盖
+                    if (_suspect_number(a) or not a or a == '0') and b and b != '0':
                         it[_f] = v[_f]
                         fixed = True
                 if fixed:
