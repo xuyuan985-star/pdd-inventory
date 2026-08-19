@@ -308,10 +308,11 @@ def ai_locate_elements(screenshot_path: str = None) -> dict:
             if r:
                 samples.append(r)
         except Exception as _e:
-            # v1.4.2 透出：定位失败原因（限流/key/网络），供省份验证段区分
+            # v1.4.2 透出：定位失败原因（限流/额度耗尽/key/网络），供省份验证段区分
             # "API 层故障"与"页面结构变化定位不到"
             try:
-                from ocr import _ocr_dlog
+                from ocr import _ocr_dlog, _mark_api_fatal
+                _mark_api_fatal(_e)
                 _ocr_dlog(f"元素定位 API 失败: {str(_e)[:120]}")
             except Exception:
                 pass
@@ -445,10 +446,11 @@ def ai_read_selected_province(screenshot_path: str = None, region=None) -> str:
         content = (content or '').strip().strip('"').strip("'").strip()
         return content or None
     except Exception as _e:
-        # v1.4.2 透出错误：API 失败（限流/key/网络）与"读到空/全部"必须区分——
+        # v1.4.2 透出错误：API 失败（限流/额度耗尽/key/网络）与"读到空/全部"必须区分——
         # 之前全吞成 None 会误报"省份切换失败"（客户日志：两个省份全跳过）
         try:
-            from ocr import _ocr_dlog
+            from ocr import _ocr_dlog, _mark_api_fatal
+            _mark_api_fatal(_e)
             _ocr_dlog(f"省份读值 API 失败: {str(_e)[:120]}")
         except Exception:
             pass

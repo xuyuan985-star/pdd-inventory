@@ -188,6 +188,30 @@ def auto_crop_table(image_path: str):
         return None
 
 
+# v1.4.2 致命 API 错误熔断：额度耗尽/鉴权失败时重试无意义，标记后批量中止
+# （避免每个省份白跑一遍；客户日志根因 = qwen Free quota exhausted）
+_api_fatal = {'flag': False}
+
+
+def _is_fatal_api_err(ex) -> bool:
+    """致命 API 错误判定：额度耗尽 / 鉴权失败（重试无意义，应熔断并提示用户）。"""
+    s = str(ex or '').lower()
+    return any(k in s for k in (
+        'free quota exhausted', 'insufficient_quota', 'insufficient balance',
+        '余额不足', 'quota has been exhausted', 'quota exceeded',
+        'invalid_api_key', 'unauthorized', 'authenticationfailed',
+        'incorrect api key', 'authentication error', '403'))
+
+
+def _mark_api_fatal(ex):
+    """API 异常时若致命（额度/鉴权），置熔断标志（vision/gui 调用）。"""
+    try:
+        if _is_fatal_api_err(ex):
+            _api_fatal['flag'] = True
+    except Exception:
+        pass
+
+
 def _suspect_number(v) -> bool:
     """数字可疑检测（v1.4.2 温度稳定性）：年份模式（1900-2100 四位数）或
     含日期分隔符（2026-08-04）→ 疑似列串位（行切分小图把"商品创建时间"

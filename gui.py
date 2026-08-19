@@ -2328,6 +2328,14 @@ class App(SettingsUIMixin):
         MAX_SCROLL_ROUNDS = 16
         for i, reg in enumerate(tasks):
             if self._batch_stop.is_set(): dlog("⏹ 停止"); break
+            # v1.4.2 熔断：API 额度耗尽/鉴权失败 → 批量中止（每个省份白试无意义）
+            try:
+                from ocr import _api_fatal as _af
+                if _af['flag']:
+                    dlog("⏹ API 额度耗尽/鉴权失败，批量中止——请充值或更换 API key 后重试")
+                    break
+            except Exception:
+                pass
             label = reg
             dlog(f"── [{label}] ({i+1}/{total}) ──")
             try:
@@ -2666,13 +2674,17 @@ class App(SettingsUIMixin):
                             dlog(f"  重试{retry+1}...")
                             time.sleep(2)
                         except Exception as ex:
-                            # v1.4.2 类型化重试：鉴权错误（key 无效）重试无意义 → 直接停；
+                            # v1.4.2 类型化重试：鉴权/额度等致命错误直接熔断停止；
                             # 限流（429）加长延时防连续触发；其余正常 2s 重试
+                            try:
+                                from ocr import _is_fatal_api_err, _mark_api_fatal
+                                if _is_fatal_api_err(ex):
+                                    _mark_api_fatal(ex)
+                                    dlog(f"  OCR致命错误（额度/鉴权），停止重试: {str(ex)[:80]}")
+                                    break
+                            except Exception:
+                                pass
                             _es = str(ex).lower()
-                            if any(k in _es for k in ('invalid_api_key', 'authenticationerror', 'unauthorized', 'apikey',
-                                                      "'401'", "'403'", 'authenticationfailed', 'incorrect api key')):
-                                dlog(f"  OCR鉴权失败（API key 可能无效或过期），停止重试: {str(ex)[:80]}")
-                                break
                             _es_429 = any(k in _es for k in ('429', 'rate ', 'too many', 'triggered rate', 'flow control'))
                             _ed = 10 if _es_429 else 2
                             dlog(f"  OCR异常（{_ed}s 后重试）: {str(ex)[:80]}")
