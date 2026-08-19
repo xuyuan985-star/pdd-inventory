@@ -2611,7 +2611,14 @@ class App(SettingsUIMixin):
                             except Exception as _e5:
                                 dlog(f"5.✗ 重试查询失败: {_e5}")
                         break
-                    dlog(f"5.页面刷新完成{'（变化检测）' if _changed else '（超时兜底）'}")
+                    if not _changed:
+                        # v1.4.2 防跨省串数据：查询后两轮（20s）页面均无变化 = 查询未生效
+                        # （点偏/弹窗遮挡），此时列表还是上一省份数据——继续识别会把
+                        # 上一省商品贴上本省标签（客户实测：省1数据 2 次出现在省2页面）。
+                        # 显式失败跳过该省，绝不带病识别。
+                        dlog("5.✗ 查询未生效（两轮检测页面无变化），跳过该省——避免识别到上一省份数据")
+                        continue
+                    dlog("5.页面刷新完成（变化检测）")
                 finally:
                     for _p in (_w0, _w1):
                         try: os.remove(_p)
@@ -2931,11 +2938,11 @@ class App(SettingsUIMixin):
                                 _s0 = _snap_region('a')
                                 try:
                                     pyautogui.moveTo(_px2, _py2); time.sleep(0.25)
-                                    # v1.4.2 力度 10 倍（客户实测）：scroll(-4) 一齿都滚不出完整商品行，
-                                    # 每轮截图近乎相同 → 整表识别对同名商品反复输出波动行（十几条重复）+
-                                    # 半露行被漏数（4~5 条只认出 3 条）；-40≈10 倍力度，每轮滚出完整新行
-                                    pyautogui.scroll(-40); time.sleep(0.15)
-                                    pyautogui.scroll(-40)
+                                    # v1.4.2 力度：-4(无效)→-40(仍小)→-200（客户实测：PDD 单页 10 项，
+                                    # 需一次滚过整屏高度才出全新行；再小则每轮截图近乎相同 → 整表
+                                    # 识别对同名商品反复输出波动行=重复输出 + 半露行漏数）
+                                    pyautogui.scroll(-200); time.sleep(0.15)
+                                    pyautogui.scroll(-200)
                                 except Exception:
                                     continue
                                 time.sleep(0.9)
