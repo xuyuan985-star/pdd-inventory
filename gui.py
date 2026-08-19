@@ -2621,12 +2621,12 @@ class App(SettingsUIMixin):
                         dlog(f"  截图压缩失败(继续): {_e}")
                     # 首轮：AI 定位表格；滚动轮每轮重新定位——滚动后表格内容/位置变化，
                     # 旧 bbox 失效是滚动轮识别错乱（串名/重复/JSON截断）的根因（v1.4.2 修复）。
-                    # 滚动轮用 1 采样省成本（行切分不依赖高精度 bbox）；首屏 3 采样保稳
+                    # 滚动轮用 2 采样（1 采样失败率过高会读不到 has_more 导致滚动决策失效）
                     ai_has_more = None  # None=AI定位失败未知, True=还有更多, False=已到底
                     _row_bboxes = None   # v1.4：表格行级边界（供行切分识别，首轮+滚动轮）
                     if scroll_round == 0 or table_bbox is None or scroll_round > 0:
                         from vision import ai_locate_table, ai_read_total_count
-                        loc = ai_locate_table(sp2, samples=1 if scroll_round > 0 else 3)
+                        loc = ai_locate_table(sp2, samples=2 if scroll_round > 0 else 3)
                         if loc:
                             table_bbox = loc.get('table')
                             ai_has_more = bool(loc.get('has_more', False))

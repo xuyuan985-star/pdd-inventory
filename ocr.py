@@ -683,29 +683,32 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
             if not isinstance(seen_sku.get(sku), dict):
                 seen_sku[sku] = {}
             seen_sku[sku][it.get('warehouse')] = nm
-            if nm in seen_name_no_sku:
+            # v1.4.2：name 交叉拦截带仓库——同 name 不同仓库不互拦
+            if (nm, it.get('warehouse')) in seen_name_no_sku:
                 continue
-            seen_name_with_id.add(nm)
+            seen_name_with_id.add((nm, it.get('warehouse')))
         else:
+            _wh = it.get('warehouse')
             # 无 ID 商品：精确 + 模糊去重（v1.4.1 修复：客户滚动轮 name OCR
             # 波动 1~2 字时精确匹配漏拦，同一商品反复入列 → 4 商品识别出 7 个。
             # 阈值与有 ID 商品 name 强相似一致：前 6 字相同 + 编辑距离 ≤2；
-            # 距离 3~6 不删（无 ID 不同规格商品前缀相同，误并会合并错库存））
-            if nm in seen_name_no_sku or nm in seen_name_with_id:
+            # 距离 3~6 不删（无 ID 不同规格商品前缀相同，误并会合并错库存）。
+            # v1.4.2：seen 集合带仓库——同 name 不同仓库各自保留（多仓不互去重）
+            if (nm, _wh) in seen_name_no_sku or (nm, _wh) in seen_name_with_id:
                 continue
             _nm_hit = False
-            for _sn in seen_name_no_sku:
-                if _sn[:6] == nm[:6] and _lev(_sn, nm) <= 2:
+            for (_sn, _sw) in seen_name_no_sku:
+                if _sw == _wh and _sn[:6] == nm[:6] and _lev(_sn, nm) <= 2:
                     _nm_hit = True
                     break
             if not _nm_hit:
-                for _sn in seen_name_with_id:
-                    if _sn[:6] == nm[:6] and _lev(_sn, nm) <= 2:
+                for (_sn, _sw) in seen_name_with_id:
+                    if _sw == _wh and _sn[:6] == nm[:6] and _lev(_sn, nm) <= 2:
                         _nm_hit = True
                         break
             if _nm_hit:
                 continue
-            seen_name_no_sku.add(nm)
+            seen_name_no_sku.add((nm, _wh))
         out.append(it)
     return out
 
