@@ -78,6 +78,123 @@ def _is_qwen_ocr(mdl) -> bool:
     return False
 
 
+def _pick_max_tok(mdl, desired: int) -> int:
+    """按模型能力对输出 token 上限分档（v1.4.2）——不能一刀切 4096：
+    glm-4v-flash 硬上限 1024（超限直接 400）；qwen-omni 系常见 2048~4096；
+    OCR 系/Qwen 大预算系到 8192；未知模型保守 2048（期望越大越容易 400）。
+    返回 min(desired, 档位上限)，弱模型不会因上层传大数而 400。"""
+    m = str(mdl or '').strip().lower()
+    if m.startswith('glm-4v-flash') or m == 'glm-4v-flash':
+        return min(desired, 1024)
+    if _is_qwen_ocr(m):
+        return min(desired, 8192)
+    if m.startswith(('qwen', 'qwen3', 'qwen-vl', 'qwen-omni')):  # qwen 系多模态
+        return min(desired, 4096)
+    if m.startswith(('doubao', 'ep-')):
+        return min(desired, 8192)
+    if m.startswith('glm'):
+        return min(desired, 4096)
+    return min(desired, 2048)  # 未知模型保守 2048
+
+
+def _recover_partial_json(text: str):
+    """从半截/带杂质的 JSON 文本中尽量恢复出完整行（v1.4.2）：
+    网络截断/模型输出夹杂说明文字时 json.loads 必然失败，直接抛错 = 整轮识别归零。
+    这里按行边界/补括号策略逐步尝试，把能解析出的完整行捞回来。
+    返回 (可用行数, columns, rows)；彻底失败返回 None。"""
+    if not text:
+        return None
+    text = text.strip()
+    start = text.find('{')
+    if start < 0:
+        start = text.find('[')
+        if start < 0:
+            return None
+
+    def _ok(data):
+        if isinstance(data, dict):
+            if 'rows' in data:
+                rows = data.get('rows') or data.get('items') or []
+                cols = data.get('columns') or []
+            elif 'columns' not in data:
+                # 无 rows/columns 的普通 dict = 单独一行（行对象本身）
+                rows, cols = [data], list(data.keys())
+            else:
+                return None  # 仅有 columns 无 rows = 半截结构，不作为有效结果
+        elif isinstance(data, list):
+            rows, cols = data, (list(data[0].keys()) if data and isinstance(data[0], dict) else [])
+        else:
+            return None
+        if rows and isinstance(rows[0], dict):
+            return (len(rows), list(cols), list(rows))
+        return None
+
+    # 0) 直接解析 start 之后的完整文本（处理完整 JSON / 前缀文字+完整 JSON）
+    try:
+        r = _ok(json.loads(text[start:]))
+        if r:
+            return r
+    except Exception:
+        pass
+    # 1) 补右括号（截断常只差尾括号）
+    for closer in ('}', ']', '}]', ']}'):
+        try:
+            r = _ok(json.loads(text[start:] + closer))
+            if r:
+                return r
+        except Exception:
+            pass
+    # 2) 按行边界截取（截断常发生在行中间，上一行结构完整）
+    for tok in ('}\n', '},\n', '},'):
+        idx = text.rfind(tok, start)
+        if idx > start:
+            seg = text[start:idx + 1].rstrip()
+            if seg.endswith('}'):
+                try:
+                    r = _ok(json.loads(seg))
+                    if r:
+                        return r
+                except Exception:
+                    pass
+    # 3) 数组形式：截到最后一个完整 '},' 后补闭合（先 ] 关 rows 数组，再 } 关整体）
+    idx = text.rfind('},', start)
+    if idx <= start:
+        idx = text.rfind('}', start)
+    if idx > start:
+        for ext in (']}', '}]', ']', '}'):
+            try:
+                r = _ok(json.loads(text[start:idx + 1] + ext))
+                if r:
+                    return r
+            except Exception:
+                pass
+    return None
+
+
+def _write_ocr_fail(content: str, err: str):
+    """JSON 解析失败时的现场落盘（v1.4.2 诊断补盲）：
+    _ocr_debug.json 之前只记成功记录，失败时刻完全不可见 → 无法定位截断点。
+    现在把失败原文（前 800 字）+ 错误信息写入同文件的 fail 记录，可追溯。"""
+    try:
+        import time as _tv
+        _d = os.path.join(get_base_dir(), 'output')
+        os.makedirs(_d, exist_ok=True)
+        _p = os.path.join(_d, '_ocr_debug.json')
+        try:
+            with open(_p, 'r', encoding='utf-8') as _f:
+                _hist = json.load(_f)
+            if not isinstance(_hist, list):
+                _hist = [_hist]
+        except Exception:
+            _hist = []
+        _hist.append({'ts': _tv.strftime('%H:%M:%S'), 'fail': True,
+                      'err': str(err)[:200], 'content_head': (content or '')[:800]})
+        with open(_p, 'w', encoding='utf-8') as _f:
+            json.dump(_hist[-40:], _f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
 def _prep_image_b64(image_path: str, max_side: int = 1920, quality: int = 95,
                     table_bbox: dict = None, enhance: bool = True) -> str:
     """
@@ -462,11 +579,9 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
     for attempt, mdl in enumerate(models):
         _check_cancel()  # v1.4.2 紧急停止：F9 后重试/换模型前立即中断
         mdl = mdl.strip()  # 用户可能输入带前后空格的模型名，发送前清理
-        # glm-4v-flash 输出上限 1024（与 vision._call_vision_api 一致）：超限会 400
-        if mdl.lower().startswith('glm-4v-flash') or mdl.lower() == 'glm-4v-flash':
-            cur_max_tok = min(max_tok, 1024)
-        else:
-            cur_max_tok = max_tok
+        # v1.4.2 输出上限分档：弱模型（glm-4v-flash=1024/未知=2048）期望越大越容易
+        # 400；qwen 系/OCR 系给足预算（4096/8192）。替代旧的仅 glm 1024 特判。
+        cur_max_tok = _pick_max_tok(mdl, max_tok)
         # 如果fallback是智谱模型但当前走的是阿里/豆包端点，切换endpoint + 格式
         # 模型名/端点判断统一小写化，避免用户配 "GLM-4V-Flash"/"Responses" 时匹配失败
         cur_endpoint = endpoint
@@ -487,60 +602,74 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
             if not cur_key:
                 continue
             cur_responses = False
-        try:
-            if cur_responses and mdl != 'glm-4v-flash':
-                # Responses API（Doubao-Seed-2.1-pro：thinking:disabled + 图已预压缩）
-                _check_cancel()  # v1.4.2 紧急停止：发请求前检查
-                resp = requests.post(cur_endpoint,
-                        headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
-                    json={
+        # v1.4.2 请求重发：输出上限超模型限制（400/token 错误）自动砍半重发一次（不换模型）
+        _tok_downgraded = False
+        while True:
+            _check_cancel()
+            try:
+                if cur_responses and mdl != 'glm-4v-flash':
+                    # Responses API（Doubao-Seed-2.1-pro：thinking:disabled + 图已预压缩）
+                    resp = requests.post(cur_endpoint,
+                            headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
+                        json={
+                            'model': mdl,
+                            'thinking': {'type': 'disabled'},
+                            'input': [{'role': 'user', 'content': [
+                                {'type': 'input_image', 'image_url': f'data:image/jpeg;base64,{img_b64}', 'detail': 'low'},
+                                {'type': 'input_text', 'text': prompt}
+                            ]}],
+                            'temperature': 0.0,
+                            # Responses API 规范的输出长度限制参数（区别于 Chat Completions 的 max_tokens）
+                            'max_output_tokens': cur_max_tok,
+                            'stream': False
+                        }, timeout=(10, 30))
+                    data = resp.json()
+                    if not data.get('output'):
+                        raise RuntimeError(f"OCR失败（{mdl}）: {data}")
+                    # output[-1] = 最后一条消息（跳过 reasoning）；兼容 content 为
+                    # str / list[dict] / None 的结构差异（v1.4 审查加固）
+                    content = _extract_response_text(data, mdl)
+                else:
+                    # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
+                    # 必须显式禁用 thinking；glm-4v-flash 无 reasoning 但同样接受该参数。
+                    # 其他模型（doubao/qwen）也发，保证一致。
+                    cc_payload = {
                         'model': mdl,
-                        'thinking': {'type': 'disabled'},
-                        'input': [{'role': 'user', 'content': [
-                            {'type': 'input_image', 'image_url': f'data:image/jpeg;base64,{img_b64}', 'detail': 'low'},
-                            {'type': 'input_text', 'text': prompt}
+                        'messages': [{'role': 'user', 'content': [
+                            {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
+                            {'type': 'text', 'text': prompt}
                         ]}],
-                        'temperature': 0.0,
-                        # Responses API 规范的输出长度限制参数（区别于 Chat Completions 的 max_tokens）
-                        'max_output_tokens': cur_max_tok,
-                        'stream': False
-                    }, timeout=(10, 30))
-                data = resp.json()
-                if not data.get('output'):
-                    raise RuntimeError(f"OCR失败（{mdl}）: {data}")
-                # output[-1] = 最后一条消息（跳过 reasoning）；兼容 content 为
-                # str / list[dict] / None 的结构差异（v1.4 审查加固）
-                content = _extract_response_text(data, mdl)
-            else:
-                # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
-                # 必须显式禁用 thinking；glm-4v-flash 无 reasoning 但同样接受该参数。
-                # 其他模型（doubao/qwen）也发，保证一致。
-                cc_payload = {
-                    'model': mdl,
-                    'messages': [{'role': 'user', 'content': [
-                        {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
-                        {'type': 'text', 'text': prompt}
-                    ]}],
-                    'temperature': 0.0, 'max_tokens': cur_max_tok,
-                    'thinking': {'type': 'disabled'},
-                }
-                _check_cancel()  # v1.4.2 紧急停止：发请求前检查
-                resp = requests.post(cur_endpoint,
-                        headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
-                    json=cc_payload, timeout=(10, 30))
-                data = resp.json()
-                if not data.get('choices'):
-                    raise RuntimeError(f"OCR失败（{mdl}）: {data}")
-                # Chat Completions content 可能为 str 或 list[{'type','text'}] 或 None，
-                # 统一兼容解析（v1.4 审查加固）
-                content = _extract_response_text(data, mdl)
-            return content, mdl
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"模型返回无法解析的内容（{mdl}）：{e}")
-        except RuntimeError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"模型调用失败（{mdl}）：{e}")
+                        'temperature': 0.0, 'max_tokens': cur_max_tok,
+                        'thinking': {'type': 'disabled'},
+                    }
+                    resp = requests.post(cur_endpoint,
+                            headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
+                        json=cc_payload, timeout=(10, 30))
+                    data = resp.json()
+                    if not data.get('choices'):
+                        raise RuntimeError(f"OCR失败（{mdl}）: {data}")
+                    # Chat Completions content 可能为 str 或 list[{'type','text'}] 或 None，
+                    # 统一兼容解析（v1.4 审查加固）
+                    content = _extract_response_text(data, mdl)
+                return content, mdl
+            except Exception as e:
+                # 输出 token 上限超模型能力（弱模型/模型版本限制）：400 或
+                # 'maximum context length'/'max_tokens' 类错误 → 砍半重发一次
+                _es = str(e).lower()
+                if (('400' in _es or ('token' in _es and ('max' in _es or 'limit' in _es)))
+                        and cur_max_tok > 256 and not _tok_downgraded):
+                    _tok_downgraded = True
+                    cur_max_tok = max(256, cur_max_tok // 2)
+                    try:
+                        _ocr_dlog(f"⚠ 输出上限超模型限制，砍半为 {cur_max_tok} 重发: {str(e)[:80]}")
+                    except Exception:
+                        pass
+                    continue
+                if isinstance(e, json.JSONDecodeError):
+                    raise RuntimeError(f"模型返回无法解析的内容（{mdl}）：{e}")
+                if isinstance(e, RuntimeError):
+                    raise
+                raise RuntimeError(f"模型调用失败（{mdl}）：{e}")
 
     raise RuntimeError(f"没有可用的识别模型（active={active}）")
 
@@ -1065,7 +1194,19 @@ def _parse_ocr_response(content: str) -> dict:
         _write_ocr_debug([], rows, 'no_columns')
         return {'columns': [], 'rows': []}
     except json.JSONDecodeError:
-        raise RuntimeError("模型返回无法解析的 JSON")
+        # v1.4.2 解析容错：先尝试从半截/带杂质文本捞回完整行（网络截断/模型夹杂
+        # 说明文字时常见），能救回几行就绝不整轮归零；救不回再抛错并落盘原文。
+        _rec = _recover_partial_json(text)
+        if _rec and _rec[0] > 0:
+            _rows_n, _cols, _rows = _rec
+            try:
+                _ocr_dlog(f"⚠ JSON 截断容错恢复：捞回 {_rows_n} 行（原始 {len(text)} 字符）")
+            except Exception:
+                pass
+            _write_ocr_debug(_cols, _rows, 'recovered_partial')
+            return {'columns': _cols, 'rows': _rows}
+        _write_ocr_fail(text, 'JSONDecodeError')
+        raise RuntimeError(f"模型返回无法解析的 JSON（前120字: {text[:120]!r}）")
 
 
 def ocr_table_verify(image_path: str, table_bbox: dict = None,
