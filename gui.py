@@ -391,6 +391,32 @@ class App(SettingsUIMixin):
         self._build_ui()
         self._check_update()  # 后台检查更新
         self._check_announcement()  # 后台检查公告（v1.4 新增，借鉴 March7th）
+        self._check_secondary_config()  # v1.4.2：启动校验副模型配置（双模型失效提前提示）
+
+    def _check_secondary_config(self):
+        """启动校验副模型配置（v1.4.2）：副模型是 doubao 裸模型名但缺 ep-xxx 推理
+        接入点时双模型验证必然失效（客户日志坐实：InvalidEndpointOrModel.NotFound），
+        零成本静态检测 → 状态栏提前提示，不让客户跑完才发现双模型没生效。"""
+        try:
+            from utils import get_secondary_model, get_api_config
+            sec = get_secondary_model()
+            if not sec:
+                return
+            api = get_api_config()
+            providers = api.get('providers') or {}
+            if not isinstance(providers, dict):
+                return
+            for _pn, _p in providers.items():
+                if isinstance(_p, dict) and str(_p.get('model') or '') == sec:
+                    _mdl = str(_p.get('model') or '')
+                    _ep = str(_p.get('custom_endpoint') or '')
+                    if _pn == 'doubao' and not _ep and not _mdl.startswith('ep-'):
+                        self.win.after(800, lambda: self.status_text.set(
+                            f"⚠ 副模型 {sec} 缺推理接入点(ep-xxx)，双模型验证可能失效，"
+                            f"请在 API 管理填 ep 或换 glm-4v-flash"))
+                    break
+        except Exception:
+            pass
 
     def _check_announcement(self):
         """后台拉取公告，有则弹窗展示（静默失败不打扰客户）"""
@@ -2633,8 +2659,17 @@ class App(SettingsUIMixin):
                             dlog(f"  重试{retry+1}...")
                             time.sleep(2)
                         except Exception as ex:
-                            dlog(f"  OCR异常: {ex}")
-                            time.sleep(2)
+                            # v1.4.2 类型化重试：鉴权错误（key 无效）重试无意义 → 直接停；
+                            # 限流（429）加长延时防连续触发；其余正常 2s 重试
+                            _es = str(ex).lower()
+                            if any(k in _es for k in ('invalid_api_key', 'authenticationerror', 'unauthorized', 'apikey',
+                                                      "'401'", "'403'", 'authenticationfailed', 'incorrect api key')):
+                                dlog(f"  OCR鉴权失败（API key 可能无效或过期），停止重试: {str(ex)[:80]}")
+                                break
+                            _es_429 = any(k in _es for k in ('429', 'rate ', 'too many', 'triggered rate', 'flow control'))
+                            _ed = 10 if _es_429 else 2
+                            dlog(f"  OCR异常（{_ed}s 后重试）: {str(ex)[:80]}")
+                            time.sleep(_ed)
                     # 合并：同仓库内去重（sku_id 为权威锚点，无 ID 回退 name），跨仓库保留
                     new_in_round = 0
                     if items:
