@@ -2938,11 +2938,10 @@ class App(SettingsUIMixin):
                                 _s0 = _snap_region('a')
                                 try:
                                     pyautogui.moveTo(_px2, _py2); time.sleep(0.25)
-                                    # v1.4.2 力度：-4(无效)→-40(仍小)→-200（客户实测：PDD 单页 10 项，
-                                    # 需一次滚过整屏高度才出全新行；再小则每轮截图近乎相同 → 整表
-                                    # 识别对同名商品反复输出波动行=重复输出 + 半露行漏数）
-                                    pyautogui.scroll(-200); time.sleep(0.15)
-                                    pyautogui.scroll(-200)
+                                    # v1.4.2 力度：-4(无效)→-40→-200→-300（客户实测：PDD 单页 10 项，
+                                    # 需一次滚过整屏高度；当前总力度 600 = -300×2，仍不够继续加）
+                                    pyautogui.scroll(-300); time.sleep(0.15)
+                                    pyautogui.scroll(-300)
                                 except Exception:
                                     continue
                                 time.sleep(0.9)
