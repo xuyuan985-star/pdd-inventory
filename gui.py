@@ -2678,8 +2678,10 @@ class App(SettingsUIMixin):
                     dlog(f"6.{'首屏' if scroll_round == 0 else f'滚动{scroll_round}'}OCR识别中({'双模型' if dual_verify else '单模型'})...")
                     items = None
                     # v1.4.2 滚动轮降级：整表大图每轮识别 30s+，失败重试 3 次会卡 90s+——
-                    # 滚动轮（scroll_round>0）失败上限 1 次，快速进入下一轮/停止判断
-                    _rep = 1 if scroll_round > 0 else 3
+                    # 滚动轮（scroll_round>0）失败上限 2 次（网络抖动常见，1 次太激进：
+                    # 客户实测 2 次全失败就停，页面9个只识别5个）；首轮 3 次
+                    _rep = 2 if scroll_round > 0 else 3
+                    _was_net_err = False
                     for retry in range(_rep):
                         try:
                             # v1.4.2 方案A（阿洋拍板）：批量识别改走「整表无 bbox」——
@@ -2754,9 +2756,14 @@ class App(SettingsUIMixin):
                             except Exception:
                                 pass
                             _es = str(ex).lower()
+                            # v1.4.2 网络类错误（连接池/超时/socket）单独对待：间隔加长重试、
+                            # 且不计入"无数据"（网络断 ≠ 页面无新行，连续两轮断网就停会把
+                            # 9 个商品识成 5 个——客户实测）。5s 后重试，网络恢复后照常继续
+                            _is_net = any(k in _es for k in ('connection', 'timeout', 'timed out', 'pool', 'socket'))
                             _es_429 = any(k in _es for k in ('429', 'rate ', 'too many', 'triggered rate', 'flow control'))
-                            _ed = 10 if _es_429 else 2
-                            dlog(f"  OCR异常（{_ed}s 后重试）: {str(ex)[:80]}")
+                            _was_net_err = _was_net_err or _is_net
+                            _ed = 5 if _is_net else (10 if _es_429 else 2)
+                            dlog(f"  OCR异常（{_ed}s 后重试）: {str(ex)[:80]}{'（网络/连接）' if _is_net else ''}")
                             time.sleep(_ed)
                     # 合并：同仓库内去重（sku_id 为权威锚点，无 ID 回退 name），跨仓库保留
                     new_in_round = 0
@@ -2772,7 +2779,12 @@ class App(SettingsUIMixin):
                         _round_fail = 0  # v1.4.2：有数据重置失败计数
                     else:
                         dlog("6.无数据")
-                        _round_fail += 1  # v1.4.2：滚动轮无数据计数（防死滚）
+                        if not _was_net_err:
+                            # v1.4.2：网络/连接失败不算"无数据"，不计入防死滚计数——
+                            # 网络恢复后继续滚抓，不会提前'补滚无果'结束（9个只识别5个）
+                            _round_fail += 1
+                        else:
+                            dlog("6.⏳ 本轮网络异常（不计入无数据），下轮继续尝试")
                     # 内容指纹：本轮识别商品的仓库总库存值集合（模型可能乱编名字/ID，
                     # 但总库存列相对稳定；滚动到底后集合不再变化 → 提前结束，防无限空转）
                     _fp = tuple(sorted(str(it.get('stock', '')) for it in (items or []) if it.get('stock') is not None))

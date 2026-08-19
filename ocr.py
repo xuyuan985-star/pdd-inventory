@@ -1129,7 +1129,9 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 - 值为 0 是真实业务数据，必须保留该行
 - 无法识别的单元格填 null，不要编造
 - 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
-        max_tok = 4096 if _is_ocr else 2048  # glm-4.6v 有 reasoning 需更大预算；glm-4v-flash 由 _ocr_api_call 自动钳制到 1024；Qwen OCR 系列 4096
+        max_tok = 4096  # v1.4.2：全列大表（9行14列≈2500token）1024/2048 必截断（客户实测 JSON 断尾）；
+        # desired 4096 由 _ocr_api_call_do 按模型分档钳制——qwen 系/OCR 系 4096、
+        # glm-4v-flash 1024、未知模型 2048，弱模型不会 400。
 
     content, _ = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model,
                                prefer_general=prefer_general)
@@ -1227,7 +1229,7 @@ def ocr_table_verify(image_path: str, table_bbox: dict = None,
 3. 按图中从上到下顺序逐行输出，一行不漏；某列缺值填 null，不要编造
 4. 只输出 JSON，不要解释"""
     try:
-        content, _ = _ocr_api_call(img_b64, prompt, max_tok=2048, forced_model=forced_model)
+        content, _ = _ocr_api_call(img_b64, prompt, max_tok=4096, forced_model=forced_model)
         return _parse_ocr_response(content)
     except Exception:
         raise
@@ -1494,6 +1496,29 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     from utils import get_ocr_columns
     cfg = get_ocr_columns() if mapping is None else {'mapping': mapping, 'selected': columns}
     mapping = cfg.get('mapping') or {}
+    # v1.4.2：副模型是 OCR 专用模型（qwen*-ocr）时直接跳过双模型表格验证——
+    # OCR 专用模型输出的是「文字块列表」（{"行号","标题","rotate_rect","text"}），
+    # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测：
+    # 换了 VL 主模型后副模型 qwen3.5-ocr 每轮都报'无法解析 JSON'然后降级）。
+    # 直接单模型走主模型结果 + 明确提示，效果相同还省一次请求。
+    if secondary_model and _is_qwen_ocr(secondary_model):
+        _ocr_dlog(f"副模型({secondary_model})为OCR专用模型，不参与表格JSON交叉验证——本次按单模型(主)识别")
+        def _one(forced_model=None):
+            if row_bboxes:
+                try:
+                    _r = ocr_table_row_split(image_path, columns=None, table_bbox=table_bbox,
+                                             row_bboxes=row_bboxes, forced_model=forced_model)
+                    return parse_items_generic(_r.get('rows') or [], mapping)
+                except Exception:
+                    pass
+            result = ocr_table(image_path, columns=None, table_bbox=table_bbox,
+                               forced_model=forced_model)
+            return parse_items_generic(result.get('rows') or [], mapping)
+        primary = _one(forced_model=None)
+        if primary:
+            for _it in primary:
+                _it['_dual_degraded'] = True  # GUI 提示双模型未生效
+        return primary
     # 全列模式：columns=None → 模型识别整张表所有列，程序端按 mapping 筛选
     # （设计初衷：不把勾选列丢给模型，模型只负责完整抄表）
 
