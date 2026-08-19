@@ -3009,6 +3009,7 @@ class App(SettingsUIMixin):
         low_conf_count = 0
         name_unmatched_count = 0
         dual_degraded = False
+        verify_fixed_count = 0  # v1.4.2：二次识别补全行数（_verify_fixed 标记）
         for i, item in enumerate(_display):
             r = self.rows[i]
             # 双模型验证标记的低置信度商品：名称加 ⚠ 提示复核
@@ -3031,12 +3032,17 @@ class App(SettingsUIMixin):
             # 保留 OCR 原始列（仓库信息/仓库销售库存等勾选列），
             # 否则刷新计算时 _recalc_from_rows 只能回填 name/stock/sales，其他列全空白
             r['_raw'] = item.get('_raw') or {}
+            if item.get('_verify_fixed'):
+                verify_fixed_count += 1
         if low_conf_count:
             self.status_text.set(f"⚠ {low_conf_count} 个商品双模型结果不一致，已取保守值，请重点核对")
         elif name_unmatched_count:
             self.status_text.set(f"⚠ {name_unmatched_count} 个商品双模型识别名称不一致，已标记请复核")
         elif dual_degraded:
             self.status_text.set("⚠ 双模型副模型识别失败，本次为单模型结果，请留意准确性")
+        elif verify_fixed_count:
+            # v1.4.2：二次识别补全提示（ID/数字经择优补全）
+            self.status_text.set(f"✓ {verify_fixed_count} 个商品经二次识别补全（ID/数字），数据已完善")
         # 自动匹配地区
         # v1.4：表格只显示第一个地区，多地区时提示其余走地区 tab 查看
         if len(by_region) > 1:

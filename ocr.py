@@ -1360,15 +1360,26 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
         return primary
 
     # 副模型（失败回退主模型结果，但如实提示）
+    # v1.4.2：降级提示限流——副模型配置错误（如 ep 缺失）时每次 OCR 都刷屏，
+    # 5 分钟内同一原因只提示一次（日志仍完整，_dual_degraded 标记不丢）
+    import time as _t_lmt
+    _now = _t_lmt.time()
+    try:
+        _lmt_ok = _now - ocr_dual_verify_generic._last_degrade_ts > 300
+    except Exception:
+        _lmt_ok = True
+    ocr_dual_verify_generic._last_degrade_ts = _now
     try:
         secondary = _one(forced_model=secondary_model)
     except Exception as e:
-        _ocr_dlog(f"⚠ 副模型({secondary_model})识别失败，已用主模型结果：{str(e)[:120]}")
+        if _lmt_ok:
+            _ocr_dlog(f"⚠ 副模型({secondary_model})识别失败，已用主模型结果：{str(e)[:120]}")
         for _it in primary:
             _it['_dual_degraded'] = True  # GUI 据此提示用户双模型未生效
         return primary
     if not secondary:
-        _ocr_dlog(f"⚠ 副模型({secondary_model})无有效结果，已用主模型结果")
+        if _lmt_ok:
+            _ocr_dlog(f"⚠ 副模型({secondary_model})无有效结果，已用主模型结果")
         for _it in primary:
             _it['_dual_degraded'] = True  # GUI 据此提示用户双模型未生效
         return primary

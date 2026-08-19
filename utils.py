@@ -113,6 +113,10 @@ class Config:
     递归合并——用户配置优先，缺失字段从模板补全并写回（配置自愈，损坏/缺字段不崩）。"""
 
     _template_cache = None
+    # v1.4.2 性能优化：settings.json 读取缓存（mtime 变化才重读）——
+    # 批量识别每轮 OCR 多次调 Config.load/get_api_config/get_ocr_columns，
+    # 无缓存时上百次文件读+JSON解析+模板合并；save 后清缓存强制重读。
+    _load_cache = {'mtime': -1, 'data': None}
 
     @staticmethod
     def _load_template():
@@ -149,10 +153,18 @@ class Config:
 
     @staticmethod
     def load():
-        """读取 settings.json，与模板递归合并（用户配置优先，缺字段补默认）"""
+        """读取 settings.json，与模板递归合并（用户配置优先，缺字段补默认）。
+        v1.4.2：mtime 缓存——文件未变化时直接返回缓存，批量识别性能优化。"""
+        sf = os.path.join(get_base_dir(), 'settings.json')
+        try:
+            _mtime = os.path.getmtime(sf)
+        except OSError:
+            _mtime = -1
+        _c = Config._load_cache
+        if _c['mtime'] == _mtime and _c['data'] is not None:
+            return _c['data']
         data = {}
         try:
-            sf = os.path.join(get_base_dir(), 'settings.json')
             if os.path.exists(sf):
                 with open(sf, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -170,13 +182,20 @@ class Config:
                     Config.save(merged)
                 except Exception:
                     pass
+            Config._load_cache['mtime'] = _mtime
+            Config._load_cache['data'] = merged
             return merged
+        Config._load_cache['mtime'] = _mtime
+        Config._load_cache['data'] = data
         return data
 
     @staticmethod
     def save(data: dict):
         """原子写 settings.json + 写前 .bak 备份 + 重试（防 Windows 文件锁丢配置）"""
         import time as _time
+        # v1.4.2：写后清读取缓存，下次 load 强制重读
+        Config._load_cache['mtime'] = -1
+        Config._load_cache['data'] = None
         sf = os.path.join(get_base_dir(), 'settings.json')
         tmp = sf + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
