@@ -2610,6 +2610,7 @@ class App(SettingsUIMixin):
                 _fps = []               # 滚动内容指纹（每轮 stock 集合，滚动到底后稳定）
                 round_items = []        # 该组合全部轮次的识别结果
                 _retried_no_new = False  # 防误停：本轮已重试过无新增（v1.4.2 滚动可靠性）
+                _round_fail = 0  # v1.4.2：滚动轮连续无数据计数（防死滚）
                 while scroll_round < MAX_SCROLL_ROUNDS:
                     if self._batch_stop.is_set(): break
                     sp2 = os.path.join(get_base_dir(), 'output', f'_result_{i}_{scroll_round}.png')
@@ -2631,6 +2632,15 @@ class App(SettingsUIMixin):
                             table_bbox = loc.get('table')
                             ai_has_more = bool(loc.get('has_more', False))
                             _total_hint = loc.get('total_count')
+                            # v1.4.2 总数兜底：AI 定位没读到右下角"共有N条"时单独读一次
+                            # （右下角分页统计是权威总数基准，缺失则滚动无法按达标硬停）
+                            if not _total_hint:
+                                try:
+                                    _t2 = ai_read_total_count(sp2)
+                                    if _t2:
+                                        _total_hint = _t2
+                                except Exception:
+                                    pass
                             _row_bboxes = loc.get('rows')
                             if ai_has_more:
                                 dlog(f"6.AI检测到还有更多商品，自动滚动加载...")
@@ -2643,7 +2653,10 @@ class App(SettingsUIMixin):
                             dlog(f"6.📋 页面共约{_total_hint}个商品（识别量将与此对比）")
                     dlog(f"6.{'首屏' if scroll_round == 0 else f'滚动{scroll_round}'}OCR识别中({'双模型' if dual_verify else '单模型'})...")
                     items = None
-                    for retry in range(3):
+                    # v1.4.2 滚动轮降级：整表大图每轮识别 30s+，失败重试 3 次会卡 90s+——
+                    # 滚动轮（scroll_round>0）失败上限 1 次，快速进入下一轮/停止判断
+                    _rep = 1 if scroll_round > 0 else 3
+                    for retry in range(_rep):
                         try:
                             # v1.4.2 方案A（阿洋拍板）：批量识别改走「整表无 bbox」——
                             # 与实时截图同路径（模型自己数行）。三路径实测证明：AI 行边界
@@ -2711,8 +2724,10 @@ class App(SettingsUIMixin):
                             new_in_round += 1
                     if items:
                         dlog(f"6.✓ 本轮{len(items)}个，新增{new_in_round}个")
+                        _round_fail = 0  # v1.4.2：有数据重置失败计数
                     else:
                         dlog("6.无数据")
+                        _round_fail += 1  # v1.4.2：滚动轮无数据计数（防死滚）
                     # 内容指纹：本轮识别商品的仓库总库存值集合（模型可能乱编名字/ID，
                     # 但总库存列相对稳定；滚动到底后集合不再变化 → 提前结束，防无限空转）
                     _fp = tuple(sorted(str(it.get('stock', '')) for it in (items or []) if it.get('stock') is not None))
@@ -2747,9 +2762,12 @@ class App(SettingsUIMixin):
                                 dlog("6.⚠ 本轮无新增但未确认到底，重试识别一次防误停")
                                 time.sleep(1.0)
                                 continue  # 重走本轮（scroll_round 不变，_retried 防死循环）
-                            if _under_target:
+                            if _under_target and _round_fail < 2:
                                 dlog(f"6.⚠ 累计{len(round_items)}个 < 总数{int(_total_hint)}，继续滚动补抓")
                                 should_scroll = True
+                            elif _under_target:
+                                dlog(f"6.⏹ 连续{_round_fail}轮无数据，补滚无果，结束滚动（累计{len(round_items)}/{int(_total_hint)}）")
+                                break
                             else:
                                 dlog(f"6.⏹ 滚动{scroll_round}轮后无新增，结束")
                                 break
