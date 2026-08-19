@@ -26,7 +26,7 @@ except Exception:
 
 # REPO 常量已移至 github_api.py（get_latest_release/fetch 统一走该模块）
 # 固定 exe 名（v1.4+ 取消版本号命名，版本号只在程序内展示——与 March7th 固定名设计一致）。
-# 与 utils.VERSION 保持同步（当前 v1.4）；GUI 调用更新器时始终传 --target，此值仅作默认。
+# 与 utils.VERSION 保持同步（当前 v1.4.3）；GUI 调用更新器时始终传 --target，此值仅作默认。
 EXE_NAME = "PDD EZ.exe"
 
 # ── 进度上报 ─────────────────────────────────────────────────────────

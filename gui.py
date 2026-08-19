@@ -2648,7 +2648,6 @@ class App(SettingsUIMixin):
                     # 旧 bbox 失效是滚动轮识别错乱（串名/重复/JSON截断）的根因（v1.4.2 修复）。
                     # 滚动轮用 2 采样（1 采样失败率过高会读不到 has_more 导致滚动决策失效）
                     ai_has_more = None  # None=AI定位失败未知, True=还有更多, False=已到底
-                    _row_bboxes = None   # v1.4：表格行级边界（供行切分识别，首轮+滚动轮）
                     if scroll_round == 0 or table_bbox is None or scroll_round > 0:
                         from vision import ai_locate_table, ai_read_total_count
                         loc = ai_locate_table(sp2, samples=2 if scroll_round > 0 else 3)
@@ -2656,16 +2655,16 @@ class App(SettingsUIMixin):
                             table_bbox = loc.get('table')
                             ai_has_more = bool(loc.get('has_more', False))
                             _total_hint = loc.get('total_count')
-                            # v1.4.2 总数权威化：AI 定位整屏读右下角小字不可靠（页面5个
-                            # 读成3，客户实测）。首轮用右下角分页栏特写重读官方"共有N条"
-                            # 覆盖——它是识别齐全/提前停止的权威基准（客户要求）
-                            try:
-                                _t3 = ai_read_total_count(sp2)
-                                if _t3:
-                                    _total_hint = _t3
-                            except Exception:
-                                pass
-                            _row_bboxes = loc.get('rows')
+                            # v1.4.2 总数权威化 + 缓存（find-bugs ②）：首轮用右下角分页栏
+                            # 特写重读官方"共有N条"覆盖 loc 整屏读取（页面5个读成3的根因）；
+                            # 滚动轮总数不变，仅当仍为 None（定位失败）时补读——避免每轮白耗一次 API
+                            if scroll_round == 0 or not _total_hint:
+                                try:
+                                    _t3 = ai_read_total_count(sp2)
+                                    if _t3:
+                                        _total_hint = _t3
+                                except Exception:
+                                    pass
                             if ai_has_more:
                                 dlog(f"6.AI检测到还有更多商品，自动滚动加载...")
                             elif scroll_round > 0 and ai_has_more is not None:
@@ -2726,7 +2725,12 @@ class App(SettingsUIMixin):
                                         return False
                                     _before = len(items)
                                     _filtered = [it for it in items if _name_hit(str(it.get('name', '')))]
-                                    if _filtered:
+                                    # find-bugs ④：verify 只认出一半以下 = verify 本身漏识别
+                                    # （非幻觉），裁剪会误删真行——保留首轮全量并警告
+                                    if _filtered and len(_filtered) < _before // 2 + 1:
+                                        dlog(f"6.⚠ 交叉校验仅匹配 {len(_filtered)}/{_before} 行（verify 疑似漏识别），"
+                                             f"保留首轮全量不裁剪")
+                                    elif _filtered:
                                         items = _filtered
                                         if len(items) < _before:
                                             dlog(f"6.✓ 幻觉行过滤: {_before} → {len(items)} 个")
@@ -2763,7 +2767,9 @@ class App(SettingsUIMixin):
                             _is_read_timeout = 'readtimedout' in _es.replace(' ', '') or ('read' in _es and ('timeout' in _es or 'timed out' in _es))
                             _is_conn_err = any(k in _es for k in ('connection', 'pool', 'socket')) and not _is_read_timeout
                             _es_429 = any(k in _es for k in ('429', 'rate ', 'too many', 'triggered rate', 'flow control'))
-                            _was_net_err = _was_net_err or _is_conn_err
+                            _was_net_err = _was_net_err or _is_conn_err or _is_read_timeout or _is_read_timeout
+                            # v1.4.2 读超时也归入"非无数据"：模型处理大图慢 ≠ 页面没有新行，
+                            # 与断网一样不计入防死滚惩罚（find-bugs 审查 ①）
                             _ed = 5 if _is_conn_err else (10 if _es_429 else 2)
                             if _is_read_timeout:
                                 dlog(f"  OCR超时：模型处理大图超过预留时间（已延长至180s），若持续发生请降低勾选列数或分批识别（{str(ex)[:120]}）")

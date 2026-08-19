@@ -657,7 +657,11 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 # 输出 token 上限超模型能力（弱模型/模型版本限制）：400 或
                 # 'maximum context length'/'max_tokens' 类错误 → 砍半重发一次
                 _es = str(e).lower()
-                if (('400' in _es or ('token' in _es and ('max' in _es or 'limit' in _es)))
+                # v1.4.2 降档条件收紧（find-bugs ③）：只对明确的输出 token 超限错误
+                # 砍半重发——裸 '400' 可能是"模型不存在/其他参数错误"，不该混成降档
+                if ((('token' in _es and ('max' in _es or 'limit' in _es or 'exceed' in _es or 'length' in _es)
+                      and '400' in _es)
+                     or 'maximum context' in _es or 'max_tokens' in _es or 'output tokens' in _es)
                         and cur_max_tok > 256 and not _tok_downgraded):
                     _tok_downgraded = True
                     cur_max_tok = max(256, cur_max_tok // 2)
@@ -1497,37 +1501,12 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     from utils import get_ocr_columns
     cfg = get_ocr_columns() if mapping is None else {'mapping': mapping, 'selected': columns}
     mapping = cfg.get('mapping') or {}
-    # v1.4.2：副模型是 OCR 专用模型（qwen*-ocr）时直接跳过双模型表格验证——
-    # OCR 专用模型输出的是「文字块列表」（{"行号","标题","rotate_rect","text"}），
-    # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测：
-    # 换了 VL 主模型后副模型 qwen3.5-ocr 每轮都报'无法解析 JSON'然后降级）。
-    # 直接单模型走主模型结果 + 明确提示，效果相同还省一次请求。
-    if secondary_model and _is_qwen_ocr(secondary_model):
-        _ocr_dlog(f"副模型({secondary_model})为OCR专用模型，不参与表格JSON交叉验证——本次按单模型(主)识别")
-        def _one(forced_model=None):
-            if row_bboxes:
-                try:
-                    _r = ocr_table_row_split(image_path, columns=None, table_bbox=table_bbox,
-                                             row_bboxes=row_bboxes, forced_model=forced_model)
-                    return parse_items_generic(_r.get('rows') or [], mapping)
-                except Exception:
-                    pass
-            result = ocr_table(image_path, columns=None, table_bbox=table_bbox,
-                               forced_model=forced_model)
-            return parse_items_generic(result.get('rows') or [], mapping)
-        primary = _one(forced_model=None)
-        if primary:
-            for _it in primary:
-                _it['_dual_degraded'] = True  # GUI 提示双模型未生效
-        return primary
-    # 全列模式：columns=None → 模型识别整张表所有列，程序端按 mapping 筛选
-    # （设计初衷：不把勾选列丢给模型，模型只负责完整抄表）
-
+    # 单模型识别：行切分优先，失败回退整表（v1.4 与单模型路径一致）。
+    # 全列模式（columns=None 时）：行切分与整表都识别所有列（columns=None 传下去，
+    # row_split 内部全列模式），程序端后续按 mapping 筛选——
+    # ⚠ 不能传 sel：把列清单丢给模型会丢列/串列（v1.4 回归修复）。
+    # 主 / 副 / OCR跳过 三条路径共用这一个实现（v1.4.3 重构去重）。
     def _one(forced_model=None):
-        """单模型识别：行切分优先，失败回退整表（v1.4 与单模型路径一致）。
-        全列模式（columns=None 时）：行切分与整表都识别所有列（columns=None
-        传下去，row_split 内部全列模式），程序端后续按 mapping 筛选——
-        ⚠ 不能传 sel：把列清单丢给模型会丢列/串列（v1.4 回归修复）。"""
         if row_bboxes:
             try:
                 _r = ocr_table_row_split(image_path, columns=None, table_bbox=table_bbox,
@@ -1538,6 +1517,17 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
         result = ocr_table(image_path, columns=None, table_bbox=table_bbox,
                            forced_model=forced_model)
         return parse_items_generic(result.get('rows') or [], mapping)
+    # v1.4.2：副模型是 OCR 专用模型（qwen*-ocr）时直接跳过双模型表格验证——
+    # OCR 专用模型输出的是「文字块列表」（{"行号","标题","rotate_rect","text"}），
+    # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测：
+    # 换了 VL 主模型后副模型 qwen3.5-ocr 每轮都报'无法解析 JSON'然后降级）。
+    if secondary_model and _is_qwen_ocr(secondary_model):
+        _ocr_dlog(f"副模型({secondary_model})为OCR专用模型，不参与表格JSON交叉验证——本次按单模型(主)识别")
+        primary = _one(forced_model=None)
+        if primary:
+            for _it in primary:
+                _it['_dual_degraded'] = True  # GUI 提示双模型未生效
+        return primary
 
     # 主模型
     try:
