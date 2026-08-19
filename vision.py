@@ -582,9 +582,9 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
 1. table：商品表格区域的边界框（left/top/right/bottom，表格主体含表头，不含底部工具栏）
 2. has_more：表格底部是否被截断——即页面还有更多商品需要滚动才能看到（看表格最后一行是否被切掉一半、或底部有滚动条未到底/加载更多提示）
 3. dropdown：省份/地区下拉选择框的中心点
-5. query："查询"按钮的中心点
-6. total_count：页面统计信息里显示的商品总条数（如 "共 3 条" / "共 128 条"），找不到则填 null
-7. rows：表格内容行的垂直边界（相对整图比例 top/bottom），按从上到下顺序，含表头行。格式：[{"top": 0.XX, "bottom": 0.YY}, ...]，最多返回 20 行；识别不了填 []
+4. query："查询"按钮的中心点
+5. total_count：页面统计信息里显示的商品总条数（如 "共 3 条" / "共 128 条"），找不到则填 null
+6. rows：表格内容行的垂直边界（相对整图比例 top/bottom），按从上到下顺序，含表头行。格式：[{"top": 0.XX, "bottom": 0.YY}, ...]，最多返回 20 行；识别不了填 []
 输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "rows": [{"top": 0.XX, "bottom": 0.YY}], "confidence": 0.XX}"""
     content = _call_vision_api(img_b64, prompt, max_tokens=2048)
     result = _parse_json_obj(content)
