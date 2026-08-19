@@ -2068,9 +2068,11 @@ class App(SettingsUIMixin):
         self.status_text.set(msg)
     
     def _emergency_stop(self):
-        """F9 紧急停止批量识别"""
+        """F9 紧急停止批量识别。
+        v1.4.2：取消钩子注入后，当前/后续 API 请求在下一个检查点立即抛
+        BatchCancelled/VisionCancelled 中断——不再等满 30~90s 超时。"""
         self._batch_stop.set()
-        self.status_text.set("⏹ 紧急停止 — 等待当前识别结束（API 请求最长 60s），随后自动收尾")
+        self.status_text.set("⏹ 紧急停止 — 正在中断当前识别…")
     
     def _batch_scan(self):
         """批量识别：对已知地区逐个引导截图识别"""
@@ -2156,7 +2158,14 @@ class App(SettingsUIMixin):
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
             def _batch_thread_wrapper():
-                """线程包装：任何异常都写日志 + 提示，避免静默死掉（窗口不恢复）"""
+                """线程包装：任何异常都写日志 + 提示，避免静默死掉（窗口不恢复）
+                v1.4.2 紧急停止：批量期间把取消钩子注入 ocr/vision 请求层，
+                F9 后下一个 API 请求点即中断（BatchCancelled/VisionCancelled），
+                不再等当前 30~90s 请求跑完。"""
+                from ocr import set_cancel_check as _ocr_cc
+                from vision import set_cancel_check as _vis_cc
+                _ocr_cc(self._batch_stop.is_set)
+                _vis_cc(self._batch_stop.is_set)
                 try:
                     log.hr(f"批量识别开始：{len(selected)} 个地区", 1)
                     self._run_batch_sequence(selected, hud, hud_text, _dual_mode)
@@ -2177,6 +2186,11 @@ class App(SettingsUIMixin):
                         self.win.after(0, lambda: self.export_btn.configure(state='normal'))
                     except Exception:
                         pass  # 主窗口可能已销毁/关闭，UI 恢复失败无妨（程序正在退出）
+                finally:
+                    try:
+                        _ocr_cc(None); _vis_cc(None)
+                    except Exception:
+                        pass
             threading.Thread(target=_batch_thread_wrapper, daemon=True).start()
         
         _sb = self._mk_btn(bottom_frame, "开始批量识别", start_batch, kind='primary',
@@ -2191,6 +2205,9 @@ class App(SettingsUIMixin):
         6.截图识别（AI 定位表格 + 滚动加载循环，直到无更多商品）
         不填仓库：依赖滚动检测识别该省份全部商品，仓库信息来自 OCR「仓库信息」列。"""
         import time, threading, queue
+        # v1.4.2 紧急停止：取消异常类型（ocr/vision 请求层抛），用于快速中断滚动/省份循环
+        from ocr import BatchCancelled
+        from vision import VisionCancelled
         result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
         try:
             import pyautogui, pyperclip
@@ -2697,6 +2714,9 @@ class App(SettingsUIMixin):
                             if items: break
                             dlog(f"  重试{retry+1}...")
                             time.sleep(2)
+                        except (BatchCancelled, VisionCancelled):
+                            dlog("⏹ 紧急停止")
+                            break  # v1.4.2 紧急停止：取消异常立即中断，不再重试
                         except Exception as ex:
                             # v1.4.2 类型化重试：鉴权/额度等致命错误直接熔断停止；
                             # 限流（429）加长延时防连续触发；其余正常 2s 重试
@@ -2815,52 +2835,142 @@ class App(SettingsUIMixin):
                             # 不在表格可滚区 + 无像素验证无法判断是否真滚了（盲滚）。
                             # 方案：多位置尝试 + 滚动前后像素验证，失败明确提示。
                             pass
-                        # 滚动：多位置尝试 + 像素验证（v1.4.2）
-                        # 浏览器已在最上面（PDD EZ 最小化）；HUD -topmost 可能压住光标落点，
-                        # 或 bbox 换算落点不在可滚区 → 试多个位置，滚动前后截图 diff 验证
-                        def _snap_scroll(_tag):
-                            _sp3 = os.path.join(get_base_dir(), 'output', f'_scroll_c_{i}_{scroll_round}_{_tag}.png')
-                            capture_pdd_screenshot(_sp3)
+                        # 滚动：v1.4.2 大修——①先激活浏览器前台（根治 scroll 被别的
+                        # 顶层窗口吃掉 →"跑其他页面"）；②落点全部 clamp 进浏览器窗口
+                        # 内、避开 HUD 右上 topmost 区与任务栏(y<sh-90)；③滚动前后只对比
+                        # 窗口中部横带（排除 HUD/页码/加载动画的假阳）；④鼠标通道全部
+                        # 失败 → 降级键盘 pagedown，仍失败明确提示不盲滚。
+                        def _activate_browser():
+                            """把商家后台浏览器窗口激活到前台；失败返回 False"""
                             try:
-                                return PILImage.open(_sp3).convert('L').resize((160, 90))
+                                import pygetwindow as gw
+                                for title in ('拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox'):
+                                    wins = gw.getWindowsWithTitle(title)
+                                    if not wins:
+                                        continue
+                                    _w = wins[0]
+                                    if '拼多多' not in title and 'pinduoduo' not in title.lower():
+                                        for w in wins:
+                                            try:
+                                                if w.isActive:
+                                                    _w = w
+                                                    break
+                                            except Exception:
+                                                pass
+                                    if getattr(_w, 'isMinimized', False):
+                                        try:
+                                            _w.restore()
+                                            time.sleep(0.3)
+                                        except Exception:
+                                            pass
+                                    try:
+                                        _w.activate()
+                                    except Exception:
+                                        import ctypes
+                                        try:
+                                            ctypes.windll.user32.SetForegroundWindow(int(_w._hWnd))
+                                        except Exception:
+                                            return False
+                                    time.sleep(0.4)
+                                    return True
                             except Exception:
-                                return None
-                        _scrolled = False
-                        _pos_list = []
-                        try:
-                            _pos_list = [(cx, cy), (sw // 2, int(sh * 0.62)),
-                                         (cx, int(sh * 0.75)), (sw // 2, int(sh * 0.45))]
-                        except Exception:
-                            _pos_list = [(sw // 2, int(sh * 0.62)), (sw // 2, int(sh * 0.45))]
-                        for _pi2, (_px2, _py2) in enumerate(_pos_list):
-                            _s0 = _snap_scroll('a')
-                            try:
-                                pyautogui.moveTo(_px2, _py2); time.sleep(0.3)
-                                pyautogui.scroll(-4); time.sleep(0.2)
-                                pyautogui.scroll(-4)
-                            except Exception:
-                                pass
+                                return False
+                            return False
+                        _bw = _activate_browser()
+                        if not _bw:
+                            dlog("6.⚠ 找不到浏览器窗口，跳过本轮滚动")
                             time.sleep(1.0)
-                            _s1 = _snap_scroll('b')
-                            if _s0 is not None and _s1 is not None:
-                                _df = sum(1 for a, b in zip(_s0.getdata(), _s1.getdata()) if abs(a - b) > 12)
-                                if _df > 30:
-                                    _scrolled = True
-                                    dlog(f"6.↘ 滚动生效（变化{_df}px @位置{_pi2 + 1}）")
-                                    break
-                            else:
-                                _scrolled = True
-                                break
-                        if not _scrolled:
-                            dlog("6.⚠ 滚动未生效（多位置尝试页面均无变化）——请确认浏览器窗口在最前、"
-                                 "HUD 不遮挡表格，或程序窗口未挡浏览器")
-                        # 清理验证截图
-                        for _tag in ('a', 'b'):
+                        else:
+                            # 滚动前刷新窗口矩形：光标落点不能超出窗口/屏幕范围
+                            # （v1.4.2：PrintWindow 后台截图不抢焦点，滚动前必须重取当前矩形）
+                            _win_rect = {}
                             try:
-                                os.remove(os.path.join(get_base_dir(), 'output', f'_scroll_c_{i}_{scroll_round}_{_tag}.png'))
+                                capture_pdd_screenshot(
+                                    os.path.join(get_base_dir(), 'output', f'_wr_{i}_{scroll_round}.png'), _win_rect)
+                                _WL = int(_win_rect.get('left', 0) or 0)
+                                _WT = int(_win_rect.get('top', 0) or 0)
+                                _WW = int(_win_rect.get('width', _ow) or _ow)
+                                _WH = int(_win_rect.get('height', _oh) or _oh)
+                            except Exception:
+                                _WL = int(win_pos.get('left', 0) or 0)
+                                _WT = int(win_pos.get('top', 0) or 0)
+                                _WW = int(win_pos.get('width', _ow) or _ow)
+                                _WH = int(win_pos.get('height', _oh) or _oh)
+                            _max_y = sh - 90  # 避开任务栏
+                            # 落点候选：表格中央多档 + 窗口左列中下部；全部 clamp 进窗口、避开 HUD 右上
+                            _cands = []
+                            for _px, _py in [(cx, cy), (sw // 2, int(sh * 0.62)),
+                                             (cx, int(sh * 0.72)),
+                                             (int(_WL + _WW * 0.40), int(_WT + _WH * 0.55)),
+                                             (int(_WL + _WW * 0.30), int(_WT + _WH * 0.60))]:
+                                _x = max(_WL + 6, min(int(_px), _WL + max(_WW - 6, 6)))
+                                _y = max(_WT + 6, min(int(_py), min(_max_y, _WT + max(_WH - 6, 6))))
+                                if not (0 < _x < sw and 0 < _y < sh):
+                                    continue
+                                # 避开 HUD topmost 区（右上角 sw-430..sw, 20..280）
+                                if sw - 430 <= _x <= sw and 20 <= _y <= 280:
+                                    continue
+                                _cands.append((_x, _y))
+                            # 区域化快照：窗口中部横带（表格主体区域，排除 HUD/页码/加载动画）
+                            def _snap_region(_tag):
+                                _sp3 = os.path.join(get_base_dir(), 'output', f'_scroll_c_{i}_{scroll_round}_{_tag}.png')
+                                capture_pdd_screenshot(_sp3)
+                                try:
+                                    _im = PILImage.open(_sp3)
+                                    _w3, _h3 = _im.size
+                                    # 中部 8%~62% 高度横带：滚动表格必经区域，
+                                    # HUD(右上)/页码(右下)/加载动画被排除 → 验证更贴近真实滚动
+                                    return _im.convert('L').crop((0, int(_h3 * 0.08), _w3, int(_h3 * 0.62))).resize((240, 80))
+                                except Exception:
+                                    return None
+                            _scrolled = False
+                            # 鼠标滚轮主通道：多位置尝试
+                            for _n, (_px2, _py2) in enumerate(_cands):
+                                if self._batch_stop.is_set():
+                                    break
+                                _s0 = _snap_region('a')
+                                try:
+                                    pyautogui.moveTo(_px2, _py2); time.sleep(0.25)
+                                    pyautogui.scroll(-4); time.sleep(0.15)
+                                    pyautogui.scroll(-4)
+                                except Exception:
+                                    continue
+                                time.sleep(0.9)
+                                _s1 = _snap_region('b')
+                                if _s0 is not None and _s1 is not None:
+                                    _df = sum(1 for a, b in zip(_s0.getdata(), _s1.getdata()) if abs(a - b) > 12)
+                                    if _df > 24:  # 中部横带变化 = 表格确实滚了
+                                        _scrolled = True
+                                        dlog(f"6.↘ 滚动生效（变化{_df}px @位置{_n + 1}）")
+                                        break
+                            # 键盘降级通道：鼠标通道全失败 → pagedown（发给前台浏览器）
+                            if not _scrolled and not self._batch_stop.is_set():
+                                _s0 = _snap_region('a')
+                                try:
+                                    pyautogui.press('pagedown')
+                                except Exception:
+                                    pass
+                                time.sleep(0.9)
+                                _s1 = _snap_region('b')
+                                if _s0 is not None and _s1 is not None:
+                                    _df = sum(1 for a, b in zip(_s0.getdata(), _s1.getdata()) if abs(a - b) > 12)
+                                    if _df > 24:
+                                        _scrolled = True
+                                        dlog("6.↘ 滚动生效（键盘 pagedown 降级通道）")
+                            if not _scrolled:
+                                dlog("6.⚠ 滚动未生效——浏览器未在前台/表格无内容可滚/页面被遮挡，"
+                                     "请确认浏览器窗口在前台、HUD 未遮挡表格")
+                            # 清理验证截图
+                            for _tag in ('a', 'b'):
+                                try:
+                                    os.remove(os.path.join(get_base_dir(), 'output', f'_scroll_c_{i}_{scroll_round}_{_tag}.png'))
+                                except Exception:
+                                    pass
+                            try:
+                                os.remove(os.path.join(get_base_dir(), 'output', f'_wr_{i}_{scroll_round}.png'))
                             except Exception:
                                 pass
-                        time.sleep(1.0)  # 等滚动加载渲染
+                            time.sleep(1.0)  # 等滚动加载渲染
                     except Exception as ex:
                         dlog(f"  滚动失败: {ex}")
                         break
@@ -2876,6 +2986,9 @@ class App(SettingsUIMixin):
                     dlog(f"6.✓ 合计{len(round_items)}个商品")
                 else:
                     dlog("6.无数据")
+            except (BatchCancelled, VisionCancelled):
+                dlog("⏹ 紧急停止")
+                break  # v1.4.2 紧急停止：立即中断整个省份任务
             except Exception as e:
                 dlog(f"✗ {e}")
         

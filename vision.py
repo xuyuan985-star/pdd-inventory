@@ -12,6 +12,35 @@ except ImportError:
     cv2 = None
     np = None
 
+
+# ── 批量紧急停止钩子（v1.4.2）：与 ocr.py 同构。光靠调用方 Event 轮询要等
+# 当前定位/状态机请求（采样 2~3 次 × 30s+）跑完，紧急终止不"立刻"。
+# gui 批量线程注入 set_cancel_check(stop.is_set)，请求前/重试间立即中断。──
+_CANCEL_CHECK = None
+
+
+class VisionCancelled(RuntimeError):
+    """批量识别被 F9 紧急终止（视觉/定位调用链）"""
+
+
+def set_cancel_check(fn):
+    """设置/清除取消检查回调：fn() 返回 True 表示需要取消；传 None 清除。"""
+    global _CANCEL_CHECK
+    _CANCEL_CHECK = fn
+
+
+def _check_cancel():
+    """API 请求前调用：取消已触发则抛 VisionCancelled，立即中断当前请求链。"""
+    fn = _CANCEL_CHECK
+    if fn is not None:
+        try:
+            if fn():
+                raise VisionCancelled("紧急停止（F9）")
+        except VisionCancelled:
+            raise
+        except Exception:
+            pass
+
 # ── 模板库路径（兼容打包）──
 if getattr(sys, 'frozen', False):
     _TEMPLATE_DIR = os.path.join(sys._MEIPASS, 'templates')
@@ -206,6 +235,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     if mdl_l.startswith('glm-4v-flash') or mdl_l == 'glm-4v-flash':
         max_tokens = min(max_tokens, 1024)
     if use_responses:
+        _check_cancel()  # v1.4.2 紧急停止：发请求前检查
         resp = _req.post(endpoint,
             headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
             json={
@@ -233,6 +263,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
         'temperature': 0.0, 'max_tokens': max_tokens,
         'thinking': {'type': 'disabled'},
     }
+    _check_cancel()  # v1.4.2 紧急停止：发请求前检查
     resp = _req.post(endpoint,
         headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
         json=payload, timeout=(5, timeout))
@@ -307,6 +338,8 @@ def ai_locate_elements(screenshot_path: str = None) -> dict:
             r = _locate_elements_once(screenshot_path)
             if r:
                 samples.append(r)
+        except VisionCancelled:
+            raise  # v1.4.2 紧急停止：取消异常透传，立即中断采样
         except Exception as _e:
             # v1.4.2 透出：定位失败原因（限流/额度耗尽/key/网络），供省份验证段区分
             # "API 层故障"与"页面结构变化定位不到"
@@ -394,6 +427,8 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
         m = _re.search(r'\d+', content or '')
         n = int(m.group(0)) if m else 0
         return n if n > 0 else None
+    except VisionCancelled:
+        raise  # v1.4.2 紧急停止：取消异常透传
     except Exception:
         return None
 
@@ -445,6 +480,8 @@ def ai_read_selected_province(screenshot_path: str = None, region=None) -> str:
         content = _call_vision_api(img_b64, prompt, max_tokens=32, timeout=15)
         content = (content or '').strip().strip('"').strip("'").strip()
         return content or None
+    except VisionCancelled:
+        raise  # v1.4.2 紧急停止：取消异常透传
     except Exception as _e:
         # v1.4.2 透出错误：API 失败（限流/额度耗尽/key/网络）与"读到空/全部"必须区分——
         # 之前全吞成 None 会误报"省份切换失败"（客户日志：两个省份全跳过）
@@ -491,6 +528,8 @@ def ai_check_page_state(screenshot_path: str = None) -> dict:
                 st = 'unknown'
             return {'state': st, 'hint': data.get('hint') or None}
         return {'state': 'unknown', 'hint': None}
+    except VisionCancelled:
+        raise  # v1.4.2 紧急停止：取消异常透传
     except Exception:
         return {'state': 'unknown', 'hint': None}
 
@@ -548,6 +587,8 @@ def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
             r = _locate_table_once(screenshot_path)
             if r:
                 results.append(r)
+        except VisionCancelled:
+            raise  # v1.4.2 紧急停止：取消异常透传，立即中断采样
         except Exception:
             continue
     if not results:

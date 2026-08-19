@@ -10,6 +10,36 @@ import requests
 from utils import get_api_config, get_base_dir
 
 
+# ── 批量紧急停止钩子（v1.4.2）：紧急终止必须"立刻"——光靠调用方 Event 轮询，
+# 要等当前 30~90s 的 OCR 请求跑完才轮到检查点。这里提供模块级取消检查：
+# gui 批量线程注入 set_cancel_check(stop.is_set)，API 请求前/重试间立即中断，
+# 抛出 BatchCancelled 让批量线程马上收尾，不再等超时。──
+_CANCEL_CHECK = None
+
+
+class BatchCancelled(RuntimeError):
+    """批量识别被 F9 紧急终止"""
+
+
+def set_cancel_check(fn):
+    """设置/清除取消检查回调：fn() 返回 True 表示需要取消；传 None 清除。"""
+    global _CANCEL_CHECK
+    _CANCEL_CHECK = fn
+
+
+def _check_cancel():
+    """API 请求前调用：取消已触发则抛 BatchCancelled，立即中断当前请求链。"""
+    fn = _CANCEL_CHECK
+    if fn is not None:
+        try:
+            if fn():
+                raise BatchCancelled("紧急停止（F9）")
+        except BatchCancelled:
+            raise
+        except Exception:
+            pass  # 检查函数自身异常不阻断识别
+
+
 def _crop_bbox(image_path: str, bbox: dict):
     """
     按像素 bbox {left, top, right, bottom} 裁剪，返回 PIL Image。
@@ -430,6 +460,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
         models = [model_name or 'glm-4v-flash']
 
     for attempt, mdl in enumerate(models):
+        _check_cancel()  # v1.4.2 紧急停止：F9 后重试/换模型前立即中断
         mdl = mdl.strip()  # 用户可能输入带前后空格的模型名，发送前清理
         # glm-4v-flash 输出上限 1024（与 vision._call_vision_api 一致）：超限会 400
         if mdl.lower().startswith('glm-4v-flash') or mdl.lower() == 'glm-4v-flash':
@@ -459,6 +490,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
         try:
             if cur_responses and mdl != 'glm-4v-flash':
                 # Responses API（Doubao-Seed-2.1-pro：thinking:disabled + 图已预压缩）
+                _check_cancel()  # v1.4.2 紧急停止：发请求前检查
                 resp = requests.post(cur_endpoint,
                         headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
                     json={
@@ -492,6 +524,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                     'temperature': 0.0, 'max_tokens': cur_max_tok,
                     'thinking': {'type': 'disabled'},
                 }
+                _check_cancel()  # v1.4.2 紧急停止：发请求前检查
                 resp = requests.post(cur_endpoint,
                         headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
                     json=cc_payload, timeout=(10, 30))
