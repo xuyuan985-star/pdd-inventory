@@ -2931,8 +2931,11 @@ class App(SettingsUIMixin):
                                 _s0 = _snap_region('a')
                                 try:
                                     pyautogui.moveTo(_px2, _py2); time.sleep(0.25)
-                                    pyautogui.scroll(-4); time.sleep(0.15)
-                                    pyautogui.scroll(-4)
+                                    # v1.4.2 力度 10 倍（客户实测）：scroll(-4) 一齿都滚不出完整商品行，
+                                    # 每轮截图近乎相同 → 整表识别对同名商品反复输出波动行（十几条重复）+
+                                    # 半露行被漏数（4~5 条只认出 3 条）；-40≈10 倍力度，每轮滚出完整新行
+                                    pyautogui.scroll(-40); time.sleep(0.15)
+                                    pyautogui.scroll(-40)
                                 except Exception:
                                     continue
                                 time.sleep(0.9)
