@@ -2787,33 +2787,57 @@ class App(SettingsUIMixin):
                             else:
                                 cx = sw // 2
                                 cy = int(sh * 0.62)
-                            # v1.4.2 滚动修复：先确保浏览器窗口在前台——scroll 事件作用到
-                            # 光标下窗口，若浏览器失焦/最小化/被 PDD EZ 遮挡则滚动全打空
-                            # （客户实测滚动循环在跑但页面不动，即此因）
+                            # v1.4.2 滚动修复：浏览器在前台假设成立（PDD EZ 已最小化），
+                            # 真实失效点 = HUD 是 -topmost 永远压着浏览器 + 光标落点可能
+                            # 不在表格可滚区 + 无像素验证无法判断是否真滚了（盲滚）。
+                            # 方案：多位置尝试 + 滚动前后像素验证，失败明确提示。
+                            pass
+                        # 滚动：多位置尝试 + 像素验证（v1.4.2）
+                        # 浏览器已在最上面（PDD EZ 最小化）；HUD -topmost 可能压住光标落点，
+                        # 或 bbox 换算落点不在可滚区 → 试多个位置，滚动前后截图 diff 验证
+                        def _snap_scroll(_tag):
+                            _sp3 = os.path.join(get_base_dir(), 'output', f'_scroll_c_{i}_{scroll_round}_{_tag}.png')
+                            capture_pdd_screenshot(_sp3)
                             try:
-                                import pygetwindow as _gw2
-                                for _t2 in ['拼多多', 'pinduoduo', 'Microsoft Edge', 'Edge', 'Chrome', 'Firefox']:
-                                    _ws2 = _gw2.getWindowsWithTitle(_t2)
-                                    if _ws2:
-                                        _w2 = _ws2[0]
-                                        if _w2.isMinimized:
-                                            _w2.restore()
-                                        _w2.activate()
-                                        break
+                                return PILImage.open(_sp3).convert('L').resize((160, 90))
+                            except Exception:
+                                return None
+                        _scrolled = False
+                        _pos_list = []
+                        try:
+                            _pos_list = [(cx, cy), (sw // 2, int(sh * 0.62)),
+                                         (cx, int(sh * 0.75)), (sw // 2, int(sh * 0.45))]
+                        except Exception:
+                            _pos_list = [(sw // 2, int(sh * 0.62)), (sw // 2, int(sh * 0.45))]
+                        for _pi2, (_px2, _py2) in enumerate(_pos_list):
+                            _s0 = _snap_scroll('a')
+                            try:
+                                pyautogui.moveTo(_px2, _py2); time.sleep(0.3)
+                                pyautogui.scroll(-4); time.sleep(0.2)
+                                pyautogui.scroll(-4)
                             except Exception:
                                 pass
-                            time.sleep(0.3)
-                            # HUD 置顶在右上角：滚动目标若撞进 HUD 几何区 → 下移到表格下部
-                            if cx > sw - int(430 * self.dpi_scale) and cy < int(320 * self.dpi_scale):
-                                cy = int(sh * 0.75)
-                            pyautogui.moveTo(cx, cy); time.sleep(0.3)
-                            pyautogui.scroll(-4); time.sleep(0.2)
-                            pyautogui.scroll(-4)
-                        else:
-                            pyautogui.moveTo(sw // 2, int(sh * 0.62)); time.sleep(0.3)
-                            pyautogui.scroll(-4); time.sleep(0.2)
-                            pyautogui.scroll(-4)
-                        time.sleep(1.5)  # 等滚动加载渲染
+                            time.sleep(1.0)
+                            _s1 = _snap_scroll('b')
+                            if _s0 is not None and _s1 is not None:
+                                _df = sum(1 for a, b in zip(_s0.getdata(), _s1.getdata()) if abs(a - b) > 12)
+                                if _df > 30:
+                                    _scrolled = True
+                                    dlog(f"6.↘ 滚动生效（变化{_df}px @位置{_pi2 + 1}）")
+                                    break
+                            else:
+                                _scrolled = True
+                                break
+                        if not _scrolled:
+                            dlog("6.⚠ 滚动未生效（多位置尝试页面均无变化）——请确认浏览器窗口在最前、"
+                                 "HUD 不遮挡表格，或程序窗口未挡浏览器")
+                        # 清理验证截图
+                        for _tag in ('a', 'b'):
+                            try:
+                                os.remove(os.path.join(get_base_dir(), 'output', f'_scroll_c_{i}_{scroll_round}_{_tag}.png'))
+                            except Exception:
+                                pass
+                        time.sleep(1.0)  # 等滚动加载渲染
                     except Exception as ex:
                         dlog(f"  滚动失败: {ex}")
                         break
