@@ -639,8 +639,8 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
         商品名比 sku 稳定——同商品核心名稳定、尾部描述词乱，相邻商品前缀通常不同不会误并）；
       - 无 ID → name 精确 + 模糊去重（前 6 字相同 + 距离≤2，防滚动轮 OCR 波动漏拦）。
     覆盖场景：同名不同ID保留 / 先无ID后有ID拦截 / 先有ID后无ID拦截 / 无ID同名去重 / 同ID名字波动 /
-    **同商品ID错位波动** / **同商品sku整段错位但name相似**。
-    seen_sku 为 dict {sku_id: name}（name 佐证）。
+    **同商品ID错位波动** / **同商品sku整段错位但name相似** / **同商品多仓各自独立（v1.4.2）**。
+    seen_sku 为 dict {sku_id: {仓库: name}}（多仓映射，name 佐证）。
     """
     out = []
     for it in items:
@@ -649,26 +649,30 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
         if not nm:
             continue
         if sku:
-            if sku in seen_sku:
-                continue
-            # 模糊兜底：同商品三路判断——
-            #  1. ID 精确命中 → 同商品（sku 权威锚点）
-            #  2. ID 近匹配(≤2) 且 name 前6字相同 → 同商品（OCR 数字错位；相邻商品 ID 虽近但
-            #     name 前缀不同，不误并——防"示例商品A/12345...101"vs"示例商品C/12345...102"）
-            #  3. ID 不近 但 name 强相似（前6字相同 + 总距离≤6 且 name 非完全相同）→ 同商品
-            #     （sku 整段错位时靠 name 兜底；name 完全相同 ≠ 同商品：同名不同规格必须保留）
+            # v1.4.2：同 ID 不同仓库 → 不同记录（同商品多仓各自独立，客户场景），
+            # 仅 同 ID 同仓库 才算滚动重复。seen_sku 值升级为 {warehouse: name}
+            _prev_map = seen_sku.get(sku) or {}
+            if not isinstance(_prev_map, dict):
+                _prev_map = {}
+            if it.get('warehouse') in _prev_map:
+                continue  # 同 ID 同仓库已见（滚动重复）
+            # 模糊兜底：同商品三路判断（仓库感知——只与本商品仓库的已见记录比）
             hit = False
             for _s, _n in seen_sku.items():
+                _n_map = _n if isinstance(_n, dict) else {}
+                _n_name = _n_map.get(it.get('warehouse'))
+                if _n_name is None:
+                    continue  # 该已见记录的仓库 ≠ 本商品仓库（多仓不互去重）
                 _id_near = abs(len(_s) - len(sku)) <= 2 and _lev(_s, sku) <= 2
-                _name_prefix = _n[:6] == nm[:6]
+                _name_prefix = _n_name[:6] == nm[:6]
                 if _id_near and _name_prefix:
                     hit = True
                     break
-                if not _id_near and _n != nm and _name_prefix and _lev(_n, nm) <= 6:
+                if not _id_near and _n_name != nm and _name_prefix and _lev(_n_name, nm) <= 6:
                     # name 强相似兜底（sku 整段错位时靠 name）：距离≤2 视为同商品去重；
                     # 距离 3~6 只标记不删除——不同规格商品（500ml vs 1L）前缀相同且
                     # 编辑距离可能在 3~6，自动删会合并错库存（v1.4 审查收紧）
-                    if _lev(_n, nm) <= 2:
+                    if _lev(_n_name, nm) <= 2:
                         hit = True
                     else:
                         it['_dup_suspect'] = True
@@ -676,7 +680,9 @@ def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
                     break
             if hit:
                 continue
-            seen_sku[sku] = nm
+            if not isinstance(seen_sku.get(sku), dict):
+                seen_sku[sku] = {}
+            seen_sku[sku][it.get('warehouse')] = nm
             if nm in seen_name_no_sku:
                 continue
             seen_name_with_id.add(nm)
