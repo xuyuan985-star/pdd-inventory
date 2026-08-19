@@ -2696,6 +2696,16 @@ class App(SettingsUIMixin):
                             # 随机生成两轮不同 → 被剔除。⚠ 匹配用模糊（编辑距离≤2+前4字
                             # 相同）：整表 verify 与首轮 name 可能有 OCR 波动，
                             # 严格相等会误删真实行（find-bugs 审查发现）
+                            # v1.4.2 总数可信度校准：AI 定位读右下角"共N条"偶发偏小/漏读
+                            # （客户实测：页面5个读成3），首轮整表识别行数是直接证据——
+                            # 识别数 > 总数时以识别数校准，避免误触幻觉过滤把真实行全删
+                            try:
+                                if items and _total_hint and len(items) > int(_total_hint):
+                                    dlog(f"6.⚠ 页面总数{int(_total_hint)} < 首轮识别{len(items)}个，以识别量为准校准总数")
+                                    _total_hint = len(items)
+                            except (TypeError, ValueError):
+                                pass
+                            # 幻觉行交叉校验：总数校准后仍超出的才触发（识别数 > 总数为真）
                             try:
                                 if items and _total_hint and len(items) > int(_total_hint):
                                     from ocr import ocr_table_verify, _lev as _lev2
@@ -2713,9 +2723,17 @@ class App(SettingsUIMixin):
                                                 return True
                                         return False
                                     _before = len(items)
-                                    items = [it for it in items if _name_hit(str(it.get('name', '')))]
-                                    if len(items) < _before:
-                                        dlog(f"6.✓ 幻觉行过滤: {_before} → {len(items)} 个")
+                                    _filtered = [it for it in items if _name_hit(str(it.get('name', '')))]
+                                    if _filtered:
+                                        items = _filtered
+                                        if len(items) < _before:
+                                            dlog(f"6.✓ 幻觉行过滤: {_before} → {len(items)} 个")
+                                    else:
+                                        # v1.4.2 全删保护（客户实测 5→0）：verify 与首轮 name 全不匹配
+                                        # （verify返回空/OCR波动/总数误读）时，全删=真实数据全丢 +
+                                        # items空 → 无效重试死循环。保底保留首轮全量，宁可多不可无。
+                                        dlog(f"6.⚠ 交叉校验全不匹配（verify {len(_vr)}行 vs 首轮{_before}行），"
+                                             f"疑似总数误读/OCR波动——保底保留首轮 {_before} 行")
                             except Exception:
                                 pass  # 校验失败保留原结果（不阻断）
                             if items: break
