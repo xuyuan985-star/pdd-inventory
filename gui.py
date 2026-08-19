@@ -2445,6 +2445,13 @@ class App(SettingsUIMixin):
                         _region = (int((_bx - _wl) / _sx), int((_by - _wt) / _sy),
                                    max(160, int(360 / _sx)), max(80, int(100 / _sy)))
                     _sel = _read_province(_vshot, region=_region)
+                    if _sel is None:
+                        # v1.4.2：无法识别且疑似 API 层失败（限流/网络抖动）——
+                        # 等 5s 重截图重读一次，避免把 API 故障误报成"省份切换失败"
+                        # 导致整个省份被跳过（客户日志：两省份全跳过的根因）
+                        time.sleep(5)
+                        ss(_vshot)
+                        _sel = _read_province(_vshot, region=_region)
                     if _sel and _strip_region(_sel) == reg:
                         province_ok = True
                         dlog(f"3.✓ 省份已切换为「{_sel}」")

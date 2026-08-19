@@ -307,7 +307,14 @@ def ai_locate_elements(screenshot_path: str = None) -> dict:
             r = _locate_elements_once(screenshot_path)
             if r:
                 samples.append(r)
-        except Exception:
+        except Exception as _e:
+            # v1.4.2 透出：定位失败原因（限流/key/网络），供省份验证段区分
+            # "API 层故障"与"页面结构变化定位不到"
+            try:
+                from ocr import _ocr_dlog
+                _ocr_dlog(f"元素定位 API 失败: {str(_e)[:120]}")
+            except Exception:
+                pass
             continue
     if not samples:
         return None
@@ -437,7 +444,14 @@ def ai_read_selected_province(screenshot_path: str = None, region=None) -> str:
         content = _call_vision_api(img_b64, prompt, max_tokens=32, timeout=15)
         content = (content or '').strip().strip('"').strip("'").strip()
         return content or None
-    except Exception:
+    except Exception as _e:
+        # v1.4.2 透出错误：API 失败（限流/key/网络）与"读到空/全部"必须区分——
+        # 之前全吞成 None 会误报"省份切换失败"（客户日志：两个省份全跳过）
+        try:
+            from ocr import _ocr_dlog
+            _ocr_dlog(f"省份读值 API 失败: {str(_e)[:120]}")
+        except Exception:
+            pass
         return None
 
 
