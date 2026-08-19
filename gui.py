@@ -2645,46 +2645,25 @@ class App(SettingsUIMixin):
                     items = None
                     for retry in range(3):
                         try:
-                            # v1.3 通用列：走 _ocr_generic_to_items（勾选列 + 映射 + 可选双模型）
-                            # v1.4 修复：AI 行边界对 3 行小表格会漏最后一行（行切分只按边界
-                            # 切 → 静默丢行）。有页面总数时校验：行边界数据行数 < 总数 →
-                            # 回退整表识别（整表模型自己数行，与实时截图同路径，可靠）
-                            # v1.4.2 修复：滚动轮也走行切分（每轮新鲜 row_bboxes）——
-                            # 整表识别滚动轮输出串名/重复/JSON截断是滚动轮质量差的根因；
-                            # 行切分每组小图独立识别，数字/名称稳定。仍保留总数校验防漏行
-                            _use_split = bool(_row_bboxes)
-                            if _use_split and _total_hint:
-                                try:
-                                    # 行边界可能含/不含表头行：首边界 top 与表格 bbox top
-                                    # 间隙 < 0.5 行高 → 视为含表头（v1.4 修正：不减表头
-                                    # 会把"仅内容行边界"误判漏行，误回退整表；
-                                    # bbox 缺失时保守不减表头）
-                                    _has_hdr = False
-                                    if isinstance(table_bbox, dict) and table_bbox.get('top') is not None:
-                                        _bd0 = _row_bboxes[0][0]
-                                        _avg_h = max(1, _row_bboxes[1][0] - _bd0)
-                                        _has_hdr = (_bd0 - int(table_bbox.get('top', 0))) < _avg_h * 0.5
-                                    _bd_rows = max(0, len(_row_bboxes) - (1 if _has_hdr else 0))
-                                    if _bd_rows < int(_total_hint):
-                                        dlog(f"6.⚠ 行边界{_bd_rows}数据行 < 页面总数{int(_total_hint)}，改整表识别防漏行")
-                                        _use_split = False
-                                except (TypeError, ValueError, IndexError):
-                                    pass
-                            items = self._ocr_generic_to_items(sp2, table_bbox=table_bbox,
+                            # v1.4.2 方案A（阿洋拍板）：批量识别改走「整表无 bbox」——
+                            # 与实时截图同路径（模型自己数行）。三路径实测证明：AI 行边界
+                            # 在大表上数错（9 商品数出 20 边界→行切分切碎→乱数据/幻觉），
+                            # 整表无 bbox 反而 9 行全对且 ID 保留。滚动判断仍用
+                            # ai_locate_table 的 has_more/bbox（下方滚动段），识别不依赖。
+                            items = self._ocr_generic_to_items(sp2, table_bbox=None,
                                                               dual_verify=dual_verify,
-                                                              # 首轮+滚动轮都走行切分防乱编（v1.4.2）
-                                                              row_bboxes=_row_bboxes if _use_split else None)
+                                                              row_bboxes=None)
                             # v1.4.2 幻觉行交叉校验：识别数 > 页面总数 → 模型编造了
                             # 不存在的商品行（省1 3商品识别5个的根因）。二次识别后
                             # 取两轮 name 交集——真商品两轮都出现（稳定），幻觉行
                             # 随机生成两轮不同 → 被剔除。⚠ 匹配用模糊（编辑距离≤2+前4字
-                            # 相同）：整表 verify 与行切分首轮的 name 可能有 OCR 波动，
+                            # 相同）：整表 verify 与首轮 name 可能有 OCR 波动，
                             # 严格相等会误删真实行（find-bugs 审查发现）
                             try:
                                 if items and _total_hint and len(items) > int(_total_hint):
                                     from ocr import ocr_table_verify, _lev as _lev2
                                     dlog(f"6.⚠ 识别{len(items)}个 > 页面总数{int(_total_hint)}，交叉校验剔除幻觉行")
-                                    _vr = ocr_table_verify(sp2, table_bbox=table_bbox)['rows'] or []
+                                    _vr = ocr_table_verify(sp2, table_bbox=None)['rows'] or []
                                     _vn = [str((it or {}).get('name', '')).replace(' ', '').lower()
                                            for it in _vr if (it or {}).get('name')]
                                     def _name_hit(_nm):
