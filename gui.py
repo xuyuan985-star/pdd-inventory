@@ -1305,7 +1305,7 @@ class App(SettingsUIMixin):
                         raise  # 取消透传，不弹"校验文件下载失败"
                     except Exception as e:
                         os.remove(dest)
-                        self.win.after(0, lambda: _fail("SHA256 校验文件下载失败，已拒绝安装（安全策略）", str(e)))
+                        self.win.after(0, lambda _e=e: _fail("SHA256 校验文件下载失败，已拒绝安装（安全策略）", str(_e)))
                         return
                 
                 state["downloaded_zip"] = dest
@@ -1317,7 +1317,7 @@ class App(SettingsUIMixin):
                 # 用户取消：静默返回，不弹错误
                 return
             except Exception as e:
-                self.win.after(0, lambda: _fail("下载失败，请检查网络", str(e)))
+                self.win.after(0, lambda _e=e: _fail("下载失败，请检查网络", str(_e)))
         
         def _ask_install():
             """下载完成 → 确认安装 → 关窗拉起 updater finalize"""
@@ -2171,7 +2171,7 @@ class App(SettingsUIMixin):
                     except Exception:
                         pass
                     try:
-                        self.win.after(0, lambda: self.status_text.set(f"❌ 批量识别异常: {str(_e)[:80]}"))
+                        self.win.after(0, lambda _e=_e: self.status_text.set(f"❌ 批量识别异常: {str(_e)[:80]}"))
                         self.win.after(0, self.win.deiconify)
                         # 异常路径立即恢复导出按钮，不等 10 分钟 idle 兜底（result_queue 无 None 信号）
                         self.win.after(0, lambda: self.export_btn.configure(state='normal'))
@@ -2198,7 +2198,7 @@ class App(SettingsUIMixin):
             from PIL import Image as PILImage
         except ImportError as e:
             # 顶层依赖缺失：立即通知主线程收尾，避免用户白等 30 秒超时
-            self.win.after(0, lambda: self.status_text.set(f"❌ 依赖缺失: {e}"))
+            self.win.after(0, lambda _e=e: self.status_text.set(f"❌ 依赖缺失: {_e}"))
             self.win.after(0, self.win.deiconify)
             result_queue.put(None)
             self.win.after(0, lambda: self._finish_batch(0, len(regions), 0))

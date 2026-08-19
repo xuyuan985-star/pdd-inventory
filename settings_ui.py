@@ -270,7 +270,7 @@ class SettingsUIMixin:
 
     def _save_settings(self, dlg):
         import json, os as _os, tempfile
-        settings_file = os.path.join(get_base_dir(), 'settings.json')
+        settings_file = _os.path.join(get_base_dir(), 'settings.json')
         path = self.export_path_var.get().strip()
         if not path:
             messagebox.showwarning("路径为空", "请先选择或输入导出路径", parent=dlg)
