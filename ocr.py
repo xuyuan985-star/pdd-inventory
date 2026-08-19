@@ -923,71 +923,12 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
 - 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
         max_tok = 4096 if _is_ocr else 2048  # glm-4.6v 有 reasoning 需更大预算；glm-4v-flash 由 _ocr_api_call 自动钳制到 1024；Qwen OCR 系列 4096
 
-    content, _mdl = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model,
-                                 prefer_general=prefer_general)
+    content, _ = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model,
+                               prefer_general=prefer_general)
 
-    # 解析：优先 {"columns","rows"} 结构，兜底纯数组
-    text = content.strip()
-    if '```' in text:
-        parts = text.split('```')
-        for p in parts:
-            p = p.strip()
-            if p.startswith('json'):
-                p = p[4:].strip()
-            if p.startswith('{') or p.startswith('['):
-                text = p
-                break
-    try:
-        _dbg_note = ''
-        if text.startswith('{'):
-            data = json.loads(text)
-            cols = data.get('columns') or []
-            rows = data.get('rows') or data.get('items') or []
-            # rows 可能是数组格式 [["a","b"],...]（glm-4.6v 偶发），按 columns 对齐转 dict
-            # 行短于列 → 补 None（符合"缺列填 null"语义）；行长于列 → 截断；非 list 行原样保留
-            if cols and rows:
-                _n = len(cols)
-                def _norm_row(r):
-                    if isinstance(r, list):
-                        return dict(zip(cols, (r + [None] * _n)[:_n]))
-                    return r
-                rows = [_norm_row(r) for r in rows]
-            # 表头/数据对齐校验：模型 columns 声明可能与行对象 key 不一致
-            # （漏列/多列/错序/列名近似），行数据标注更接近视觉 → 以行 key 多数票为准
-            dict_rows = [r for r in rows if isinstance(r, dict) and r]
-            if dict_rows:
-                from collections import Counter as _C
-                # 过滤不可哈希的 key（模型可能返回嵌套对象当 key，如 {dict: value}），
-                # 否则 set() 会抛 TypeError: unhashable type → 整个识别失败（v1.4 修复）
-                _safe_rows = []
-                for _r in dict_rows:
-                    _k2 = [k for k in _r.keys() if isinstance(k, (str, int, float, bool, type(None)))]
-                    if _k2:
-                        _safe_rows.append({_k: _r[_k] for _k in _k2})
-                if not _safe_rows:
-                    _dbg_note = 'rows_keys_unhashable_filtered'
-                dict_rows = _safe_rows
-            if dict_rows:
-                _kc = _C(tuple(r.keys()) for r in dict_rows)
-                _top_keys = list(_kc.most_common(1)[0][0])
-                if set(cols) != set(_top_keys):
-                    _dbg_note = f"columns_rebased: {cols} -> {_top_keys}"
-                    cols = _top_keys
-                elif list(cols) != _top_keys:
-                    _dbg_note = f"columns_reordered: {cols} -> {_top_keys}"
-                    cols = _top_keys
-            _write_ocr_debug(cols, rows, _dbg_note)
-            return {'columns': list(cols), 'rows': list(rows)}
-        # 纯数组：从第一行推断列名（无表头信息，尽力而为）
-        rows = json.loads(text)
-        if rows and isinstance(rows[0], dict):
-            cols = list(rows[0].keys())
-            _write_ocr_debug(cols, rows)
-            return {'columns': cols, 'rows': rows}
-        _write_ocr_debug([], rows, 'no_columns')
-        return {'columns': [], 'rows': []}
-    except json.JSONDecodeError:
-        raise RuntimeError("模型返回无法解析的 JSON")
+    # 解析复用 _parse_ocr_response（v1.4.2 抽取共用：兼容 ```json 包裹/
+    # {columns,rows}/纯数组/数组行对齐/key 多数票/不可哈希过滤/调试记录）
+    return _parse_ocr_response(content)
 
 
 def _parse_ocr_response(content: str) -> dict:

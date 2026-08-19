@@ -521,7 +521,7 @@ def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
     """
     AI 智能表格定位：截图 → Vision API → 返回商品表格区域 bbox、是否还有更多商品、
     以及省份/仓库下拉框坐标（用于分仓库批量识别）。
-    多次采样（默认 3 次）取中位数，减少单次定位的坐标偏差（尤其 warehouse_dropdown）。
+    多次采样（默认 3 次）取中位数，减少单次定位的坐标偏差。
     samples=1 时单次调用（调用方明确只需粗略坐标时省 API）。
     失败返回 None（任何异常都不外抛，避免批量识别线程崩溃）。
     """
@@ -551,7 +551,7 @@ def ai_locate_table(screenshot_path: str = None, samples: int = 3) -> dict:
         'screen_width': results[0]['screen_width'],
         'screen_height': results[0]['screen_height'],
     }
-    for key in ('dropdown', 'warehouse_dropdown', 'query'):
+    for key in ('dropdown', 'query'):
         vals = [s.get(key) for s in results if s.get(key)]
         if vals:
             out[key] = {
@@ -582,11 +582,10 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
 1. table：商品表格区域的边界框（left/top/right/bottom，表格主体含表头，不含底部工具栏）
 2. has_more：表格底部是否被截断——即页面还有更多商品需要滚动才能看到（看表格最后一行是否被切掉一半、或底部有滚动条未到底/加载更多提示）
 3. dropdown：省份/地区下拉选择框的中心点
-4. warehouse_dropdown：城市仓下拉选择框的中心点（若页面上没有该元素则填 null）
 5. query："查询"按钮的中心点
 6. total_count：页面统计信息里显示的商品总条数（如 "共 3 条" / "共 128 条"），找不到则填 null
 7. rows：表格内容行的垂直边界（相对整图比例 top/bottom），按从上到下顺序，含表头行。格式：[{"top": 0.XX, "bottom": 0.YY}, ...]，最多返回 20 行；识别不了填 []
-输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "warehouse_dropdown": {"x": 0.XX, "y": 0.YY} 或 null, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "rows": [{"top": 0.XX, "bottom": 0.YY}], "confidence": 0.XX}"""
+输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "rows": [{"top": 0.XX, "bottom": 0.YY}], "confidence": 0.XX}"""
     content = _call_vision_api(img_b64, prompt, max_tokens=2048)
     result = _parse_json_obj(content)
     if not result:
@@ -643,7 +642,6 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
         out['total_count'] = None
     # 下拉框/查询按钮：可选字段，逐个校验（无则 None，调用方走模板/校准坐标）
     for key, dim in (('dropdown', (screen_w, screen_h)),
-                     ('warehouse_dropdown', (screen_w, screen_h)),
                      ('query', (screen_w, screen_h))):
         el = result.get(key) or {}
         x = _px(el.get('x'), dim[0])
