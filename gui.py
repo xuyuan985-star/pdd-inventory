@@ -2756,14 +2756,19 @@ class App(SettingsUIMixin):
                             except Exception:
                                 pass
                             _es = str(ex).lower()
-                            # v1.4.2 网络类错误（连接池/超时/socket）单独对待：间隔加长重试、
-                            # 且不计入"无数据"（网络断 ≠ 页面无新行，连续两轮断网就停会把
-                            # 9 个商品识成 5 个——客户实测）。5s 后重试，网络恢复后照常继续
-                            _is_net = any(k in _es for k in ('connection', 'timeout', 'timed out', 'pool', 'socket'))
+                            # v1.4.2 错误分诊（客户实测大表必超时，并非网络抖动）：
+                            # - 读超时（ReadTimeout/read timed out）= 模型处理大图太慢，需等待而非重试
+                            # - 连接失败（connection/pool/socket）= 网络不通
+                            # - 限流（429）= 降速重试
+                            _is_read_timeout = 'readtimedout' in _es.replace(' ', '') or ('read' in _es and ('timeout' in _es or 'timed out' in _es))
+                            _is_conn_err = any(k in _es for k in ('connection', 'pool', 'socket')) and not _is_read_timeout
                             _es_429 = any(k in _es for k in ('429', 'rate ', 'too many', 'triggered rate', 'flow control'))
-                            _was_net_err = _was_net_err or _is_net
-                            _ed = 5 if _is_net else (10 if _es_429 else 2)
-                            dlog(f"  OCR异常（{_ed}s 后重试）: {str(ex)[:80]}{'（网络/连接）' if _is_net else ''}")
+                            _was_net_err = _was_net_err or _is_conn_err
+                            _ed = 5 if _is_conn_err else (10 if _es_429 else 2)
+                            if _is_read_timeout:
+                                dlog(f"  OCR超时：模型处理大图超过预留时间（已延长至180s），若持续发生请降低勾选列数或分批识别（{str(ex)[:120]}）")
+                            else:
+                                dlog(f"  OCR异常（{_ed}s 后重试）: {str(ex)[:120]}{'（网络/连接）' if _is_conn_err else ''}")
                             time.sleep(_ed)
                     # 合并：同仓库内去重（sku_id 为权威锚点，无 ID 回退 name），跨仓库保留
                     new_in_round = 0

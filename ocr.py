@@ -622,7 +622,8 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                             # Responses API 规范的输出长度限制参数（区别于 Chat Completions 的 max_tokens）
                             'max_output_tokens': cur_max_tok,
                             'stream': False
-                        }, timeout=(10, 30))
+                        }, timeout=(10, 180))  # v1.4.2 读取超时 30s→180s：VL 处理大图(9列大表)可达 60-120s，
+                        #  30s 必然误判失败（客户实测小表3-5行成功、大表必超时）——给足处理时间再谈网络
                     data = resp.json()
                     if not data.get('output'):
                         raise RuntimeError(f"OCR失败（{mdl}）: {data}")
@@ -644,7 +645,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                     }
                     resp = requests.post(cur_endpoint,
                             headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
-                        json=cc_payload, timeout=(10, 30))
+                        json=cc_payload, timeout=(10, 180))  # v1.4.2 读取超时 30s→180s，理由同上（VL 大图处理耗时）
                     data = resp.json()
                     if not data.get('choices'):
                         raise RuntimeError(f"OCR失败（{mdl}）: {data}")
