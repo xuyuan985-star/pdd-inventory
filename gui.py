@@ -2738,6 +2738,16 @@ class App(SettingsUIMixin):
                         should_scroll = bool(items) and (ai_has_more is not False)
                     else:
                         should_scroll = new_in_round > 0
+                        # v1.4.2 右下角总数权威：滚动停止前对比累计识别量 vs 页面总数
+                        # （右下角"共有N条"分页统计，后端渲染权威）——累计 < 总数 → 疑似
+                        # 还有商品没滚出来（滚动轮漏识别），即使本轮无新增也继续滚补抓
+                        _under_target = False
+                        try:
+                            if round_items and _total_hint and len(round_items) < int(_total_hint):
+                                # 仅在 AI 没明确确认到底时按数量补滚（已到底则数量可能虚高，勿强求）
+                                _under_target = (ai_has_more is not False)
+                        except (TypeError, ValueError):
+                            _under_target = False
                         if not should_scroll:
                             # v1.4.2 防误停：滚动轮无新增但 AI 未确认到底（has_more
                             # 未知或 True）→ 单次 OCR 质量波动可能漏识别新商品，直接
@@ -2748,8 +2758,14 @@ class App(SettingsUIMixin):
                                 dlog("6.⚠ 本轮无新增但未确认到底，重试识别一次防误停")
                                 time.sleep(1.0)
                                 continue  # 重走本轮（scroll_round 不变，_retried 防死循环）
-                            dlog(f"6.⏹ 滚动{scroll_round}轮后无新增，结束")
-                            break
+                            if _under_target:
+                                dlog(f"6.⚠ 累计{len(round_items)}个 < 总数{int(_total_hint)}，继续滚动补抓")
+                                should_scroll = True
+                            else:
+                                dlog(f"6.⏹ 滚动{scroll_round}轮后无新增，结束")
+                                break
+                        elif _under_target:
+                            dlog(f"6.↻ 累计{len(round_items)}个 < 总数{int(_total_hint)}，继续滚动")
                         # 连续3轮页面内容无变化 → 已到底，结束（doubao 等模型每轮"新增"可能永远>0）
                         if len(_fps) >= 3 and _fps[-1] == _fps[-2] == _fps[-3]:
                             dlog("6.⏹ 连续3轮页面内容无变化，结束滚动")
