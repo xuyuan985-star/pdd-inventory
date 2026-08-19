@@ -2656,15 +2656,15 @@ class App(SettingsUIMixin):
                             table_bbox = loc.get('table')
                             ai_has_more = bool(loc.get('has_more', False))
                             _total_hint = loc.get('total_count')
-                            # v1.4.2 总数兜底：AI 定位没读到右下角"共有N条"时单独读一次
-                            # （右下角分页统计是权威总数基准，缺失则滚动无法按达标硬停）
-                            if not _total_hint:
-                                try:
-                                    _t2 = ai_read_total_count(sp2)
-                                    if _t2:
-                                        _total_hint = _t2
-                                except Exception:
-                                    pass
+                            # v1.4.2 总数权威化：AI 定位整屏读右下角小字不可靠（页面5个
+                            # 读成3，客户实测）。首轮用右下角分页栏特写重读官方"共有N条"
+                            # 覆盖——它是识别齐全/提前停止的权威基准（客户要求）
+                            try:
+                                _t3 = ai_read_total_count(sp2)
+                                if _t3:
+                                    _total_hint = _t3
+                            except Exception:
+                                pass
                             _row_bboxes = loc.get('rows')
                             if ai_has_more:
                                 dlog(f"6.AI检测到还有更多商品，自动滚动加载...")
@@ -2797,6 +2797,16 @@ class App(SettingsUIMixin):
                     # 滚动决策：
                     # - 首轮：AI has_more=True → 滚；AI 定位失败(未知)且本轮有商品 → 滚一次确认；AI 明确 False → 不滚
                     # - 后续轮：本轮有新商品 → 继续滚；连续无新增 → 结束（保险）
+                    # v1.4.2 官方总数权威硬停：累计识别量 >= 右下角"共有N条" → 识别齐全，
+                    # 立即结束滚动（不再靠"无新增/重试撞"来判定结没结束——客户要求直接用
+                    # 官方实际数据对比确认）。N 来自右下角分页栏特写，权威可信。
+                    try:
+                        if (round_items and _total_hint
+                                and len(round_items) >= int(_total_hint)):
+                            dlog(f"6.✓ 累计{len(round_items)}个 >= 页面总数{int(_total_hint)}，识别齐全，结束滚动")
+                            break
+                    except (TypeError, ValueError):
+                        pass
                     if scroll_round == 0:
                         if ai_has_more is False:
                             dlog("6.✓ AI确认表格已到底，无需滚动")

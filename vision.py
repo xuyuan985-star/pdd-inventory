@@ -411,16 +411,41 @@ def _locate_elements_once(screenshot_path: str = None) -> dict:
 
 
 def ai_read_total_count(screenshot_path: str = None) -> int:
-    """读页面统计信息里的商品总条数（如 '共 3 条' → 3），失败返回 None。
+    """读页面右下角分页栏的商品总条数（如 '共有 9 条' → 9），失败返回 None。
 
-    用于省份开始前确认应有商品数量，滚动结束后与实际识别量对比
-    （防豆包乱编导致数量虚增 / 漏识别）。单次调用，成本低。
+    v1.4.2 特写化：右下角分页栏裁剪放大识别——整屏压缩到 1280 后右下角小字
+    糊成一团（实测页面5个读成3），特写放大后才是权威总数（客户要求：直接抓
+    官方真实数据对比，别靠重试撞）。右下角横带放大 2x + q95，读"共有N条"。
     """
-    img_b64, _, _ = _load_screenshot_b64(screenshot_path)
+    img_b64 = None
+    try:
+        from PIL import Image as PILImg
+        import io as _io, base64 as _b64
+        img = PILImg.open(screenshot_path) if screenshot_path else None
+        if img is not None:
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            w, h = img.size
+            # 右下角分页栏：宽度右侧 55%，高度底部 12%（含"共有N条/每页[N]条"）
+            left = max(0, int(w * 0.45))
+            top = max(0, int(h * 0.84))
+            right = min(w, int(w * 0.99))
+            bottom = min(h, int(h * 0.99))
+            if right - left >= 80 and bottom - top >= 24:
+                img = img.crop((left, top, right, bottom))
+                img = img.resize((img.size[0] * 2, img.size[1] * 2), PILImg.LANCZOS)
+                buf = _io.BytesIO()
+                img.save(buf, format='JPEG', quality=95)
+                img_b64 = _b64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        pass
     if not img_b64:
-        return None
-    prompt = ('识别这张PDD商家后台「订货管理」页面底部统计信息里的商品总条数'
-              '（如 "共 3 条" → 3，"共 128 条" → 128）。只输出数字，找不到输出 0。')
+        img_b64, _, _ = _load_screenshot_b64(screenshot_path)  # fallback 整屏
+        if not img_b64:
+            return None
+    prompt = ('识别这张截图右下角分页栏中的商品总条数。格式如 "共有 9 条" → 9、'
+              '"共 128 条" → 128、"总共 5 条" → 5。忽略每页条数下拉框（如"每页10条"）。'
+              '只输出数字，找不到输出 0。')
     try:
         content = _call_vision_api(img_b64, prompt, max_tokens=16)
         import re as _re
