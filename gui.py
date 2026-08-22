@@ -1640,10 +1640,24 @@ class App(SettingsUIMixin):
         self.tree.tag_configure('warning', background=self.C_YELLOW_BG)
     
     def _save_regions(self):
-        import json
-        path = os.path.join(get_base_dir(), 'regions.json')
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(self.regions, f, ensure_ascii=False, indent=2)
+        import json, os as _os, time as _t
+        path = _os.path.join(get_base_dir(), 'regions.json')
+        # v1.4.4（dsh 报告 #5）：原子写——旧实现直接 open('w') 覆盖，崩溃/断电会损坏 regions.json。
+        # 与 Config 同一模式：临时文件 + os.replace（Windows 原子替换），失败留原文件。
+        _dir = _os.path.dirname(path) or '.'
+        _tmp = _os.path.join(_dir, f'regions.json.tmp{_t.time()}')
+        try:
+            with open(_tmp, 'w', encoding='utf-8') as f:
+                json.dump(self.regions, f, ensure_ascii=False, indent=2)
+                f.flush()
+                _os.fsync(f.fileno()) if _os.name != 'nt' else None
+            _os.replace(_tmp, path)
+        except Exception:
+            try:
+                _os.remove(_tmp)
+            except Exception:
+                pass
+            raise
     
     def _get_shipping(self, region, product_name):
         """获取某个地区某个商品的运输天数，未设置则默认 3 天"""
@@ -2238,6 +2252,14 @@ class App(SettingsUIMixin):
         
         self.win.after(0, self.win.iconify); time.sleep(1.5)
         self._batch_stop.clear()
+        # v1.4.4（dsh 报告 #1）：熔断标志跨批量复位——_api_fatal 置位后没有任何清零点，
+        # 一次批量额度耗尽会让同一进程后续所有批量永久熔断（换 key 也不恢复）。
+        # 批量开始清零：该批内部熔断语义保留，新一批从头可用。
+        try:
+            from ocr import _api_fatal as _af
+            _af['flag'] = False
+        except Exception:
+            pass
         # 任务列表：每个省份一个任务（不填仓库，滚动加载识别全部商品，仓库信息来自 OCR 仓库列）
         tasks = list(regions)
         total = len(tasks); success = 0; total_items = 0
