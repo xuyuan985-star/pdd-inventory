@@ -278,6 +278,129 @@ class TestUpdaterRegression(unittest.TestCase):
         out2 = m.merge_verify_items([dict(i) for i in items2], [dict(v) for v in verify])
         self.assertEqual(out2[0].get('stock'), '500', '真空缺应补全')
 
+    def test_deleted_files_applied_on_finalize(self):
+        """P2-4（bug hunt F15/R1）：deleted-files.txt 删除生效——do_finalize 覆盖成功后
+        目标端旧模板/资源被删；且删除发生在覆盖成功之后（覆盖中途失败时旧文件不删，回滚完整）。"""
+        import importlib.util, tempfile, shutil, zipfile
+        spec = importlib.util.spec_from_file_location('pdd_updater_df', os.path.join(HERE, 'updater.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        tmp = tempfile.mkdtemp()
+        try:
+            appdir = os.path.join(tmp, 'PDD EZ')
+            os.makedirs(os.path.join(appdir, '_internal'), exist_ok=True)
+            with open(os.path.join(appdir, 'PDD EZ.exe'), 'wb') as f:
+                f.write(b'old')
+            # 目标端有一个要被删除的旧模板
+            os.makedirs(os.path.join(appdir, 'templates'), exist_ok=True)
+            with open(os.path.join(appdir, 'templates', 'stale.csv'), 'w', encoding='utf-8') as f:
+                f.write('stale')
+            # 构造更新包：新 exe + deleted-files.txt（声明删 templates/stale.csv）
+            stage = os.path.join(tmp, 'stage')
+            os.makedirs(os.path.join(stage, 'PDD EZ', '_internal'), exist_ok=True)
+            with open(os.path.join(stage, 'PDD EZ', 'PDD EZ.exe'), 'wb') as f:
+                f.write(b'new')
+            with open(os.path.join(stage, 'PDD EZ', 'deleted-files.txt'), 'w', encoding='utf-8') as f:
+                f.write('templates/stale.csv\n')
+            zip_path = os.path.join(tmp, 'upd.zip')
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                for root, _, files in os.walk(os.path.join(stage, 'PDD EZ')):
+                    for fn in files:
+                        fp = os.path.join(root, fn)
+                        zf.write(fp, os.path.relpath(fp, stage))
+            rc = m.do_finalize(zip_path, os.path.join(tmp, 'ex'), appdir,
+                               wait_pid=0, target_main=os.path.join(appdir, 'PDD EZ.exe'))
+            self.assertEqual(rc, 0, 'finalize 应返回 0')
+            with open(os.path.join(appdir, 'PDD EZ.exe'), 'rb') as f:
+                self.assertEqual(f.read(), b'new')
+            self.assertFalse(os.path.exists(os.path.join(appdir, 'templates', 'stale.csv')),
+                             '删除清单中的旧模板应在覆盖成功后删除')
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_deleted_files_whitelist_blocks_unsafe(self):
+        """P2-4（bug hunt F15 白名单）：_apply_deleted_files 拒绝 exe/dll/穿越路径/绝对路径；
+        白名单外的任意文件绝不删。"""
+        import importlib.util, tempfile, shutil
+        spec = importlib.util.spec_from_file_location('pdd_updater_dfw', os.path.join(HERE, 'updater.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        tmp = tempfile.mkdtemp()
+        try:
+            extracted = os.path.join(tmp, 'ex')
+            target = os.path.join(tmp, 'target')
+            os.makedirs(extracted)
+            os.makedirs(target)
+            with open(os.path.join(extracted, 'deleted-files.txt'), 'w', encoding='utf-8') as f:
+                f.write('..\\escape.txt\n')          # 穿越
+                f.write('templates/legit.csv\n')     # 白名单内
+                f.write('PDD EZ.exe\n')              # exe 拒绝
+                f.write('C:/absolute.txt\n')         # 绝对路径拒绝
+                f.write('random_other.txt\n')        # 白名单外
+            with open(os.path.join(target, 'escape.txt'), 'w') as f:
+                f.write('x')
+            os.makedirs(os.path.join(target, 'templates'))
+            with open(os.path.join(target, 'templates', 'legit.csv'), 'w') as f:
+                f.write('x')
+            with open(os.path.join(target, 'random_other.txt'), 'w') as f:
+                f.write('x')
+            n = m._apply_deleted_files(extracted, target)
+            # 只该删 legit.csv（白名单内）；escape.txt/random_other.txt 保留
+            self.assertEqual(n, 1, f'应恰好删除 1 个白名单文件，实际 {n}')
+            self.assertFalse(os.path.exists(os.path.join(target, 'templates', 'legit.csv')), '白名单文件应删除')
+            self.assertTrue(os.path.exists(os.path.join(target, 'escape.txt')), '穿越路径不得删除')
+            self.assertTrue(os.path.exists(os.path.join(target, 'random_other.txt')), '白名单外不得删除')
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_version_comparison_semantics(self):
+        """P2-4（bug hunt F19）：内联版本比较逻辑——远端 < 本地时不应更新（rc 语义为'无需更新'）。
+        直接复算 updater 内联 _version_newer 的算法（无法 import 闭包，按同源逻辑断言）。"""
+        def _version_newer(remote, local):
+            def _p(v):
+                v = str(v).lstrip('vV')
+                return [int(x) for x in v.split('.') if x.isdigit()]
+            r, l = _p(remote), _p(local)
+            n = max(len(r), len(l))
+            return (r + [0] * (n - len(r))) > (l + [0] * (n - len(l)))
+        # 远端 < 本地 → 不更新（false）；远端 > 本地 → 更新（true）；相等 → 不更新
+        self.assertFalse(_version_newer('v1.4.5', 'v1.4.6'), '远端<本地应不更新')
+        self.assertTrue(_version_newer('v1.4.7', 'v1.4.6'), '远端>本地应更新')
+        self.assertFalse(_version_newer('v1.4.6', 'v1.4.6'), '相同版本应不更新')
+        # 小版本跨级：1.4.10 > 1.4.9
+        self.assertTrue(_version_newer('v1.4.10', 'v1.4.9'), '10>9 应按数字比较')
+        self.assertFalse(_version_newer('v1.4.5', 'v1.4.10'), '5<10 应按数字比较')
+        # 版本缺段按 0 补齐
+        self.assertFalse(_version_newer('v1.4', 'v1.4.0'), '缺段补 0 相等')
+        self.assertTrue(_version_newer('v1.5', 'v1.4.9'), '次版本优先于补段')
+
+    def test_do_replace_oserror_rolls_back(self):
+        """P2-4（bug hunt F22）：copy2 抛 OSError（磁盘满等）时 target 会恢复 .old，
+        src 保存为 .new——主 exe 不缺失。回归旧 bug：磁盘满时主 exe 被删且无备份。"""
+        import importlib.util, tempfile, shutil, os
+        from unittest.mock import patch
+        _real_copy2 = shutil.copy2
+        spec = importlib.util.spec_from_file_location('pdd_updater_f22', os.path.join(HERE, 'updater.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        tmp = tempfile.mkdtemp()
+        try:
+            target = os.path.join(tmp, 'PDD EZ.exe')
+            src = os.path.join(tmp, 'new_pkg.exe')
+            with open(target, 'wb') as f:
+                f.write(b'old_exe')
+            with open(src, 'wb') as f:
+                f.write(b'new_bin')
+            with patch('shutil.copy2', side_effect=lambda src2, dst2: (_ for _ in ()).throw(
+                    OSError(28, 'No space left on device')) if dst2.endswith('.exe') else _real_copy2(src2, dst2)):
+                m._do_replace(src, target)
+            # 磁盘满：target 应保留原内容（回滚），src 另存为 .new
+            with open(target, 'rb') as f:
+                self.assertEqual(f.read(), b'old_exe', '失败后 target 应恢复原文件')
+            self.assertTrue(os.path.exists(target + '.new'), '源应保留为 .new 供手动处理')
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == '__main__':
     unittest.main()

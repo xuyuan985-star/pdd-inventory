@@ -26,7 +26,7 @@ except Exception:
 
 # REPO 常量已移至 github_api.py（get_latest_release/fetch 统一走该模块）
 # 固定 exe 名（v1.4+ 取消版本号命名，版本号只在程序内展示——与 March7th 固定名设计一致）。
-# 与 utils.VERSION 保持同步（当前 v1.4.5）；GUI 调用更新器时始终传 --target，此值仅作默认。
+# 与 utils.VERSION 保持同步（当前 v1.4.6）；GUI 调用更新器时始终传 --target，此值仅作默认。
 EXE_NAME = "PDD EZ.exe"
 
 # ── 进度上报 ─────────────────────────────────────────────────────────
@@ -655,12 +655,6 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
         print(f"[更新器] 待覆盖 {len(files)} 个文件")
         log.info(f"待覆盖 {len(files)} 个文件")
 
-        # 3.5 删除清单（v1.4.5 bug hunt F15）：包内 deleted-files.txt = 自上版本起删除的
-        # 运行时资源/模板/文档，目标端同步删除，防旧 dll/旧模板/旧文档永久残留
-        # （验收回归：_extract_zip 返回的 extracted 已是 PDD EZ 子目录，此前再拼
-        # 'PDD EZ' 双前缀清单永不命中；改为 extracted 直连 + fallback）
-        _apply_deleted_files(extracted, target_dir)
-
         # 4) 预检测占用（自身文件除外，后面单独处理）
         locked = _check_target_files_locked(files)
         if locked:
@@ -681,6 +675,11 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             log.error(msg)
             _write_progress("error", msg, error=msg)
             return 1
+
+        # 3.5 删除清单（v1.4.5 bug hunt F15，R1:置于覆盖成功之后）：包内 deleted-files.txt =
+        # 自上版本起删除的运行时资源/模板/文档，目标端同步删除，防旧 dll/旧模板/旧文档永久残留。
+        # 覆盖成功后再删，避免覆盖失败时旧模板/资源已被删、更新又不生效的中间态半损坏。
+        _apply_deleted_files(extracted, target_dir)
 
         # 清理：删除更新包 + 解压目录（失败不阻断，下次启动自动清）
         try:
@@ -998,8 +997,6 @@ def main():
                         dest = os.path.join(target_dir, rel)
                         if _needs_overwrite(src, dest):
                             files.append((src, dest))
-                # v1.4.5 bug hunt F15：auto 模式同样应用删除清单（此前仅 finalize 有）
-                _apply_deleted_files(new_dir, target_dir)
 
                 # 预检测占用（自身文件除外）
                 locked = _check_target_files_locked(files)
@@ -1018,6 +1015,8 @@ def main():
                     _write_progress("error", f"覆盖失败：{_names}", error="cover")
                     _pause()
                     return 1
+                # v1.4.5 bug hunt F15（R1:置于覆盖成功之后）：auto 模式同样应用删除清单
+                _apply_deleted_files(new_dir, target_dir)
                 print(f"[更新器] 已更新: {target_dir}")
                 log.info(f"auto 已更新: {target_dir}")
 
@@ -1112,7 +1111,7 @@ def _do_replace(src, target):
         if os.path.exists(old):
             try:
                 os.remove(old)
-            except PermissionError:
+            except (PermissionError, OSError):  # v1.4.6 bug hunt F22：磁盘满等 OSError 也走延迟删除
                 import ctypes
                 ok = ctypes.windll.kernel32.MoveFileExW(old, None, 4)
                 if not ok:
@@ -1121,7 +1120,7 @@ def _do_replace(src, target):
     try:
         shutil.copy2(src, target)
         print(f"[更新器] 已更新: {target}")
-    except PermissionError:
+    except (PermissionError, OSError):  # v1.4.6 bug hunt F22：磁盘满等 OSError 同样触发回滚，防主 exe 缺失
         # 覆盖失败：回滚旧文件（target 已被改名 .old），并保留 .new 供手动处理
         try:
             os.replace(target + ".old", target)
@@ -1139,7 +1138,7 @@ def _do_replace(src, target):
     if sys.platform == 'win32' and os.path.exists(target + ".old"):
         try:
             os.remove(target + ".old")
-        except PermissionError:
+        except (PermissionError, OSError):
             import ctypes
             ok = ctypes.windll.kernel32.MoveFileExW(target + ".old", None, 4)
             if not ok:

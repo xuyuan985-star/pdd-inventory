@@ -379,6 +379,7 @@ class App(SettingsUIMixin):
         self._wh_filter = '全部仓库'       # 结果表"仓库筛选"（来自 OCR 仓库信息列）
         self._suppress_auto_append = False  # 清空输入时临时禁用自动加行
         self._batch_stop = threading.Event()  # 紧急停止信号
+        self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：批量运行中标志（防双批并发）
         self.status_text = tk.StringVar(self.win, value="就绪｜确认数据后导出，识别结果表格可直接编辑，右键行可删除条目")
         self.regions = self._load_regions()
         # 当前地区由截图识别后确定；初始不预设配置表第一个地区（云南是时效配置，不是当前地区）
@@ -1180,7 +1181,7 @@ class App(SettingsUIMixin):
         
         def _do_download():
             """后台线程：拉取资产 → 流式下载 → SHA256 校验 → 更新状态"""
-            import subprocess, tempfile, json as _json, hashlib as _hashlib
+            import subprocess, tempfile, json as _json, hashlib as _hashlib, re as _re
             from urllib.request import urlopen as _urlopen, Request as _Request
             
             class _CancelledDownload(Exception):
@@ -1268,6 +1269,8 @@ class App(SettingsUIMixin):
                                     last_pct = pct
                                     self.win.after(0, lambda p=pct, d=downloaded, t=total:
                                                    _set_status(f"正在下载 {asset_name} ({d//1024//1024}MB/{t//1024//1024}MB)...", p))
+                    # v1.4.6（bug hunt F13 纵深）：记录实收字节数供大小终检（下载结束后）
+                    state["downloaded_bytes"] = downloaded
                 
                 self.win.after(0, lambda: _set_status(f"正在下载 {asset_name}...", 0))
                 try:
@@ -1312,6 +1315,11 @@ class App(SettingsUIMixin):
                                 with open(sha_path, 'wb') as f:
                                     f.write(resp.read())
                         expected = open(sha_path, 'r').read().strip().split()[0]
+                        # v1.4.6（bug hunt F13 纵深）：sha 值必须是 64 位 hex（防 sha 文件是垃圾/非 hash 文本）
+                        if not _re.fullmatch(r'[0-9a-fA-F]{64}', expected):
+                            os.remove(dest)
+                            self.win.after(0, lambda: _fail("SHA256 校验文件格式异常，已拒绝安装（安全策略）"))
+                            return
                         h = _hashlib.sha256()
                         with open(dest, 'rb') as f:
                             while True:
@@ -1333,6 +1341,13 @@ class App(SettingsUIMixin):
                         self.win.after(0, lambda _e=e: _fail("SHA256 校验文件下载失败，已拒绝安装（安全策略）", str(_e)))
                         return
                 
+                # v1.4.6（bug hunt F13 纵深）：声明大小 vs 实收大小终检（GitHub API size vs 下载字节数）
+                _real_size = state.get("downloaded_bytes", 0)
+                if total and _real_size and abs(_real_size - total) > 0:
+                    os.remove(dest)
+                    self.win.after(0, lambda: _fail(f"下载完整性异常（实收 {_real_size}B ≠ 声明 {total}B），已拒绝安装"))
+                    return
+
                 state["downloaded_zip"] = dest
                 state["sha_ok"] = True
                 self.win.after(0, lambda: _set_status("下载完成，准备安装...", 100))
@@ -2122,6 +2137,10 @@ class App(SettingsUIMixin):
     
     def _batch_scan(self):
         """批量识别：对已知地区逐个引导截图识别"""
+        # v1.4.6 bug hunt F24 重入守卫：批量运行中禁止再开批量对话框（双批并发守卫主入口）
+        if getattr(self, '_batch_running', False):
+            messagebox.showinfo("批量识别", "批量任务正在进行中，请先等待完成或停止后再试")
+            return
         known = sorted(self.regions.keys())
         if not known:
             messagebox.showinfo("批量识别", "暂无知地区，请先手动「实时截图」识别一次")
@@ -2179,6 +2198,10 @@ class App(SettingsUIMixin):
             cb.bind("<MouseWheel>", _on_mousewheel)
         
         def start_batch():
+            # v1.4.6 bug hunt F24 重入守卫：批量运行中禁止再启（双批会互相覆盖取消钩子/物理争抢）
+            if getattr(self, '_batch_running', False):
+                messagebox.showwarning("批量识别", "已有批量任务正在进行，请先等待完成或停止", parent=dlg)
+                return
             selected = [r for r, v in vars_map.items() if v.get()]
             if not selected:
                 messagebox.showwarning("未选择", "请至少选择一个地区", parent=dlg)
@@ -2209,6 +2232,8 @@ class App(SettingsUIMixin):
                 v1.4.2 紧急停止：批量期间把取消钩子注入 ocr/vision 请求层，
                 F9 后下一个 API 请求点即中断（BatchCancelled/VisionCancelled），
                 不再等当前 30~90s 请求跑完。"""
+                # v1.4.6 bug hunt F24 重入守卫：置位批量运行标志（线程内置位，start_batch 已做重复检查）
+                self._batch_running = True
                 # v1.4.5（bug hunt F27）：_batch_stop.clear() 原在 _run_batch_sequence 内、
                 # 钩子注入之后执行——启动早期（注入后 clear 前）按 F9 会被清掉；
                 # 把清零点移到钩子注入【之前】，F9 从注入一刻起立即生效
@@ -2239,11 +2264,14 @@ class App(SettingsUIMixin):
                                                    if getattr(self, 'live_btn', None) else None))
                     except Exception:
                         pass  # 主窗口可能已销毁/关闭，UI 恢复失败无妨（程序正在退出）
+                    self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：异常路径主动清除，防卡死
                 finally:
                     try:
                         _ocr_cc(None); _vis_cc(None)
                     except Exception:
                         pass
+                    # _batch_running 标志不在线程 finally 清除（producer 线程仍在跑），
+                    # 交由 _finish_batch 在 UI 真正收尾时清除
             threading.Thread(target=_batch_thread_wrapper, daemon=True).start()
         
         _sb = self._mk_btn(bottom_frame, "开始批量识别", start_batch, kind='primary',
@@ -3187,6 +3215,7 @@ class App(SettingsUIMixin):
                 self.live_btn.configure(state='normal')  # v1.4.5 bug hunt F24
         except Exception:
             pass
+        self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：UI 真正收尾时清除标志
         self.status_text.set("就绪 — 批量识别完成")
         if success > 0:
             messagebox.showinfo("批量识别完成", f"成功 {success}/{total} 地区\n合计 {total_items} 商品")

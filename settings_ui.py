@@ -416,7 +416,11 @@ class SettingsUIMixin:
                 self.regions[region] = {}
             for prod, spin in spinboxes.items():
                 try:
-                    self.regions[region][prod] = int(spin.get())
+                    # v1.4.6（bug hunt L8/L14 clamp）：readonly 框可输入任意文本/小数/越界值，
+                    # 收紧为 1..30 整数（int(float(s)) 容忍 "3.0"、去空白；越界/clamp 兜底 3）
+                    _raw = str(spin.get()).strip()
+                    _val = int(float(_raw)) if _raw.replace('.', '', 1).isdigit() else -1
+                    self.regions[region][prod] = 3 if not (1 <= _val <= 30) else _val
                 except ValueError:
                     self.regions[region][prod] = 3
             self._save_regions()
@@ -439,8 +443,10 @@ class SettingsUIMixin:
                 messagebox.showwarning("无商品", "该地区暂无商品可设置", parent=self.win)
                 return
             for prod, spin in spinboxes.items():
+                # v1.4.6（bug hunt L8 clamp）：批量设置同样收紧到 1..30
+                _days = 3 if not (1 <= int(days) <= 30) else int(days)
                 spin.delete(0, "end")
-                spin.insert(0, str(days))
+                spin.insert(0, str(_days))
             self.status_text.set(f"已将所有商品运输时效设为 {days} 天（记得点保存）")
 
         self._mk_btn(btn_frame, "全部设为 3 天", lambda: set_all_days(3), kind='ghost',
@@ -575,6 +581,11 @@ class SettingsUIMixin:
             v1.4.5（bug hunt F28）：AI 多采样（每轮最长 180s）移入 worker 线程，弱网不冻结
             主线程；_minimize/恢复/status 等 Tk 交互仍在主线程（after 回填）。"""
             try:
+                # v1.4.6（fix-review C11 尾项）：定位运行中重入守卫，连点只跑一次
+                if getattr(self, '_ai_locating', False):
+                    ai_status_lbl.configure(text="定位进行中，请等待完成...")
+                    return
+                self._ai_locating = True
                 import os  # v1.4.5（bug hunt F3）：此前无模块级 import os，此处裸 os 必 NameError（被下方 except 吞成"定位失败"）
                 import tempfile, threading
                 import pyautogui as pg
@@ -595,6 +606,7 @@ class SettingsUIMixin:
 
                 def _finish(result, pos, err=''):
                     try:
+                        self._ai_locating = False  # v1.4.6 C11：定位结束清除标志（成功/失败统一）
                         _restore_windows(_hidden)
                         _bring_browser_front()
                         if not result:
@@ -640,6 +652,7 @@ class SettingsUIMixin:
                 threading.Thread(target=_work, daemon=True).start()
             except Exception as e:
                 try:
+                    self._ai_locating = False  # v1.4.6 C11：截图/前置阶段异常，worker 未启动，也须清除标志
                     messagebox.showwarning("定位失败", str(e)[:300])
                 except Exception:
                     pass

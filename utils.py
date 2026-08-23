@@ -4,7 +4,7 @@ PDD EZ — 公共工具函数
 """
 import os, sys, json, threading
 
-VERSION = "v1.4.5"
+VERSION = "v1.4.6"
 
 
 def version_newer(remote: str, local: str) -> bool:
@@ -159,7 +159,10 @@ class Config:
     @staticmethod
     def load():
         """读取 settings.json，与模板递归合并（用户配置优先，缺字段补默认）。
-        v1.4.2：mtime 缓存——文件未变化时直接返回缓存，批量识别性能优化。"""
+        v1.4.2：mtime 缓存——文件未变化时直接返回缓存，批量识别性能优化。
+        v1.4.6（bug hunt F20）：返回缓存 dict 的【深拷贝】——调用方任意修改/嵌套修改
+        都不再污染主缓存，避免一轮 `self.regions[region][prod]=...` 原地写被后续轮读到脏数据。"""
+        import copy as _copy
         sf = os.path.join(get_base_dir(), 'settings.json')
         try:
             _mtime = os.path.getmtime(sf)
@@ -167,7 +170,7 @@ class Config:
             _mtime = -1
         _c = Config._load_cache
         if _c['mtime'] == _mtime and _c['data'] is not None:
-            return _c['data']
+            return _copy.deepcopy(_c['data'])
         data = {}
         _parse_fail = False
         try:
@@ -180,6 +183,23 @@ class Config:
         if not isinstance(data, dict):
             data = {}
             _parse_fail = True
+        # v1.4.6（fix-review C12）：损坏配置自动处置——改名 .corrupt 防下次仍读到损坏文件，
+        # 并从 save 写入的 .bak 恢复上次好配置；备份也坏则回落到模板默认。
+        if _parse_fail:
+            try:
+                if os.path.exists(sf):
+                    _corrupt = sf + '.corrupt'
+                    if os.path.exists(_corrupt):
+                        os.remove(_corrupt)
+                    os.replace(sf, _corrupt)
+                if os.path.exists(sf + '.bak'):
+                    with open(sf + '.bak', 'r', encoding='utf-8') as _f:
+                        _bak_data = json.load(_f)
+                    if isinstance(_bak_data, dict) and _bak_data:
+                        data = _bak_data
+                        _parse_fail = False
+            except Exception:
+                pass
         # 模板合并：补全缺失字段（损坏/解析失败时不写回——保留原文件供人工抢救，
         # 不再静默覆盖成模板默认，避免用户数据从主文件消失）
         tpl = Config._load_template()
@@ -193,10 +213,10 @@ class Config:
                     pass
             Config._load_cache['mtime'] = _mtime
             Config._load_cache['data'] = merged
-            return merged
+            return _copy.deepcopy(merged)
         Config._load_cache['mtime'] = _mtime
         Config._load_cache['data'] = data
-        return data
+        return _copy.deepcopy(data)
 
     @staticmethod
     def save(data: dict):

@@ -464,7 +464,7 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
               '"共 128 条" → 128、"总共 5 条" → 5。忽略每页条数下拉框（如"每页10条"）。'
               '只输出数字，找不到输出 0。')
     try:
-        content = _call_vision_api(img_b64, prompt, max_tokens=16)
+        content = _call_vision_api(img_b64, prompt, max_tokens=16, timeout=180)
         return _parse_total_count(content)
     except VisionCancelled:
         raise  # v1.4.2 紧急停止：取消异常透传
