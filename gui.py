@@ -190,7 +190,11 @@ class _CanvasBtn:
         c = self._colors
         hov = c.get('bg_hover')
         if hov and self.poly is not None:
+            # 悬浮：底色变化 + 边缘加亮（edge_hover 做层次/悬浮感）
             self.canvas.itemconfigure(self.poly, fill=hov)
+            _eh = c.get('edge_hover') or c.get('edge')
+            if _eh:
+                self.canvas.itemconfigure(self.poly, outline=_eh)
         # 文字按钮：hover 下划线略粗
         if getattr(self, 'underline_item', None) is not None:
             try:
@@ -207,21 +211,21 @@ class _CanvasBtn:
 
 class App(SettingsUIMixin):
     # Design system — New Minimalism / Flat Design
-    C_PRIMARY = '#111111'      # 近黑（主标题/文字）
-    C_SECONDARY = '#333333'    # 深灰（次级文字）
-    C_ACCENT = '#FFE600'       # 亮柠檬黄（accent / 高亮块）
+    C_PRIMARY = '#161616'      # 近黑（主标题/文字）
+    C_SECONDARY = '#3A3A3A'    # 深灰（次级文字）
+    C_ACCENT = '#FDFC05'       # 亮柠黄（accent / 高亮块，对齐图2/图3）
     C_BG = '#FFFFFF'           # 纯白背景
-    C_SURFACE = '#F7F7F2'      # 米白浅灰（卡片/底纹）
-    C_TEXT = '#222222'         # 深灰正文（避免死黑）
+    C_SURFACE = '#F6F6F1'      # 米白浅灰（卡片/底纹）
+    C_TEXT = '#1E1E1E'         # 深灰正文（避免死黑）
     C_MUTED = '#6B6B6B'        # 中灰
-    C_BORDER = '#EAEAEA'       # 浅灰细分割线（容器不画黑框）
+    C_BORDER = '#ECECEC'       # 浅灰细分割线（容器不画黑框）
     C_RED = '#DC2626'
     C_BTN_BLUE = '#1E88E5'     # 主操作按钮（亮蓝实心）
     C_CARD_HDR = '#1F1F1F'     # 卡片标题栏（深炭灰）
-    C_YELLOW_BG = '#FFE600'    # 亮柠檬黄高亮块（配黑字）
+    C_YELLOW_BG = '#FDFC05'    # 亮柠黄高亮块（配黑字）
     C_GREEN_BG = '#E8F5E9'
     C_RED_BG = '#FFEBEE'
-    C_BLUE_LIGHT = '#FFF3B0'   # 浅黄（导航按钮/标签底，机能风）
+    C_BLUE_LIGHT = '#FCFBD2'   # 浅黄（导航按钮/标签底，机能风）
     FONT = ('Microsoft YaHei UI', 9)
     FONT_BOLD = ('Microsoft YaHei UI', 9, 'bold')
     FONT_TITLE = ('Microsoft YaHei UI', 14, 'bold')
@@ -645,6 +649,18 @@ class App(SettingsUIMixin):
                                  outline='', tags='deco')
             _deco.create_polygon(w - 230, 0, w - 30, 0, w - 230, 66, fill=tb.get('block2', '#333333'),
                                  outline='', tags='deco')
+            # 彩条（v1.4.6 终末地）：左侧标题下一条斜向明暗渐变黄 + 橙点缀（图3机能感）
+            _rb = tb.get('ribbon_bright', '#FFFF3D')
+            _rm = tb.get('ribbon_mid', '#F5E500')
+            _rd = tb.get('ribbon_dark', '#C9BF00')
+            _re = tb.get('ribbon_edge', '#FF9800')
+            # 渐变主条：多层四边斜切细条叠出明→暗
+            for i, (prog, col) in enumerate([(0.0, _rb), (0.35, _rm), (0.6, _rm), (0.85, _rd)]):
+                yy = 58 + i * 2
+                _deco.create_polygon(22, yy + 4, 120 + prog * 60, yy + 4, 120 + prog * 60, yy + 6, 22, yy + 6,
+                                     fill=col, outline='', tags='deco')
+            # 橙色小点缀（彩条尾部一枚 accent 色块）
+            _deco.create_polygon(240, 58, 262, 58, 258, 66, 240, 66, fill=_re, outline='', tags='deco')
             _deco.create_line(22, 44, 420, 44, fill=tb.get('line', '#111111'), width=1, tags='deco')
             _deco.create_line(22, 48, 260, 48, fill=tb.get('line', '#111111'), width=1, tags='deco')
             _deco.create_polygon(w - 190, 10, w - 96, 10, w - 82, 24, w - 82, 32,
@@ -725,8 +741,9 @@ class App(SettingsUIMixin):
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
         self.main_paned.pack(fill="both", expand=True, padx=15, pady=(2, 15))
-        # 左侧导航栏
-        self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_BG)
+        # 左侧导航栏（v1.4.6 卡片化：浅灰衬底 + 细边框，导航项白卡浮其上）
+        self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_SURFACE,
+                                  highlightthickness=1, highlightbackground=self.C_BORDER)
         self.nav_frame._skip_theme = True  # 导航栏保持 C_SURFACE 区分色，主题切换不覆盖
         self.nav_frame.pack_propagate(False)
         self.nav_buttons = {}
@@ -934,11 +951,15 @@ class App(SettingsUIMixin):
 
     def _highlight_nav(self, page):
         for btn in self.nav_buttons.values():
+            # v1.4.6 终末地：侧边导航卡片化——选中项亮黄底黑字（机能风高亮），
+            # 未选中白底深灰字；文字色随主题 token
+            _active_bg = self.tc('nav.active_bg', '#F6F6F1')
+            _active_fg = self.tc('on_primary', '#FFFFFF')
             if getattr(btn, '_page', None) == page:
-                # 选中项：深炭黑背景高亮（参考站，不用黄竖线）
-                btn.configure(bg=self.C_CARD_HDR, fg="#FFFFFF")
+                # 选中项：亮黄底 + 黑字（黄 rail 高亮感），对齐图2选中态
+                btn.configure(bg=self.tc('nav.rail', '#FDFC05'), fg=self.tc('on_accent', '#161616'))
             else:
-                btn.configure(bg=self.C_BG, fg=self.C_TEXT)
+                btn.configure(bg=self.tc('nav.item_bg', '#FFFFFF'), fg=self.tc('nav.item_fg', '#1E1E1E'))
 
     def _show_page(self, page):
         if self._current_page:
