@@ -39,7 +39,9 @@ def _get_default_export_dir() -> str:
         if os.path.exists(sf):
             with open(sf, 'r', encoding='utf-8') as f:
                 s = json.load(f)
-                return s.get('export_path', os.path.join(os.path.expanduser('~'), 'Desktop'))
+                return os.path.expanduser(os.path.join('~', 'Desktop')) if not s.get('export_path') else s.get('export_path')
+                # v1.4.5（bug hunt F1）：未配置时模板把 export_path 写为 ""，旧代码 get(默认桌面) 因键存在
+                # 返回 '' → os.makedirs('') 崩溃；改为空串回退桌面
     except Exception:
         pass
     return os.path.join(os.path.expanduser('~'), 'Desktop')
@@ -138,12 +140,14 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
             for col in sel_cols:
                 if _name_col and col == _name_col:
                     v = p.get('name', '')
+                    # v1.4.5（bug hunt F4）：名称列不再剥噪——商品名含尾随数字/规格（如'商品A 500g'）合法，
+                    # 旧逻辑 strip_tail_noise 会把尾数字剥掉（'商品A 500'→'商品A'），与 GUI 显示不一致
                 else:
                     v = raw.get(col)
                     if v is None or v == '':
                         v = p.get(col, '')
-                if isinstance(v, str):
-                    v = strip_tail_noise(v)
+                    if isinstance(v, str):
+                        v = strip_tail_noise(v)  # 仅勾选文本列剥「查看地址/日期时间」词条噪音
                 vals.append(_sanitize_cell(v))
             vals += [p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
             for ci, v in enumerate(vals, 1):

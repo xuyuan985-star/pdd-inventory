@@ -26,7 +26,7 @@ except Exception:
 
 # REPO 常量已移至 github_api.py（get_latest_release/fetch 统一走该模块）
 # 固定 exe 名（v1.4+ 取消版本号命名，版本号只在程序内展示——与 March7th 固定名设计一致）。
-# 与 utils.VERSION 保持同步（当前 v1.4.3）；GUI 调用更新器时始终传 --target，此值仅作默认。
+# 与 utils.VERSION 保持同步（当前 v1.4.5）；GUI 调用更新器时始终传 --target，此值仅作默认。
 EXE_NAME = "PDD EZ.exe"
 
 # ── 进度上报 ─────────────────────────────────────────────────────────
@@ -231,17 +231,27 @@ def _is_file_locked(path: str) -> bool:
         # FILE_SHARE_NONE：任何其他句柄都算占用
         h = _kernel32.CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
                                   0, None, OPEN_EXISTING, 0, None)
-        if h and h != -1:  # INVALID_HANDLE_VALUE = -1
+        # v1.4.5（bug hunt F5）：restype=HANDLE 在 CPython 3.11 ctypes 下返回 int 而非对象
+        # （旧代码 `h and h != -1` 恒真误判"未占用"；上一版 `h.value` 对 int 抛异常落入
+        # 恒锁 fallback）。统一按整数判 INVALID_HANDLE_VALUE(0xFFFFFFFFFFFFFFFF/-1)/0。
+        try:
+            hv = int(h) if h is not None else -1
+            if hv > 0x7FFFFFFFFFFFFFFF:  # 负数包装（-1 作为无符号 64 位）
+                hv -= (1 << 64)
+        except Exception:
+            hv = -1
+        if hv != -1 and hv != 0:
             _kernel32.CloseHandle(h)
             return False
         return True
     except Exception:
-        # 非 Windows / ctypes 失败：回退 os.open 检测
+        # 非 Windows / ctypes 失败：回退 os.open 检测（O_RDWR 打开成功近似"可写"；
+        # 不用 O_EXCL——它会因文件已存在恒失败，反而永远误报锁定）
         try:
-            fd = os.open(path, os.O_RDWR | os.O_EXCL)
+            fd = os.open(path, os.O_RDWR)
             os.close(fd)
             return False
-        except OSError:
+        except (OSError, PermissionError):
             return True
 
 def _check_target_files_locked(files) -> list:
@@ -285,12 +295,28 @@ def _needs_overwrite(src: str, dest: str) -> bool:
         return True
 
 def _overwrite_files(files, progress_stage: str = "cover"):
-    """逐文件覆盖：os.replace 原子替换优先（同盘），失败 fallback copy2。
+    """逐文件覆盖：os.replace 备份旧文件 + copy2 落新文件；失败逆序回滚并中断
+    （v1.4.5 bug hunt F6：旧实现逐文件覆盖失败不回滚，程序目录留新旧混合版本）。
     返回 (ok, skipped_files)。"""
     total = len(files)
     completed = 0
     skipped = []
     created_dirs = set()
+    backed_up = []  # [(dest, backup)]
+
+    def _rollback(backups):
+        for dest, backup in reversed(backups):
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+            except OSError:
+                pass
+            try:
+                if os.path.exists(backup):
+                    os.replace(backup, dest)
+            except OSError:
+                print(f"[更新器] 回滚失败，请手动恢复 {backup} → {dest}")
+
     for src, dest in files:
         parent = os.path.dirname(dest)
         if parent and parent not in created_dirs:
@@ -300,24 +326,34 @@ def _overwrite_files(files, progress_stage: str = "cover"):
                 pass
             created_dirs.add(parent)
         try:
+            backup = None
             if os.path.exists(dest):
-                # 同盘优先 os.replace（原子），跨盘 fallback copy2
-                src_drive = os.path.normcase(os.path.splitdrive(os.path.abspath(src))[0])
-                dest_drive = os.path.normcase(os.path.splitdrive(os.path.abspath(dest))[0])
-                if src_drive == dest_drive:
+                backup = dest + '.old_upd'
+                if os.path.exists(backup):
                     try:
-                        os.replace(src, dest)
-                        completed += 1
-                        _emit_cover_progress(progress_stage, completed, total)
-                        continue
-                    except OSError:
+                        os.remove(backup)
+                    except Exception:
                         pass
+                os.replace(dest, backup)  # 原子挪走旧文件，留作回滚
+                backed_up.append((dest, backup))
             shutil.copy2(src, dest)
             completed += 1
             _emit_cover_progress(progress_stage, completed, total)
         except Exception as e:
             print(f"[更新器] 覆盖失败 {dest}: {e}")
+            if backed_up:
+                print(f"[更新器] 回滚已覆盖的 {len(backed_up)} 个文件…")
+            _rollback(backed_up)
+            skipped.extend(d for d, _ in backed_up)
+            backed_up.clear()
             skipped.append(dest)
+            break  # 事务失败，中断整批覆盖
+    # 全部成功：清理旧文件备份
+    for dest, backup in backed_up:
+        try:
+            os.remove(backup)
+        except Exception:
+            pass
     return len(skipped) == 0, skipped
 
 _last_cover_emit = [0]
@@ -413,16 +449,26 @@ def _pick_main_exe(target_dir: str) -> str:
 
 def _is_program_dir(target_dir: str) -> bool:
     """安全底线：target_dir 必须是 PDD EZ 程序目录。
-    判断（v1.4 审查收紧）：目录内必须有 PDD EZ 主 exe——
-    仅目录名以 'PDD EZ' 开头（如 C:\\PDD EZ Backup / D:\\PDD EZ Documents）
-    不再放行，防止整体替换覆盖到非程序目录。"""
+    判断（v1.4 审查收紧 + v1.4.5 bug hunt F14）：目录内必须有 PDD EZ 主 exe，
+    且必须有 PyInstaller onedir 的 _internal 目录——仅名字像（C:\\PDD EZ Backup、
+    含 PDD EZ_v1.4.3.exe 的普通目录）不再放行，防止整体替换覆盖到非程序目录。"""
     if not os.path.isdir(target_dir):
         return False
-    _td_has_main = any(
-        f.lower().startswith('pdd ez') and f.lower().endswith('.exe') and 'updater' not in f.lower()
-        for f in os.listdir(target_dir)
-    )
-    return _td_has_main
+    try:
+        _names = os.listdir(target_dir)
+    except Exception:
+        return False
+    _has_main = False
+    for f in _names:
+        fl = f.lower()
+        if not (fl.startswith('pdd ez') and fl.endswith('.exe') and 'updater' not in fl):
+            continue
+        # 固定名 PDD EZ.exe（v1.4+ 主程序固定名）或带版本号的 PDD EZ_vX.Y(...).exe
+        if fl == 'pdd ez.exe' or re.search(r'pdd ez[ _]?v\d', fl):
+            _has_main = True
+            break
+    _has_internal = os.path.isdir(os.path.join(target_dir, '_internal'))
+    return _has_main and _has_internal
 
 
 def _ensure_self_renamed(files) -> bool:
@@ -571,6 +617,36 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
                     files.append((src, dest))
         print(f"[更新器] 待覆盖 {len(files)} 个文件")
         log.info(f"待覆盖 {len(files)} 个文件")
+
+        # 3.5 删除清单（v1.4.5 bug hunt F15）：包内 deleted-files.txt = 自上版本起删除的
+        # 运行时资源/模板/文档，目标端同步删除，防旧 dll/旧模板/旧文档永久残留
+        _del_spec = os.path.join(extracted, 'PDD EZ', 'deleted-files.txt')
+        if os.path.exists(_del_spec):
+            try:
+                with open(_del_spec, encoding='utf-8') as _f:
+                    _deleted = [l.strip() for l in _f if l.strip()]
+            except Exception:
+                _deleted = []
+            _deleted_ok = 0
+            for _rel in _deleted:
+                _nor = str(_rel).replace('/', os.sep)
+                # 白名单：仅 templates/ 与固定资源文件；拒绝路径穿越/绝对路径
+                if not (_nor.startswith('templates' + os.sep + '') or _nor in (
+                        'icon.ico', 'regions.json', 'settings_template.json', '使用说明.txt')):
+                    continue
+                if '..' in _nor.split(os.sep) or os.path.isabs(_nor):
+                    continue
+                _dest = os.path.join(target_dir, _nor)
+                if _dest.lower().endswith(('.exe', '.dll')):
+                    continue
+                try:
+                    if os.path.exists(_dest):
+                        os.remove(_dest)
+                        _deleted_ok += 1
+                except Exception:
+                    pass
+            if _deleted_ok:
+                print(f"[更新器] 删除旧文件 {_deleted_ok} 个")
 
         # 4) 预检测占用（自身文件除外，后面单独处理）
         locked = _check_target_files_locked(files)
@@ -743,6 +819,24 @@ def main():
 
     print(f"[更新器] 最新版本: {tag}")
 
+    # v1.4.5（bug hunt F19）：auto 模式版本比较——本地旧版名（PDD EZ vX.Y.exe）可提取版本，
+    # 远端不更新则拒绝（防重复安装/降级）；固定名 PDD EZ.exe（v1.4+）无版本标记，由 GUI 主链 guard
+    try:
+        from utils import version_newer as _vn2
+        _local_main_path = _pick_main_exe(os.path.dirname(target))
+        _local_ver = ''
+        if _local_main_path:
+            _m2 = re.search(r'v(\d+\.\d+(?:\.\d+)?)', os.path.basename(_local_main_path), re.I)
+            _local_ver = _m2.group(1) if _m2 else ''
+        _remote_ver = re.sub(r'^v', '', tag or '')
+        if _local_ver and _remote_ver and not _vn2('v' + _remote_ver, 'v' + _local_ver):
+            print(f"[更新器] 本地版本 v{_local_ver} 不低于远端 {tag}，无需更新")
+            _write_progress("done", f"已是最新版本（v{_local_ver}）")
+            _pause()
+            return 0
+    except Exception:
+        pass
+
     # 跨版本策略（与 GUI 同款）：目标目录有固定名 PDD EZ.exe（v1.4+）→ 增量包；
     # 否则（旧版 PDD EZ vX.Y.exe）→ 全量包——旧版 _internal 结构可能不同，增量会崩
     _target_dir_pick = os.path.dirname(target)
@@ -844,7 +938,13 @@ def main():
             _pause()
             return 1
     else:
-        print("[更新器] 未找到 .sha256 校验文件，跳过签名验证")
+        # v1.4.5（bug hunt F13）：fail-open → fail-closed——发布物未带 .sha256 即拒绝安装，
+        # 防止截断/篡改包在无校验下直达安装
+        print("[更新器] 未找到 .sha256 校验文件，已拒绝安装（安全策略）")
+        _write_progress("error", "缺少 SHA256 校验文件，已拒绝安装", error="sha256 missing")
+        os.remove(new_exe)
+        _pause()
+        return 1
 
     # 替换
     try:
@@ -981,6 +1081,9 @@ del "%~f0"
 
 
 def _do_replace(src, target):
+    # v1.4.5（bug hunt F22）：旧实现先 rename→remove(old) 再 copy2——copy2 失败（磁盘满/
+    # 权限）时主 exe 已删且 .old 已删 → 程序目录主程序缺失。改为：复制成功后才删 .old，
+    # 失败回滚恢复原文件。
     if sys.platform == 'win32' and os.path.exists(target):
         old = target + ".old"
         if os.path.exists(old):
@@ -992,20 +1095,32 @@ def _do_replace(src, target):
                 if not ok:
                     print(f"[更新器] 警告: 无法删除旧文件 {old}，请手动清理（或重启后自动清理）")
         os.rename(target, old)
-        try:
-            os.remove(old)  # 主程序已退出，句柄应释放
-        except PermissionError:
-            import ctypes
-            ok = ctypes.windll.kernel32.MoveFileExW(old, None, 4)
-            if not ok:
-                print(f"[更新器] 警告: 无法删除旧文件 {old}，请手动清理（或重启后自动清理）")
     try:
         shutil.copy2(src, target)
         print(f"[更新器] 已更新: {target}")
     except PermissionError:
+        # 覆盖失败：回滚旧文件（target 已被改名 .old），并保留 .new 供手动处理
+        try:
+            os.replace(target + ".old", target)
+            print(f"[更新器] 覆盖失败，已恢复原文件 {target}")
+        except Exception:
+            print(f"[更新器] 覆盖失败且未能恢复，原文件保留在 {target}.old")
         fallback = target + ".new"
-        shutil.copy2(src, fallback)
-        print(f"[更新器] 文件被占用，已保存为 {fallback}，请手动替换或重启后重试")
+        try:
+            shutil.copy2(src, fallback)
+            print(f"[更新器] 文件被占用，已保存为 {fallback}，请手动替换或重启后重试")
+        except Exception:
+            pass
+        return
+    # 复制成功后才清理 .old
+    if sys.platform == 'win32' and os.path.exists(target + ".old"):
+        try:
+            os.remove(target + ".old")
+        except PermissionError:
+            import ctypes
+            ok = ctypes.windll.kernel32.MoveFileExW(target + ".old", None, 4)
+            if not ok:
+                print(f"[更新器] 警告: 旧文件 {target}.old 待重启后自动清理")
 
 
 if __name__ == "__main__":

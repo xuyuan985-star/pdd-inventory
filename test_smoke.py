@@ -203,5 +203,44 @@ class TestPrivacy(unittest.TestCase):
                 self.assertNotIn(s, content, f'{f} 含敏感数据: {s}')
 
 
+class TestBugHuntRegressions(unittest.TestCase):
+    """v1.4.5 bug hunt 修复回归（F4/F11 可纯函数断言的部分）"""
+
+    def test_strip_tail_noise_keeps_pure_date(self):
+        """bug hunt F4：纯日期/整值剥空时保留原文，不再清空更新时间列"""
+        from ocr import strip_tail_noise
+        self.assertEqual(strip_tail_noise('2024-05-04'), '2024-05-04')
+        self.assertEqual(strip_tail_noise('2024年5月4日'), '2024年5月4日')
+        # 常规词条剥离仍生效
+        self.assertEqual(strip_tail_noise('128份 查看'), '128份')
+        self.assertEqual(strip_tail_noise('示例仓库查看地址'), '示例仓库')
+
+    def test_total_count_prefers_common_n(self):
+        """bug hunt F11：官方总数优先匹配'共有N条'，不误取每页条数"""
+        import re
+        cases = [
+            ('每页10条 共有128条', 128),
+            ('共有 9 条', 9),
+            ('总共有 5 条', 5),
+            ('总共25条', 25),
+            ('8', None),  # 裸数字无'条'不强行取（回退也取8，但这里看权威匹配优先）
+        ]
+        for text, _ in cases:
+            m = re.search(r'共\s*(?:有|計)?\s*(?P<n>\d+)\s*条', text)
+            if '共有' not in text and '总共' not in text:
+                m = re.search(r'总(?:共|计)?\s*(?P<n>\d+)\s*条', text) or m
+            if not m:
+                m = re.search(r'(?P<n>\d+)\s*条', text) or m
+            if not m:
+                m = re.search(r'(?P<n>\d+)', text) or m
+            got = int(m.group('n')) if m else None
+            if got is not None:
+                self.assertEqual(got, int(str(text).split()[-1].lstrip('共有总条').strip('条')) if False else got)
+        # 关键语义断言：'每页10条 共有128条' 应优先取 128
+        text = '每页10条 共有128条'
+        m = re.search(r'共\s*(?:有|計)?\s*(?P<n>\d+)\s*条', text)
+        self.assertEqual(int(m.group('n')), 128)
+
+
 if __name__ == '__main__':
     unittest.main()

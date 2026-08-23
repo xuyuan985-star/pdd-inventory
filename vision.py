@@ -380,7 +380,8 @@ def _locate_elements_once(screenshot_path: str = None) -> dict:
 1. 省份/地区下拉选择框的中心点
 2. "查询"按钮的中心点
 输出严格JSON: {"dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY},"confidence":0.XX}"""
-    content = _call_vision_api(img_b64, prompt, max_tokens=2048)
+    # v1.4.5（bug hunt F9）：定位链读取超时对齐 180s（大表/4K 图模型处理可 >30s，30s 必误判）
+    content = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180)
     result = _parse_json_obj(content)
     if not result:
         return None
@@ -449,8 +450,16 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
     try:
         content = _call_vision_api(img_b64, prompt, max_tokens=16)
         import re as _re
-        m = _re.search(r'\d+', content or '')
-        n = int(m.group(0)) if m else 0
+        # v1.4.5（bug hunt F11）：优先匹配「共(有)N条」权威模式——纯 \d+ 首匹配可能
+        # 取到『每页10条』的 10 → 累计 10 即硬停，128 个只认 10 个
+        _m = _re.search(r'共\s*(?:有|計)?\s*(?P<n>\d+)\s*条', content or '')
+        if not _m:
+            _m = _re.search(r'总(?:共|计)?\s*(?P<n>\d+)\s*条', content or '')
+        if not _m:
+            _m = _re.search(r'(?P<n>\d+)\s*条', content or '')
+        if not _m:
+            _m = _re.search(r'(?P<n>\d+)', content or '')
+        n = int(_m.group('n')) if _m else 0
         return n if n > 0 else None
     except VisionCancelled:
         raise  # v1.4.2 紧急停止：取消异常透传
@@ -587,12 +596,17 @@ def ai_detect_anomaly(screenshot_path: str = None) -> dict:
                     break
         if text.startswith('{'):
             data = _json.loads(text)
+            # v1.4.5（bug hunt F10）：bool("false")=True 会把模型输出的字符串 'false' 当异常
+            # → 误跳过省份；显式判定真值
+            _an = str(data.get('anomaly')).strip().lower()
             return {
-                'anomaly': bool(data.get('anomaly')),
+                'anomaly': _an in ('true', '1', 'yes'),
                 'type': data.get('type') or None,
                 'hint': data.get('hint') or None,
             }
         return {'anomaly': False, 'type': None, 'hint': None}
+    except VisionCancelled:
+        raise  # v1.4.5（bug hunt F26）：取消异常透传，F9 立即中断省份异常检测
     except Exception:
         return {'anomaly': False, 'type': None, 'hint': None}
 
@@ -668,7 +682,8 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
 5. total_count：页面统计信息里显示的商品总条数（如 "共 3 条" / "共 128 条"），找不到则填 null
 6. rows：表格内容行的垂直边界（相对整图比例 top/bottom），按从上到下顺序，含表头行。格式：[{"top": 0.XX, "bottom": 0.YY}, ...]，最多返回 20 行；识别不了填 []
 输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "rows": [{"top": 0.XX, "bottom": 0.YY}], "confidence": 0.XX}"""
-    content = _call_vision_api(img_b64, prompt, max_tokens=2048)
+    # v1.4.5（bug hunt F9）：表格定位（滚动轮每轮）读取超时对齐 180s
+    content = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180)
     result = _parse_json_obj(content)
     if not result:
         return None

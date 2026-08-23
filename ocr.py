@@ -770,7 +770,8 @@ def strip_tail_noise(value) -> str:
         '示例仓库查看地址' → '示例仓库'，'示例仓库 竞看地址' → '示例仓库'（查→竞），
         '65份\\n08-04 15:36\\n更新记录' → '65份'，'128份 08-02' → '128份'，
         '查看地址' → ''；名称中非尾部的「查看」（如"查看库存"）不受影响。
-    """
+    v1.4.5（bug hunt F4）：整值剥空保护——当原值本身整体呈噪音形态（如'更新时间'列
+    的纯日期 '2024-05-04'、年月日），剥离后为空时保留原文，避免整列被清空。"""
     if value is None:
         return ''
     import re as _re
@@ -791,7 +792,10 @@ def strip_tail_noise(value) -> str:
         if m:
             s = s[:m.start()].rstrip()
             changed = True
-    return _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
+    _out = _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
+    if not _out and str(value).strip():
+        return str(value).strip()  # 整值剥空 = 原值本身即噪音形态（纯日期/纯词条），保留原文防数据丢失
+    return _out
 
 
 def dedup_items(items, seen_sku, seen_name_no_sku, seen_name_with_id):
@@ -1268,8 +1272,11 @@ def merge_verify_items(items: list, verify_items: list) -> list:
                 for _f in ('stock', 'sales'):
                     a = str(it.get(_f) or '')
                     b = str(v.get(_f) or '')
-                    # 空值/0/数字可疑（年份日期串位）→ 用二次识别的值覆盖
-                    if (_suspect_number(a) or not a or a == '0') and b and b != '0':
+                    # v1.4.5（bug hunt F8）：真实库存/销量恰为 1900~2100（如 2026）会被
+                    # _suspect_number 误判"日期串位"并用副模型值覆盖真实数据——收紧为
+                    # 仅缺失/为0时才用副模型值补全；_suspect_number 仍留在 need 触发
+                    # 二次识别用于标记，但不再作覆盖依据
+                    if (not a or a == '0') and b and b != '0':
                         it[_f] = v[_f]
                         fixed = True
                 if fixed:
@@ -1286,13 +1293,13 @@ def merge_verify_items(items: list, verify_items: list) -> list:
 def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
                         row_bboxes: list = None, group_size: int = 6,
                         forced_model: str = None) -> dict:
-    """
-    行级切分识别（v1.4，借鉴 surya 行级 bbox 思路）：按 row_bboxes 把表格裁成
-    多组小图，每组独立识别。组内行数少 → 模型只能抄图中内容，防整表乱编。
+    """⚠ 行切分（v1.4.5 bug hunt L19 标注）：方案A（整表无 bbox）已拍板废弃行边界切分——
+    大表 AI 行边界数错会切碎数据。本函数仅作为引用兼容残留，识别主路径绝不启用
+    （DESIGN §1/§8： _use_split/_bd_rows 已删，row_bboxes 传 None）。勿再启用。
 
-    row_bboxes = [(top, bottom) 像素坐标, ...]（相对原图，含表头行）。
-    返回 {'columns': columns, 'rows': [{列名: 值}, ...]}；
-    任何一步失败抛 RuntimeError（调用方 fallback 整表 ocr_table）。
+    遗留原实现注释：row_bboxes = [(top, bottom) 像素坐标, ...]（相对原图，含表头行）；
+    返回 {'columns': columns, 'rows': [{列名: 值}, ...]}；任何一步失败抛
+    RuntimeError（调用方 fallback 整表 ocr_table）。
     """
     from PIL import Image as PILImg
     import io as _io

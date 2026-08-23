@@ -450,17 +450,31 @@ class App(SettingsUIMixin):
             txt.insert("1.0", content or "")
             txt.configure(state="disabled")
             txt.pack(fill="both", expand=True, padx=5, pady=5)
-            # 可选图片
+            # 可选图片（v1.4.5 bug hunt F29：下载移出主线程——urlopen 最长 10s 会冻结事件循环；
+            # 主线程只做 after 回填 + PhotoImage 创建）
             if image_url:
+                def _fetch_img():
+                    try:
+                        _req2 = _ur.Request(image_url, headers={"User-Agent": "PDD-EZ"})
+                        _data = _ur.urlopen(_req2, timeout=10).read()
+                        return PILImage.open(_BytesIO(_data))
+                    except Exception:
+                        return None
+                def _apply_img(_img):
+                    try:
+                        if _img is None:
+                            return
+                        _img.thumbnail((440, 160))
+                        _photo = ImageTk.PhotoImage(_img)
+                        _lbl = tk.Label(dlg, image=_photo, bg=self.C_BG)
+                        _lbl.image = _photo  # 防 GC
+                        _lbl.pack(pady=5)
+                    except Exception:
+                        pass
                 try:
-                    req = _ur.Request(image_url, headers={"User-Agent": "PDD-EZ"})
-                    img_data = _ur.urlopen(req, timeout=10).read()
-                    img = PILImage.open(_BytesIO(img_data))
-                    img.thumbnail((440, 160))
-                    photo = ImageTk.PhotoImage(img)
-                    lbl = tk.Label(dlg, image=photo, bg=self.C_BG)
-                    lbl.image = photo  # 防 GC
-                    lbl.pack(pady=5)
+                    import threading as _thr2
+                    _thr2.Thread(target=lambda: self.win.after(0, lambda: _apply_img(_fetch_img())),
+                                 daemon=True).start()
                 except Exception:
                     pass
             _btn_frame = tk.Frame(dlg, bg=self.C_BG)
@@ -743,8 +757,8 @@ class App(SettingsUIMixin):
                        selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE).pack(side="left", padx=10)
         # 右组：截图识别 + 实时截图
         self._mk_btn(btn_row, "截图识别", self._ocr_fill, kind='text', pack_side="right")
-        self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='text',
-                     pack_side="right", padx=5)
+        self.live_btn = self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='text',
+                                     pack_side="right", padx=5)  # v1.4.5 bug hunt F24：保存引用供批量期间禁用
         
         # ── 当前地区（刷新计算按钮正下方一行，左对齐；识别后更新）──
         region_line = tk.Frame(self.page_home, bg=self.C_BG)
@@ -1265,7 +1279,15 @@ class App(SettingsUIMixin):
                     with _urlopen(req, timeout=120) as resp:
                         _download_stream(resp, dest, total, asset_name)
                 
-                # 3) SHA256 校验（有 sha256 资产时）
+                # 3) SHA256 校验：发布物必须带 .sha256（v1.4.5 bug hunt F13 fail-closed）
+                if not sha_asset:
+                    # 无 .sha256 资产：拒绝安装（防截断/篡改包直通）
+                    try:
+                        os.remove(dest)
+                    except Exception:
+                        pass
+                    self.win.after(0, lambda: _fail("缺少 SHA256 校验文件，已拒绝安装（安全策略）"))
+                    return
                 if sha_asset:
                     self.win.after(0, lambda: _set_status("正在校验下载完整性..."))
                     sha_path = dest + ".sha256"
@@ -2032,6 +2054,9 @@ class App(SettingsUIMixin):
             _row_region = ''
             try:
                 from utils import get_ocr_columns as _goc
+                # v1.4.5（bug hunt F2）：此函数此前未导入 strip_region_suffix → NameError 被裸 except 吞，
+                # 每行 region 回退当前地区，多省刷新计算全按第一省算时效（违反 DESIGN §3）
+                from ocr import strip_region_suffix
                 _rmap = (_goc().get('mapping') or {})
                 _rc = _rmap.get('region')
                 if _rc:
@@ -2053,10 +2078,11 @@ class App(SettingsUIMixin):
                     if _col:
                         _old = str(_raw.get(_col, ''))
                         # 保留原值单位（'85份' → 用户改 90 → '90份'），
-                        # 且避免纯数字值被 strip_tail_noise 的尾部数字规则误剥
-                        import re as _re2
+                        # v1.4.5（bug hunt F25）：先 strip_tail_noise 再去尾部非数字串——
+                        # 否则 '69份 查看地址' 会把'查看地址'当单位回写（_raw 污染）
+                        from ocr import strip_tail_noise as _stn2
                         _unit = ''
-                        _m2 = _re2.search(r'[^\d\s.,，、]+$', _old)
+                        _m2 = _re2.search(r'[^\d\s.,，、]+$', _stn2(_old))
                         if _m2:
                             _unit = _m2.group(0)
                         _raw[_col] = str(_val) + _unit
@@ -2167,8 +2193,9 @@ class App(SettingsUIMixin):
             # 先缓存所有 UI 值再销毁对话框（destroy 后访问控件会 TclError）
             _dual_mode = dual_var.get()
             dlg.destroy()
-            # 禁用操作按钮防止并发
-            for btn in [self.export_btn]:
+            # 禁用操作按钮防止并发（v1.4.5 bug hunt F24：批量期间也禁用实时截图入口，
+            # 防双批并发互相覆盖取消钩子/物理争抢鼠标键盘）
+            for btn in [self.export_btn, getattr(self, 'live_btn', None)]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
             def _batch_thread_wrapper():
@@ -2176,6 +2203,10 @@ class App(SettingsUIMixin):
                 v1.4.2 紧急停止：批量期间把取消钩子注入 ocr/vision 请求层，
                 F9 后下一个 API 请求点即中断（BatchCancelled/VisionCancelled），
                 不再等当前 30~90s 请求跑完。"""
+                # v1.4.5（bug hunt F27）：_batch_stop.clear() 原在 _run_batch_sequence 内、
+                # 钩子注入之后执行——启动早期（注入后 clear 前）按 F9 会被清掉；
+                # 把清零点移到钩子注入【之前】，F9 从注入一刻起立即生效
+                self._batch_stop.clear()
                 from ocr import set_cancel_check as _ocr_cc
                 from vision import set_cancel_check as _vis_cc
                 _ocr_cc(self._batch_stop.is_set)
@@ -2789,7 +2820,7 @@ class App(SettingsUIMixin):
                             _is_read_timeout = 'readtimedout' in _es.replace(' ', '') or ('read' in _es and ('timeout' in _es or 'timed out' in _es))
                             _is_conn_err = any(k in _es for k in ('connection', 'pool', 'socket')) and not _is_read_timeout
                             _es_429 = any(k in _es for k in ('429', 'rate ', 'too many', 'triggered rate', 'flow control'))
-                            _was_net_err = _was_net_err or _is_conn_err or _is_read_timeout or _is_read_timeout
+                            _was_net_err = _was_net_err or _is_conn_err or _is_read_timeout
                             # v1.4.2 读超时也归入"非无数据"：模型处理大图慢 ≠ 页面没有新行，
                             # 与断网一样不计入防死滚惩罚（find-bugs 审查 ①）
                             _ed = 5 if _is_conn_err else (10 if _es_429 else 2)
@@ -3134,7 +3165,7 @@ class App(SettingsUIMixin):
         if idle >= 6000:
             # 后台线程可能已崩溃：强制收尾，避免死循环。
             # 阈值 6000 × 100ms = 10 分钟 —— 一个地区完整滚动识别（最多 16 轮截图/OCR，
-            # 每轮含 60s 超时 × 3 次重试）在弱网/长表格下可能超过 3 分钟，需给足余量。
+            # 每轮含 180s 读超时 × 2~3 次重试，v1.4.5 起）在弱网/长表格下可能超过 3 分钟，需给足余量。
             self.win.after(100, lambda: self._finish_batch(success, total, total_items))
             return
         self.win.after(100, lambda: self._poll_batch_queue(q, success, total, total_items, idle))
@@ -3142,6 +3173,11 @@ class App(SettingsUIMixin):
     def _finish_batch(self, success, total, total_items):
         """批量识别收尾：恢复按钮 + 显示结果"""
         self.export_btn.configure(state='normal')
+        try:
+            if getattr(self, 'live_btn', None):
+                self.live_btn.configure(state='normal')  # v1.4.5 bug hunt F24
+        except Exception:
+            pass
         self.status_text.set("就绪 — 批量识别完成")
         if success > 0:
             messagebox.showinfo("批量识别完成", f"成功 {success}/{total} 地区\n合计 {total_items} 商品")
@@ -3272,7 +3308,8 @@ class App(SettingsUIMixin):
             if _main and str(_main).strip().lower() == str(_sec).strip().lower():
                 from ocr import _ocr_dlog
                 _ocr_dlog(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
-                self.status_text.set(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
+                # v1.4.5（bug hunt F23）：worker 线程直写 status_text 违 Tk 主线程契约，包 after
+                self.win.after(0, lambda m=_main: self.status_text.set(f"⚠ 主副模型相同（{m}），双模型验证无意义，请更换副模型"))
             return ocr_dual_verify_generic(image_path, columns=None,
                                            mapping=_mapping,
                                            table_bbox=table_bbox,

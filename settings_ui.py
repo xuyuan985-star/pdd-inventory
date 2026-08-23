@@ -571,64 +571,76 @@ class SettingsUIMixin:
 
         def do_ai_locate():
             """手动定位：锁定商家后台窗口截图（自动前置该窗口），AI 识别坐标后转全屏坐标保存。
-            失败一律弹窗提示，绝不静默。"""
+            失败一律弹窗提示，绝不静默。
+            v1.4.5（bug hunt F28）：AI 多采样（每轮最长 180s）移入 worker 线程，弱网不冻结
+            主线程；_minimize/恢复/status 等 Tk 交互仍在主线程（after 回填）。"""
             try:
-                import tempfile
+                import os  # v1.4.5（bug hunt F3）：此前无模块级 import os，此处裸 os 必 NameError（被下方 except 吞成"定位失败"）
+                import tempfile, threading
                 import pyautogui as pg
                 from vision import ai_locate_elements
                 from utils import capture_pdd_screenshot, Config as _CfgA
                 ai_status_lbl.configure(text="正在定位商家后台窗口...")
                 self.win.update()
-                # v1.4 bugfix：定位前让位（隐藏设置窗口+最小化主窗口），
-                # 露出浏览器再截图；完成后恢复并把浏览器置前，方便核对精准度
+                # 主线程：让位 + 截图（<1s），随后 AI 采样放 worker
                 _hidden = _minimize_away()
                 try:
                     _time.sleep(0.6)
-                    shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_manual.png')
-                    pos = {}
-                    # 窗口截图：找到拼多多/浏览器窗口 → 只截该窗口并返回左上角偏移；
-                    # 找不到 → fallback 全屏截图（pos 全 0）
-                    capture_pdd_screenshot(shot, pos)
-                    result = ai_locate_elements(shot)
-                finally:
+                    _shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_manual.png')
+                    _pos = {}
+                    capture_pdd_screenshot(_shot, _pos)
+                except Exception:
                     _restore_windows(_hidden)
-                    _bring_browser_front()
-                if not result:
-                    messagebox.showwarning(
-                        "定位失败",
-                        "未识别到商家后台的元素。\n请确认：\n1. 拼多多商家后台页面已打开并加载完成\n2. 页面显示的是商品列表（有省份下拉框和查询按钮）",
-                    )
-                    ai_status_lbl.configure(text="定位失败：未识别到后台元素")
+                    raise
+
+                def _finish(result, pos):
+                    try:
+                        _restore_windows(_hidden)
+                        _bring_browser_front()
+                        if not result:
+                            messagebox.showwarning(
+                                "定位失败",
+                                "未识别到商家后台的元素。\n请确认：\n1. 拼多多商家后台页面已打开并加载完成\n2. 页面显示的是商品列表（有省份下拉框和查询按钮）",
+                            )
+                            ai_status_lbl.configure(text="定位失败：未识别到后台元素")
+                            return
+                        ox, oy = pos.get('left', 0), pos.get('top', 0)
+                        sx = pos.get('scale_x', 1.0) or 1.0
+                        sy = pos.get('scale_y', 1.0) or 1.0
+                        dd = {'x': int(result['dropdown']['x'] * sx) + ox, 'y': int(result['dropdown']['y'] * sy) + oy}
+                        qq = {'x': int(result['query']['x'] * sx) + ox, 'y': int(result['query']['y'] * sy) + oy}
+                        screen_w, screen_h = pg.size()
+                        cal['ai'] = {
+                            'last_time': _time.time(),
+                            'dropdown': dd, 'query': qq,
+                            'confidence': result['confidence'],
+                            'screen_width': screen_w, 'screen_height': screen_h,
+                        }
+                        cal['mode'] = 'ai'
+                        s['calibrate'] = cal
+                        _CfgA.save(s)
+                        ai_status_lbl.configure(text="✅ 定位完成")
+                        self.status_text.set("AI 智能定位完成")
+                    except Exception as e:
+                        messagebox.showwarning("定位失败", str(e)[:300])
+                        ai_status_lbl.configure(text=f"定位失败: {str(e)[:60]}")
                     _refresh_cards()
-                    return
-                ox, oy = pos.get('left', 0), pos.get('top', 0)
-                # AI 返回的是截图内坐标；4K/带鱼屏截图已缩到 ≤2560，
-                # 先 ×scale 还原到原始窗口像素，再加窗口偏移转全屏（v1.4 审查修复）
-                sx = pos.get('scale_x', 1.0) or 1.0
-                sy = pos.get('scale_y', 1.0) or 1.0
-                dd = {'x': int(result['dropdown']['x'] * sx) + ox, 'y': int(result['dropdown']['y'] * sy) + oy}
-                qq = {'x': int(result['query']['x'] * sx) + ox, 'y': int(result['query']['y'] * sy) + oy}
-                screen_w, screen_h = pg.size()
-                cal['ai'] = {
-                    'last_time': _time.time(),
-                    'dropdown': dd,
-                    'query': qq,
-                    'confidence': result['confidence'],
-                    'screen_width': screen_w,
-                    'screen_height': screen_h,
-                }
-                cal['mode'] = 'ai'
-                s['calibrate'] = cal
-                _CfgA.save(s)  # 原子写入
-                ai_status_lbl.configure(text="✅ 定位完成")
-                self.status_text.set("AI 智能定位完成")
+
+                def _work():
+                    try:
+                        _result = ai_locate_elements(_shot)
+                        self.win.after(0, lambda: _finish(_result, _pos))
+                    except Exception:
+                        # v1.4.5（bug hunt F28）：异常走 _finish(None) 统一提示，主线程不冻结
+                        self.win.after(0, lambda: _finish(None, _pos))
+                threading.Thread(target=_work, daemon=True).start()
             except Exception as e:
                 try:
                     messagebox.showwarning("定位失败", str(e)[:300])
                 except Exception:
                     pass
                 ai_status_lbl.configure(text=f"定位失败: {str(e)[:60]}")
-            _refresh_cards()
+                _refresh_cards()
 
         self._mk_btn(ai_btn_frame, "立即定位", do_ai_locate, kind='dark',
                   font=self.FONT_BOLD, width=12).pack(side='left', padx=5)

@@ -2,9 +2,9 @@
 PDD EZ — 公共工具函数
 提供数据目录路径和设置读取，消除 main/ocr/gui 中的重复定义。
 """
-import os, sys, json
+import os, sys, json, threading
 
-VERSION = "v1.4.4"
+VERSION = "v1.4.5"
 
 
 def version_newer(remote: str, local: str) -> bool:
@@ -108,6 +108,11 @@ def save_secondary_model(name: str):
 
 
 class Config:
+    """settings.json 读写（唯一通道 + 模板自愈 + 原子写）。
+
+    v1.4.5（bug hunt F20）：保存全程持锁，防多线程并发写坏配置。
+    """
+    _CONFIG_SAVE_LOCK = threading.Lock()
     """配置单例：唯一读写 settings.json，原子写入。
     v1.4 升级（借鉴 March7thAssistant config.py）：加载时与 settings_template.json
     递归合并——用户配置优先，缺失字段从模板补全并写回（配置自愈，损坏/缺字段不崩）。"""
@@ -164,17 +169,21 @@ class Config:
         if _c['mtime'] == _mtime and _c['data'] is not None:
             return _c['data']
         data = {}
+        _parse_fail = False
         try:
             if os.path.exists(sf):
                 with open(sf, 'r', encoding='utf-8') as f:
                     data = json.load(f)
         except Exception:
             data = {}
+            _parse_fail = True  # v1.4.5（bug hunt F21）：解析失败不再被模板覆盖写回
         if not isinstance(data, dict):
             data = {}
-        # 模板合并：补全缺失字段
+            _parse_fail = True
+        # 模板合并：补全缺失字段（损坏/解析失败时不写回——保留原文件供人工抢救，
+        # 不再静默覆盖成模板默认，避免用户数据从主文件消失）
         tpl = Config._load_template()
-        if tpl:
+        if tpl and not _parse_fail:
             merged = Config._merge(tpl, data)
             # 有补全 → 写回自愈（用户配置缺失字段被补上）
             if merged != data:
@@ -194,30 +203,33 @@ class Config:
         """原子写 settings.json + 写前 .bak 备份 + 重试（防 Windows 文件锁丢配置）"""
         import time as _time
         # v1.4.2：写后清读取缓存，下次 load 强制重读
-        Config._load_cache['mtime'] = -1
-        Config._load_cache['data'] = None
-        sf = os.path.join(get_base_dir(), 'settings.json')
-        tmp = sf + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        # 写前备份现有配置（杀毒/云同步短暂锁定时可恢复）
-        try:
-            if os.path.exists(sf):
-                with open(sf, 'r', encoding='utf-8') as _f:
-                    _bak = _f.read()
-                with open(sf + '.bak', 'w', encoding='utf-8') as _f:
-                    _f.write(_bak)
-        except Exception:
-            pass
-        # os.replace 原子替换；Windows 上目标被短暂锁定会抛 PermissionError → 重试 3 次
-        for _attempt in range(3):
+        # v1.4.5（bug hunt F20）：保存加模块级锁——多线程并发 save（探测/批量/设置页）
+        # 共用固定 .tmp 会互相覆盖/写坏；tmp 名按 pid 唯一化
+        with Config._CONFIG_SAVE_LOCK:
+            Config._load_cache['mtime'] = -1
+            Config._load_cache['data'] = None
+            sf = os.path.join(get_base_dir(), 'settings.json')
+            tmp = f"{sf}.tmp{os.getpid()}"
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            # 写前备份现有配置（杀毒/云同步短暂锁定时可恢复）
             try:
-                os.replace(tmp, sf)
-                return
-            except OSError:
-                if _attempt >= 2:
-                    raise
-                _time.sleep(0.2)
+                if os.path.exists(sf):
+                    with open(sf, 'r', encoding='utf-8') as _f:
+                        _bak = _f.read()
+                    with open(sf + '.bak', 'w', encoding='utf-8') as _f:
+                        _f.write(_bak)
+            except Exception:
+                pass
+            # os.replace 原子替换；Windows 上目标被短暂锁定会抛 PermissionError → 重试 3 次
+            for _attempt in range(3):
+                try:
+                    os.replace(tmp, sf)
+                    return
+                except OSError:
+                    if _attempt >= 2:
+                        raise
+                    _time.sleep(0.2)
 
     @staticmethod
     def get(key, default=None):
@@ -240,37 +252,43 @@ def get_base_dir() -> str:
 
 
 def get_api_config() -> dict:
-    """读取 settings.json 中的 API 配置，自动迁移旧格式"""
+    """读取 settings.json 中的 API 配置，自动迁移旧格式。
+    v1.4.5（bug hunt F7）：迁移判定必须基于【原始文件】——旧实现先 Config.load()
+    会把模板的 api.providers 合并进旧格式 {mode,key}，导致 `'providers' in api` 恒真，
+    旧 key/mode 永远不迁移（旧用户升级后 key 静默丢失、active_provider 被模板钉成 doubao）。"""
     try:
-        s = Config.load()
-        api = s.get('api', {})
-        # 已是新格式直接返回
-        if 'providers' in api:
-            return api
-        # 迁移旧格式 → 新格式
-        # mode 字段可能是旧版唯一标识（{"api": {"mode": "qwen", "key": "xxx"}}），
-        # 需作为模型名回退，否则迁移后一律判成 doubao
-        old_model = (api.get('builtin_model', '') or api.get('custom_model', '')
-                     or api.get('mode', ''))
-        old_key = api.get('key', '')
-        # 推断提供商
-        if old_model.lower().startswith('doubao') or 'doubao' in old_model.lower():
-            active = 'doubao'; ep = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
-        elif old_model.startswith('qwen'):
-            active = 'qwen'; ep = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-        elif old_model.startswith('glm'):
-            active = 'glm'; ep = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-        else:
-            active = 'doubao'; ep = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
-        new_api = {
-            'active_provider': active,
-            'providers': {
-                active: {'api_key': old_key, 'model': old_model, 'endpoint': ep, 'model_history': [old_model] if old_model else []}
+        sf = os.path.join(get_base_dir(), 'settings.json')
+        _raw_api = {}
+        if os.path.exists(sf):
+            with open(sf, 'r', encoding='utf-8') as _f:
+                _raw = json.load(_f)
+                if isinstance(_raw, dict):
+                    _raw_api = _raw.get('api', {}) or {}
+        # 旧格式（api 直接挂 mode/key、无 providers）→ 迁移
+        if _raw_api and 'providers' not in _raw_api and (_raw_api.get('key') or _raw_api.get('mode')):
+            old_model = (_raw_api.get('builtin_model', '') or _raw_api.get('custom_model', '')
+                         or _raw_api.get('mode', ''))
+            old_key = _raw_api.get('key', '')
+            if old_model.lower().startswith('doubao') or 'doubao' in old_model.lower():
+                active = 'doubao'; ep = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
+            elif old_model.startswith('qwen'):
+                active = 'qwen'; ep = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+            elif old_model.startswith('glm'):
+                active = 'glm'; ep = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+            else:
+                active = 'doubao'; ep = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
+            new_api = {
+                'active_provider': active,
+                'providers': {
+                    active: {'api_key': old_key, 'model': old_model, 'endpoint': ep,
+                             'model_history': [old_model] if old_model else []}
+                }
             }
-        }
-        s['api'] = new_api
-        Config.save(s)
-        return new_api
+            _s = Config.load()
+            _s['api'] = new_api
+            Config.save(_s)
+            return new_api
+        return Config.load().get('api', {}) or {}
     except (json.JSONDecodeError, IOError, OSError):
         pass
     return {}
@@ -436,6 +454,7 @@ def _capture_window_background(win) -> object:
     # 设备上下文链：窗口 DC → 兼容 DC → 位图（每资源独立释放，防异常路径泄漏 GDI）
     hwndDC = memDC = None
     hBitmap = None
+    _prev_obj = None  # v1.4.5（bug hunt F12）：memDC 原选中对象，释放前还原
     try:
         hwndDC = user32.GetWindowDC(hwnd)
         if not hwndDC:
@@ -446,7 +465,10 @@ def _capture_window_background(win) -> object:
         hBitmap = gdi32.CreateCompatibleBitmap(hwndDC, width, height)
         if not hBitmap:
             return None
-        gdi32.SelectObject(memDC, hBitmap)
+        # v1.4.5（bug hunt F12）：保存 SelectObject 的旧对象返回值——否则位图仍选中于
+        # memDC 时先 DeleteObject 违反 MSDN（应失败，但部分环境返回"成功"造成差异，
+        # 规范做法是还原后再删，杜绝 PrintWindow 每帧潜在 GDI 泄漏）
+        _prev_obj = gdi32.SelectObject(memDC, hBitmap)
 
         # PrintWindow flag=3：强制完整渲染 + 客户区
         result = user32.PrintWindow(hwnd, memDC, 3)
@@ -488,7 +510,12 @@ def _capture_window_background(win) -> object:
     except Exception:
         return None
     finally:
-        # 逆序释放：位图 → 兼容 DC → 窗口 DC（各自独立 try，防连锁）
+        # 逆序释放（v1.4.5 bug hunt F12）：先还原 memDC 旧选中对象，再删位图；最后删 DC
+        if memDC and _prev_obj:
+            try:
+                gdi32.SelectObject(memDC, _prev_obj)
+            except Exception:
+                pass
         if hBitmap:
             try:
                 gdi32.DeleteObject(hBitmap)

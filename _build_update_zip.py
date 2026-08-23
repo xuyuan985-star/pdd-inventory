@@ -176,6 +176,7 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
         print(f"[增量打包] 模式: {'强制全量' if force else '首次发布（无 tag）'}")
         include_all = True
         changed_packages = set(PIP_TO_INTERNAL.keys())
+        deleted_files = []
     else:
         changed_packages = get_changed_packages(changed_files, exclude_tag=current_version)
         include_all = False
@@ -183,10 +184,23 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
         print(f"[增量打包] 变更文件: {len(changed_files)} 个")
         if changed_packages:
             print(f"[增量打包] 依赖变更: {changed_packages}")
+        # v1.4.5（bug hunt F15）：生成"从此版本起删除的文件"清单——git diff --diff-filter=D
+        # 的运行时资源/模板/文档写进包内 deleted-files.txt，updater 安装时按白名单删除，
+        # 避免老客户旧 dll/旧模板/旧文档永久残留（新旧混用）
+        _del_out = _run(['git', '-c', 'core.quotepath=false',
+                         'diff', '--name-only', '--diff-filter=D', tag])
+        _ok_prefix = ('templates/',)
+        _ok_exact = {'icon.ico', 'regions.json', 'settings_template.json', '使用说明.txt'}
+        deleted_files = [d for d in (_del_out.splitlines() if _del_out else [])
+                         if d.startswith(_ok_prefix) or d in _ok_exact]
+        if deleted_files:
+            print(f"[增量打包] 删除清单: {deleted_files}")
 
     # 判断是否需要包含更新器 EXE
+    # v1.4.5（bug hunt F16）：updater 为 onefile、PYZ 内嵌 github_api.py/logger.py——
+    # 共享代码变更时旧判定漏打新 updater，客户端 updater 长期持旧逻辑（行为分裂）
     updater_changed = include_all or any(
-        f in changed_files for f in ['updater.py', 'updater.spec']
+        f in changed_files for f in ['updater.py', 'updater.spec', 'github_api.py', 'logger.py']
     )
     # 模板/资源文件是否变更
     templates_changed = include_all or any(
@@ -194,8 +208,11 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
     )
     # 注意：settings.json 是用户本机配置（含 API key/账号密码），
     # 绝不进更新包——更新会覆盖用户配置并泄露开发机凭据
+    # v1.4.5（bug hunt F17）：spec datas 里的 settings_template.json/使用说明.txt 也需进包，
+    # 否则老客户永远拿不到新模板/新文档（如新增 provider 预设）
     resources_changed = include_all or any(
-        f in changed_files for f in ('icon.ico', 'regions.json')
+        f in changed_files for f in
+        ('icon.ico', 'regions.json', 'settings_template.json', '使用说明.txt')
     )
 
     # 主 EXE（含编译后 PYZ）是否变更：代码/依赖/打包配置变更才需要——
@@ -220,6 +237,12 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
     # ── 3. 打包 zip ──
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         added = 0
+
+        # v1.4.5（bug hunt F15）：包内携带删除清单，updater 安装时白名单删除旧残留
+        if deleted_files:
+            zf.writestr(os.path.join(name, 'deleted-files.txt'), '\n'.join(deleted_files))
+            added += 1
+            print(f"  + deleted-files.txt ({len(deleted_files)} 项)")
 
         # 主 EXE / 壳 EXE — 仅代码/依赖变更时包含；PyInstaller 每次构建都会重新生成，
         # 内含编译后的 PYZ，是代码变更的核心载体。
@@ -310,6 +333,12 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
 
 if __name__ == '__main__':
+    # v1.4.5（bug hunt F18-②）：git 不可用时明确报错退出——此前静默按"首次发布"打
+    # 全量包且文件仍叫 _update.zip，会误导发布（增量基准丢失）
+    if _run(['git', 'rev-parse', '--is-inside-work-tree']) != 'true':
+        print('错误: 当前目录不是 git 仓库（或 git 不可用）。增量包依赖 git tag/diff 基准，'
+              '请在有完整历史与 tag 的克隆中执行打包。')
+        sys.exit(1)
     dist = os.path.join(REPO_ROOT, 'dist')
     # dist 不存在时给出明确错误，而不是 os.listdir 抛 FileNotFoundError
     if not os.path.isdir(dist):
@@ -336,3 +365,10 @@ if __name__ == '__main__':
     print(f'[增量打包] 源: {onedir}')
     print(f'[增量打包] 输出: {output}')
     build_update_zip(onedir, output, force='--force' in sys.argv)
+    # v1.4.5（bug hunt F18-①）：构建后自动写 .sha256——之前只靠人工/发布时补传，漏传
+    # 即触发更新器 fail-open（跳过校验安装）
+    import hashlib
+    _h = hashlib.sha256(open(output, 'rb').read()).hexdigest()
+    with open(output + '.sha256', 'w', encoding='utf-8') as _f:
+        _f.write(f'{_h}  {os.path.basename(output)}')
+    print(f'[增量打包] 已生成 {os.path.basename(output)}.sha256: {_h}')
