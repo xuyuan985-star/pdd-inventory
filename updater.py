@@ -822,14 +822,22 @@ def main():
     # v1.4.5（bug hunt F19）：auto 模式版本比较——本地旧版名（PDD EZ vX.Y.exe）可提取版本，
     # 远端不更新则拒绝（防重复安装/降级）；固定名 PDD EZ.exe（v1.4+）无版本标记，由 GUI 主链 guard
     try:
-        from utils import version_newer as _vn2
+        # 内联 version_newer（不能 from utils import——会把 utils 的函数内重依赖
+        # pyautogui/PIL/cv2 等拖进 updater 单文件，体积 8MB→69MB）
+        def _version_newer(remote, local):
+            def _p(v):
+                v = str(v).lstrip('vV')
+                return [int(x) for x in v.split('.') if x.isdigit()]
+            r, l = _p(remote), _p(local)
+            n = max(len(r), len(l))
+            return (r + [0] * (n - len(r))) > (l + [0] * (n - len(l)))
         _local_main_path = _pick_main_exe(os.path.dirname(target))
         _local_ver = ''
         if _local_main_path:
             _m2 = re.search(r'v(\d+\.\d+(?:\.\d+)?)', os.path.basename(_local_main_path), re.I)
             _local_ver = _m2.group(1) if _m2 else ''
         _remote_ver = re.sub(r'^v', '', tag or '')
-        if _local_ver and _remote_ver and not _vn2('v' + _remote_ver, 'v' + _local_ver):
+        if _local_ver and _remote_ver and not _version_newer('v' + _remote_ver, 'v' + _local_ver):
             print(f"[更新器] 本地版本 v{_local_ver} 不低于远端 {tag}，无需更新")
             _write_progress("done", f"已是最新版本（v{_local_ver}）")
             _pause()
