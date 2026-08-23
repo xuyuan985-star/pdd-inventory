@@ -12,7 +12,7 @@ v1.4 更新器重大修复（借鉴 March7thAssistant 更新引擎）：
 - 保留 v1.4 安全修复：target 目录校验（必须是 PDD EZ 程序目录）、
   绝不 rmtree 用户目录、自我转移（从待替换目录复制到 %TEMP% 运行）
 """
-import os, sys, json, shutil, time, tempfile, zipfile
+import os, sys, json, shutil, time, tempfile, zipfile, re
 from urllib.request import urlopen, Request
 
 # 更新器日志：与主程序共用 logs/ 目录（打包后同目录），更新过程全程留痕
@@ -572,6 +572,43 @@ def _cover_with_self_handling(files) -> tuple[bool, list]:
     return True, []
 
 
+def _apply_deleted_files(extracted_dir: str, target_dir: str) -> int:
+    """v1.4.5 bug hunt F15：应用包内 deleted-files.txt —— 自上版本起删除的运行时资源/
+    模板/文档，目标端白名单删除，防旧 dll/旧模板/旧文档永久残留。
+    extracted_dir 须是 _extract_zip 返回的 PDD EZ 程序目录。返回删除文件数。"""
+    _del_spec = os.path.join(extracted_dir, 'deleted-files.txt')
+    if not os.path.exists(_del_spec):
+        _del_spec = os.path.join(extracted_dir, 'PDD EZ', 'deleted-files.txt')  # 兼容未剥顶层
+    if not os.path.exists(_del_spec):
+        return 0
+    try:
+        with open(_del_spec, encoding='utf-8') as _f:
+            _deleted = [l.strip() for l in _f if l.strip()]
+    except Exception:
+        return 0
+    _deleted_ok = 0
+    for _rel in _deleted:
+        _nor = str(_rel).replace('/', os.sep)
+        # 白名单：仅 templates/ 与固定资源文件；拒绝路径穿越/绝对路径；绝不删 exe/dll
+        if not (_nor.startswith('templates' + os.sep) or _nor in (
+                'icon.ico', 'regions.json', 'settings_template.json', '使用说明.txt')):
+            continue
+        if '..' in _nor.split(os.sep) or os.path.isabs(_nor):
+            continue
+        _dest = os.path.join(target_dir, _nor)
+        if _dest.lower().endswith(('.exe', '.dll')):
+            continue
+        try:
+            if os.path.exists(_dest):
+                os.remove(_dest)
+                _deleted_ok += 1
+        except Exception:
+            pass
+    if _deleted_ok:
+        print(f"[更新器] 删除旧文件 {_deleted_ok} 个")
+    return _deleted_ok
+
+
 def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int = 0,
                 target_main: str = "") -> int:
     """finalize 模式：更新包已下载好，执行 等待退出→解压→覆盖→清理→启动。
@@ -620,33 +657,9 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
 
         # 3.5 删除清单（v1.4.5 bug hunt F15）：包内 deleted-files.txt = 自上版本起删除的
         # 运行时资源/模板/文档，目标端同步删除，防旧 dll/旧模板/旧文档永久残留
-        _del_spec = os.path.join(extracted, 'PDD EZ', 'deleted-files.txt')
-        if os.path.exists(_del_spec):
-            try:
-                with open(_del_spec, encoding='utf-8') as _f:
-                    _deleted = [l.strip() for l in _f if l.strip()]
-            except Exception:
-                _deleted = []
-            _deleted_ok = 0
-            for _rel in _deleted:
-                _nor = str(_rel).replace('/', os.sep)
-                # 白名单：仅 templates/ 与固定资源文件；拒绝路径穿越/绝对路径
-                if not (_nor.startswith('templates' + os.sep + '') or _nor in (
-                        'icon.ico', 'regions.json', 'settings_template.json', '使用说明.txt')):
-                    continue
-                if '..' in _nor.split(os.sep) or os.path.isabs(_nor):
-                    continue
-                _dest = os.path.join(target_dir, _nor)
-                if _dest.lower().endswith(('.exe', '.dll')):
-                    continue
-                try:
-                    if os.path.exists(_dest):
-                        os.remove(_dest)
-                        _deleted_ok += 1
-                except Exception:
-                    pass
-            if _deleted_ok:
-                print(f"[更新器] 删除旧文件 {_deleted_ok} 个")
+        # （验收回归：_extract_zip 返回的 extracted 已是 PDD EZ 子目录，此前再拼
+        # 'PDD EZ' 双前缀清单永不命中；改为 extracted 直连 + fallback）
+        _apply_deleted_files(extracted, target_dir)
 
         # 4) 预检测占用（自身文件除外，后面单独处理）
         locked = _check_target_files_locked(files)
@@ -985,6 +998,8 @@ def main():
                         dest = os.path.join(target_dir, rel)
                         if _needs_overwrite(src, dest):
                             files.append((src, dest))
+                # v1.4.5 bug hunt F15：auto 模式同样应用删除清单（此前仅 finalize 有）
+                _apply_deleted_files(new_dir, target_dir)
 
                 # 预检测占用（自身文件除外）
                 locked = _check_target_files_locked(files)

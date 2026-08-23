@@ -451,7 +451,8 @@ class App(SettingsUIMixin):
             txt.configure(state="disabled")
             txt.pack(fill="both", expand=True, padx=5, pady=5)
             # 可选图片（v1.4.5 bug hunt F29：下载移出主线程——urlopen 最长 10s 会冻结事件循环；
-            # 主线程只做 after 回填 + PhotoImage 创建）
+            # 验收回归：此前 `Thread(lambda: after(lambda: _apply_img(_fetch_img())))` 的内层
+            # lambda 由主线程执行时仍调 _fetch_img()（urlopen 在主线程）——改为 worker 内取图
             if image_url:
                 def _fetch_img():
                     try:
@@ -471,10 +472,12 @@ class App(SettingsUIMixin):
                         _lbl.pack(pady=5)
                     except Exception:
                         pass
+                def _job():
+                    _im = _fetch_img()  # worker 线程里 urlopen
+                    self.win.after(0, lambda: _apply_img(_im))  # 主线程只创建 PhotoImage
                 try:
                     import threading as _thr2
-                    _thr2.Thread(target=lambda: self.win.after(0, lambda: _apply_img(_fetch_img())),
-                                 daemon=True).start()
+                    _thr2.Thread(target=_job, daemon=True).start()
                 except Exception:
                     pass
             _btn_frame = tk.Frame(dlg, bg=self.C_BG)
@@ -2080,6 +2083,9 @@ class App(SettingsUIMixin):
                         # 保留原值单位（'85份' → 用户改 90 → '90份'），
                         # v1.4.5（bug hunt F25）：先 strip_tail_noise 再去尾部非数字串——
                         # 否则 '69份 查看地址' 会把'查看地址'当单位回写（_raw 污染）
+                        # 验收回归（fix-review P0）：此处需自导 re——旧补丁用了未定义 _re2
+                        # → NameError → 刷新计算对 OCR 数据整体失效
+                        import re as _re2
                         from ocr import strip_tail_noise as _stn2
                         _unit = ''
                         _m2 = _re2.search(r'[^\d\s.,，、]+$', _stn2(_old))
@@ -2194,8 +2200,8 @@ class App(SettingsUIMixin):
             _dual_mode = dual_var.get()
             dlg.destroy()
             # 禁用操作按钮防止并发（v1.4.5 bug hunt F24：批量期间也禁用实时截图入口，
-            # 防双批并发互相覆盖取消钩子/物理争抢鼠标键盘）
-            for btn in [self.export_btn, getattr(self, 'live_btn', None)]:
+            # 防双批并发互相覆盖取消钩子/物理争抢鼠标键盘；fix-review C10：过滤 None）
+            for btn in [b for b in [self.export_btn, getattr(self, 'live_btn', None)] if b]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
             self.status_text.set("批量识别中 — 请不要操作")
             def _batch_thread_wrapper():
@@ -2227,8 +2233,10 @@ class App(SettingsUIMixin):
                     try:
                         self.win.after(0, lambda _e=_e: self.status_text.set(f"❌ 批量识别异常: {str(_e)[:80]}"))
                         self.win.after(0, self.win.deiconify)
-                        # 异常路径立即恢复导出按钮，不等 10 分钟 idle 兜底（result_queue 无 None 信号）
+                        # 异常路径立即恢复按钮，不等 10 分钟 idle 兜底（result_queue 无 None 信号；C9：live_btn 一并恢复）
                         self.win.after(0, lambda: self.export_btn.configure(state='normal'))
+                        self.win.after(0, lambda: (self.live_btn.configure(state='normal')
+                                                   if getattr(self, 'live_btn', None) else None))
                     except Exception:
                         pass  # 主窗口可能已销毁/关闭，UI 恢复失败无妨（程序正在退出）
                 finally:
@@ -2282,10 +2290,11 @@ class App(SettingsUIMixin):
                 pass
         
         self.win.after(0, self.win.iconify); time.sleep(1.5)
-        self._batch_stop.clear()
         # v1.4.4（dsh 报告 #1）：熔断标志跨批量复位——_api_fatal 置位后没有任何清零点，
         # 一次批量额度耗尽会让同一进程后续所有批量永久熔断（换 key 也不恢复）。
         # 批量开始清零：该批内部熔断语义保留，新一批从头可用。
+        # ⚠（fix-review C4）：这里不再做 _batch_stop.clear() —— clear 已移到
+        # 钩子注入之前（wrapper），此处再清会把注入后 ~1.5s 内按 F9 的停止信号抹掉。
         try:
             from ocr import _api_fatal as _af
             _af['flag'] = False

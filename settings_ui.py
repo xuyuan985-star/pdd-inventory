@@ -593,16 +593,19 @@ class SettingsUIMixin:
                     _restore_windows(_hidden)
                     raise
 
-                def _finish(result, pos):
+                def _finish(result, pos, err=''):
                     try:
                         _restore_windows(_hidden)
                         _bring_browser_front()
                         if not result:
+                            # fix-review C11：err 非空时展示具体错误原因（API/网络/超时）
+                            _detail = f"（{err[:200]}）" if err else ""
                             messagebox.showwarning(
                                 "定位失败",
-                                "未识别到商家后台的元素。\n请确认：\n1. 拼多多商家后台页面已打开并加载完成\n2. 页面显示的是商品列表（有省份下拉框和查询按钮）",
+                                "未识别到商家后台的元素。" + _detail +
+                                "\n请确认：\n1. 拼多多商家后台页面已打开并加载完成\n2. 页面显示的是商品列表（有省份下拉框和查询按钮）",
                             )
-                            ai_status_lbl.configure(text="定位失败：未识别到后台元素")
+                            ai_status_lbl.configure(text=f"定位失败：未识别到后台元素{_detail}")
                             return
                         ox, oy = pos.get('left', 0), pos.get('top', 0)
                         sx = pos.get('scale_x', 1.0) or 1.0
@@ -630,9 +633,10 @@ class SettingsUIMixin:
                     try:
                         _result = ai_locate_elements(_shot)
                         self.win.after(0, lambda: _finish(_result, _pos))
-                    except Exception:
-                        # v1.4.5（bug hunt F28）：异常走 _finish(None) 统一提示，主线程不冻结
-                        self.win.after(0, lambda: _finish(None, _pos))
+                    except Exception as _e:
+                        # v1.4.5（bug hunt F28 + fix-review C11）：异常透传具体原因，
+                        # 不要无捕获变量丢弃细节（否则 API/网络错误全误报"未识别到后台元素"）
+                        self.win.after(0, lambda e=_e: _finish(None, _pos, str(e)))
                 threading.Thread(target=_work, daemon=True).start()
             except Exception as e:
                 try:

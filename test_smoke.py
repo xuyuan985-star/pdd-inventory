@@ -216,30 +216,67 @@ class TestBugHuntRegressions(unittest.TestCase):
         self.assertEqual(strip_tail_noise('示例仓库查看地址'), '示例仓库')
 
     def test_total_count_prefers_common_n(self):
-        """bug hunt F11：官方总数优先匹配'共有N条'，不误取每页条数"""
-        import re
-        cases = [
-            ('每页10条 共有128条', 128),
-            ('共有 9 条', 9),
-            ('总共有 5 条', 5),
-            ('总共25条', 25),
-            ('8', None),  # 裸数字无'条'不强行取（回退也取8，但这里看权威匹配优先）
-        ]
-        for text, _ in cases:
-            m = re.search(r'共\s*(?:有|計)?\s*(?P<n>\d+)\s*条', text)
-            if '共有' not in text and '总共' not in text:
-                m = re.search(r'总(?:共|计)?\s*(?P<n>\d+)\s*条', text) or m
-            if not m:
-                m = re.search(r'(?P<n>\d+)\s*条', text) or m
-            if not m:
-                m = re.search(r'(?P<n>\d+)', text) or m
-            got = int(m.group('n')) if m else None
-            if got is not None:
-                self.assertEqual(got, int(str(text).split()[-1].lstrip('共有总条').strip('条')) if False else got)
-        # 关键语义断言：'每页10条 共有128条' 应优先取 128
-        text = '每页10条 共有128条'
-        m = re.search(r'共\s*(?:有|計)?\s*(?P<n>\d+)\s*条', text)
-        self.assertEqual(int(m.group('n')), 128)
+        """bug hunt F11（fix-review C14 强化）：直接调生产 helper _parse_total_count"""
+        from vision import _parse_total_count
+        self.assertEqual(_parse_total_count('每页10条 共有128条'), 128)
+        self.assertEqual(_parse_total_count('共有 9 条'), 9)
+        self.assertEqual(_parse_total_count('总共有 5 条'), 5)
+        self.assertEqual(_parse_total_count('总共25条'), 25)
+        self.assertEqual(_parse_total_count('识别不了'), None)
+
+    def test_strip_tail_noise_pure_word_regression(self):
+        """fix-review N1 收窄：整值保护仅日期/数字形态，纯词条噪音仍剥空"""
+        from ocr import strip_tail_noise
+        self.assertEqual(strip_tail_noise('查看地址'), '')
+        self.assertEqual(strip_tail_noise('更新记录'), '')
+        self.assertEqual(strip_tail_noise('2024-05-04'), '2024-05-04')
+        self.assertEqual(strip_tail_noise('128份 查看'), '128份')
+
+
+class TestUpdaterRegression(unittest.TestCase):
+    """fix-review P0/P1 回归：import re / _is_program_dir 版本号分支 / N2 0 值守卫"""
+
+    def test_is_program_dir_version_named_no_nameerror(self):
+        """P0-C1：版本号 exe + _internal 应为 True；未 import re 时此调用必然 NameError"""
+        import importlib.util, os, tempfile, shutil
+        spec = importlib.util.spec_from_file_location('pdd_updater2', os.path.join(HERE, 'updater.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        tmp = tempfile.mkdtemp()
+        try:
+            d1 = os.path.join(tmp, 'Prog1')
+            os.makedirs(os.path.join(d1, '_internal'), exist_ok=True)
+            with open(os.path.join(d1, 'PDD EZ.exe'), 'wb') as f:
+                f.write(b'x')
+            self.assertTrue(m._is_program_dir(d1), '固定名+_internal 应为 True')
+            d2 = os.path.join(tmp, 'Prog2')
+            os.makedirs(os.path.join(d2, '_internal'), exist_ok=True)
+            with open(os.path.join(d2, 'PDD EZ_v1.4.4.exe'), 'wb') as f:
+                f.write(b'x')
+            # 版本号 exe（旧版升级目录）分支不得 NameError，应为 True
+            self.assertTrue(m._is_program_dir(d2), '版本号 exe+_internal 应为 True')
+            d3 = os.path.join(tmp, 'Prog3')
+            os.makedirs(d3, exist_ok=True)
+            with open(os.path.join(d3, 'PDD EZ Backup.exe'), 'wb') as f:
+                f.write(b'x')
+            self.assertFalse(m._is_program_dir(d3), '仅有 Backup.exe 无 _internal 应为 False')
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_merge_verify_keeps_zero_inventory(self):
+        """fix-review N2/C8：真实 0 库存不被副模型覆盖；真空缺才补"""
+        import importlib.util, os
+        spec = importlib.util.spec_from_file_location('pdd_ocr2', os.path.join(HERE, 'ocr.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        verify = [{'name': 'A', 'stock': '500'}, {'name': 'B', 'stock': '500'}]
+        # 触发二次识别：_missing_id=True（缺 ID 主模型行）
+        items = [{'name': 'A', 'stock': '0', '_missing_id': True}]
+        out = m.merge_verify_items([dict(i) for i in items], [dict(v) for v in verify])
+        self.assertEqual(out[0].get('stock'), '0', '0 库存应保留')
+        items2 = [{'name': 'B', 'stock': '', '_missing_id': True}]
+        out2 = m.merge_verify_items([dict(i) for i in items2], [dict(v) for v in verify])
+        self.assertEqual(out2[0].get('stock'), '500', '真空缺应补全')
 
 
 if __name__ == '__main__':

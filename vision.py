@@ -411,6 +411,22 @@ def _locate_elements_once(screenshot_path: str = None) -> dict:
     }
 
 
+# v1.4.5（bug hunt F11 + fix-review C14）：总数解析抽为可测 helper——优先"共有N条"权威
+# 模式，纯 \d+ 首匹配可能取到『每页10条』的 10 → 累计 10 即硬停，128 个只认 10 个
+def _parse_total_count(content) -> int:
+    """从模型返回文本中取官方总条数；无有效值返回 None。"""
+    import re as _re
+    _m = _re.search(r'共\s*(?:有|計)?\s*(?P<n>\d+)\s*条', content or '')
+    if not _m:
+        _m = _re.search(r'总(?:共|计)?\s*(?P<n>\d+)\s*条', content or '')
+    if not _m:
+        _m = _re.search(r'(?P<n>\d+)\s*条', content or '')
+    if not _m:
+        _m = _re.search(r'(?P<n>\d+)', content or '')
+    n = int(_m.group('n')) if _m else 0
+    return n if n > 0 else None
+
+
 def ai_read_total_count(screenshot_path: str = None) -> int:
     """读页面右下角分页栏的商品总条数（如 '共有 9 条' → 9），失败返回 None。
 
@@ -449,18 +465,7 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
               '只输出数字，找不到输出 0。')
     try:
         content = _call_vision_api(img_b64, prompt, max_tokens=16)
-        import re as _re
-        # v1.4.5（bug hunt F11）：优先匹配「共(有)N条」权威模式——纯 \d+ 首匹配可能
-        # 取到『每页10条』的 10 → 累计 10 即硬停，128 个只认 10 个
-        _m = _re.search(r'共\s*(?:有|計)?\s*(?P<n>\d+)\s*条', content or '')
-        if not _m:
-            _m = _re.search(r'总(?:共|计)?\s*(?P<n>\d+)\s*条', content or '')
-        if not _m:
-            _m = _re.search(r'(?P<n>\d+)\s*条', content or '')
-        if not _m:
-            _m = _re.search(r'(?P<n>\d+)', content or '')
-        n = int(_m.group('n')) if _m else 0
-        return n if n > 0 else None
+        return _parse_total_count(content)
     except VisionCancelled:
         raise  # v1.4.2 紧急停止：取消异常透传
     except Exception:

@@ -794,7 +794,14 @@ def strip_tail_noise(value) -> str:
             changed = True
     _out = _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
     if not _out and str(value).strip():
-        return str(value).strip()  # 整值剥空 = 原值本身即噪音形态（纯日期/纯词条），保留原文防数据丢失
+        # v1.4.5（bug hunt F4）整值保护（验收回归 N1/C7 收窄）：仅当原值呈"日期/数字形态"
+        # 才保留原文（防 '2024-05-04' 这类真实数据被清空）；纯词条噪音（'查看地址'/
+        # '更新记录'）仍剥空，避免噪音文本入库/导出
+        _orig = str(value).strip()
+        _dateish = bool(_re.search(r'\d{4}\s*[年.\-/]|\d{1,2}\s*[月/\-]\s*\d{1,2}|\d{4}|\d{1,2}:\d{2}', _orig))
+        if _dateish:
+            return _orig
+        return ''
     return _out
 
 
@@ -1272,11 +1279,9 @@ def merge_verify_items(items: list, verify_items: list) -> list:
                 for _f in ('stock', 'sales'):
                     a = str(it.get(_f) or '')
                     b = str(v.get(_f) or '')
-                    # v1.4.5（bug hunt F8）：真实库存/销量恰为 1900~2100（如 2026）会被
-                    # _suspect_number 误判"日期串位"并用副模型值覆盖真实数据——收紧为
-                    # 仅缺失/为0时才用副模型值补全；_suspect_number 仍留在 need 触发
-                    # 二次识别用于标记，但不再作覆盖依据
-                    if (not a or a == '0') and b and b != '0':
+                    # v1.4.5（bug hunt F8 + 验收回归 N2/C8）：仅真空缺（''）才用副模型补全——
+                    # 真实库存/销量为 0 是合法业务值，不得被副模型误读值覆盖
+                    if a == '' and b and b != '0':
                         it[_f] = v[_f]
                         fixed = True
                 if fixed:

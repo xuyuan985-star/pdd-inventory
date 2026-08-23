@@ -265,7 +265,9 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
         # 资源文件（仅当变更时）— settings.json 是用户本机配置，绝不进包
         if resources_changed:
-            for res in ['icon.ico', 'regions.json']:
+            # v1.4.5（bug hunt F17 验收回归 C6）：检测已加但仍需写包——模板/文档资源与 icon/regions
+            # 同一循环进包（settings_template.json/使用说明.txt 在 onedir 根，非 _internal）
+            for res in ['icon.ico', 'regions.json', 'settings_template.json', '使用说明.txt']:
                 for src in [os.path.join(onedir, res), os.path.join(internal, res)]:
                     if os.path.exists(src):
                         zf.write(src, os.path.join(name, res))
