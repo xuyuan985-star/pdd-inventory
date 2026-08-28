@@ -526,8 +526,30 @@ def query_daily(days=30, region=None) -> list:
 
     days：最近 N 天窗口（<=0 不限）；region：None/'' 查全部地区，否则单地区。
     按日期降序、地区升序。alerts = 立刻补货（红色硬预警）行数（语义见模块 docstring）。
+
+    t12 P2-C：enforce=true 且 free 时把 days 钳制到 FREE_HISTORY_DAYS（30），数据库数据不删。
+    用户裁定：默认全免（enforce=false），所有用户不受限；Pro 也不受限。
     """
     try:
+        # t12 P2-C：免费版历史趋势窗口钳制（仅 enforce=true 时生效）
+        try:
+            from auth.license import get_history_days_limit, is_pro
+            # 默认 enforce=false，所有人 unlimited；显式 enforce=true 才钳制
+            try:
+                from utils import Config
+                _cfg = Config.load() if hasattr(Config, "load") else {}
+                _lic_cfg = _cfg.get("license", {}) if isinstance(_cfg, dict) else {}
+                _enforce = bool(_lic_cfg.get("enforce", False))
+                _key = _lic_cfg.get("key", "") or ""
+            except Exception:
+                _enforce = False
+                _key = ""
+            if _enforce and not is_pro(_key, enforce=True) and days > 0:
+                from auth.license import FREE_HISTORY_DAYS
+                if days > FREE_HISTORY_DAYS:
+                    days = FREE_HISTORY_DAYS
+        except Exception:
+            pass  # 失败安全：钳制不生效 → 返全量
         floor = _day_floor(days)
         reg = _to_str(region)
 

@@ -6,7 +6,7 @@ from tkinter import messagebox, ttk
 import tkinter as tk
 
 from config import THEMES, save_theme_pref
-from utils import get_base_dir, get_api_config
+from utils import get_base_dir, get_api_config, Config
 
 
 class SettingsUIMixin:
@@ -132,6 +132,248 @@ class SettingsUIMixin:
                   font=(self.FONT[0], 7)).pack(side="left")
         self._lbl(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
+
+        # ── 授权管理（t12 P2-C）──
+        self._build_license_card(content)
+
+        # ── 补货策略（t13 P3-A）──
+        self._build_replenishment_card(content)
+
+    def _build_replenishment_card(self, parent):
+        """t13 P3-A 补货策略卡片：模型单选（经典/加权）+ safety_days + in_transit_qty。
+
+        用户裁定：默认 'classic'（一行公式逻辑都不许改）；切到 'weighted' 时
+        会按 sku_id 关联历史库做加权日销，无历史自动回退经典并标注「经典(无历史)」。
+        """
+        try:
+            from utils import get_replenishment_cfg, MODEL_CLASSIC, MODEL_WEIGHTED
+        except Exception:
+            self._lbl(parent, text="补货策略模块加载失败（utils）",
+                     fg=self.C_MUTED).pack(pady=8)
+            return
+
+        card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1,
+                        highlightbackground=self.C_BORDER)
+        card.pack(fill="x", padx=20, pady=8)
+        self._lbl(card, text='补货策略', font=self.FONT_HEADING, bg=self.C_BG,
+                  fg=self.C_SECONDARY).pack(pady=(12, 2))
+
+        # 当前配置读出
+        try:
+            cur = get_replenishment_cfg()
+        except Exception:
+            cur = {'model': 'classic', 'safety_days': 2, 'in_transit_qty': 0}
+
+        # 模型单选
+        _model_var = tk.StringVar(self.win, value=str(cur.get('model', 'classic')))
+        model_row = tk.Frame(card, bg=self.C_BG); model_row.pack(pady=(6, 2), padx=20, fill='x')
+        self._lbl(model_row, text="补货模型：", font=(self.FONT[0], 9),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left', padx=(0, 6))
+        tk.Radiobutton(model_row, text='经典（原公式，默认）', variable=_model_var, value='classic',
+                       font=(self.FONT[0], 9), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side='left')
+        tk.Radiobutton(model_row, text='加权（0.5×7日+0.3×14日+0.2×30日）',
+                       variable=_model_var, value='weighted',
+                       font=(self.FONT[0], 9), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side='left', padx=(8, 0))
+
+        # safety_days spinbox
+        sd_row = tk.Frame(card, bg=self.C_BG); sd_row.pack(pady=(6, 2), padx=20, fill='x')
+        self._lbl(sd_row, text="安全库存天数：", font=(self.FONT[0], 9),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left', padx=(0, 6))
+        _sd_var = tk.IntVar(self.win, value=int(cur.get('safety_days', 2) or 0))
+        tk.Spinbox(sd_row, from_=0, to=30, textvariable=_sd_var, width=6,
+                   font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
+                   highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                   bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(side='left')
+        self._lbl(sd_row, text="（加权模式：运输+此值=到货覆盖天数）",
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(side='left', padx=(8, 0))
+
+        # in_transit_qty spinbox
+        it_row = tk.Frame(card, bg=self.C_BG); it_row.pack(pady=(6, 2), padx=20, fill='x')
+        self._lbl(it_row, text="在途库存：", font=(self.FONT[0], 9),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left', padx=(0, 6))
+        _it_var = tk.IntVar(self.win, value=int(cur.get('in_transit_qty', 0) or 0))
+        tk.Spinbox(it_row, from_=0, to=100000, textvariable=_it_var, width=8,
+                   font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
+                   highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                   bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(side='left')
+        self._lbl(it_row, text="（加权模式：补货量 = (运输+安全)×日销 − 在途 − 库存，100 取整）",
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(side='left', padx=(8, 0))
+
+        # 保存
+        def _on_save():
+            try:
+                cfg = Config.load() if hasattr(Config, "load") else {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                rep = cfg.get("replenishment", {}) or {}
+                rep["model"] = str(_model_var.get() or 'classic')
+                rep["safety_days"] = max(0, int(_sd_var.get() or 0))
+                rep["in_transit_qty"] = max(0, int(_it_var.get() or 0))
+                cfg["replenishment"] = rep
+                Config.save(cfg)
+                self.status_text.set(f"补货策略已保存：model={rep['model']}  safety_days={rep['safety_days']}  in_transit={rep['in_transit_qty']}")
+            except Exception as e:
+                try:
+                    messagebox.showerror("保存失败", str(e)[:200])
+                except Exception:
+                    pass
+        self._mk_btn(card, "保存", _on_save, kind='primary',
+                  font=(self.FONT[0], 9)).pack(pady=(8, 4))
+        # 说明
+        self._lbl(card,
+                  text=("经典模式 = 现行公式原样保留（默认，一行公式逻辑都不改）。"
+                        "加权模式按 sku_id 从 history_db 读近 7/14/30 日销量做加权日销，"
+                        "无历史数据时自动回退经典并标注「经典(无历史)」。"),
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED,
+                  wraplength=560, justify='left').pack(pady=(0, 12), padx=20, anchor='w')
+
+    def _build_license_card(self, parent):
+        """t12 P2-C 授权管理卡片：显示 tier/到期/导入 license 文本/enforce 开关。
+
+        用户裁定：enforce=false 默认全免，状态下显示「试用期：所有限制未启用」；
+        enforce=true + 无 license → 免费版；
+        enforce=true + 有效 Pro license → 显示到期日。
+        """
+        try:
+            from auth.license import get_license_info, is_pro, reset_cache, FREE_DAILY_LIVE_SCREENSHOT, FREE_HISTORY_DAYS
+        except Exception:
+            self._lbl(parent, text="授权模块加载失败（auth.license）",
+                     fg=self.C_MUTED).pack(pady=8)
+            return
+
+        card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1,
+                        highlightbackground=self.C_BORDER)
+        card.pack(fill="x", padx=20, pady=8)
+        self._lbl(card, text='授权管理', font=self.FONT_HEADING, bg=self.C_BG,
+                  fg=self.C_SECONDARY).pack(pady=(12, 2))
+
+        # 当前状态行
+        _status_var = tk.StringVar(self.win, value='')
+        _tier_var = tk.StringVar(self.win, value='')
+        _expire_var = tk.StringVar(self.win, value='')
+        self._lbl(card, textvariable=_tier_var, font=(self.FONT[0], 10, 'bold'),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(pady=(2, 0))
+        self._lbl(card, textvariable=_expire_var, font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_MUTED).pack()
+        self._lbl(card, textvariable=_status_var, font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_MUTED).pack(pady=(2, 4))
+
+        def _refresh():
+            try:
+                cfg = Config.load() if hasattr(Config, "load") else {}
+                lic_cfg = cfg.get("license", {}) if isinstance(cfg, dict) else {}
+                key = lic_cfg.get("key", "") or ""
+                enforce = bool(lic_cfg.get("enforce", False))
+                info = get_license_info(key, enforce=enforce)
+                _tier_var.set("Pro" if info.get("is_pro") else "免费版")
+                _expire_var.set(info.get("status_text", ""))
+                _status_var.set(
+                    f"enforce={enforce}  ·  实时截图免费 {FREE_DAILY_LIVE_SCREENSHOT} 次/日"
+                    f"  ·  历史趋势免费 {FREE_HISTORY_DAYS} 天"
+                )
+            except Exception as e:
+                _status_var.set(f"读 license 状态失败：{str(e)[:80]}")
+        _refresh()
+
+        # enforce 开关
+        enf_row = tk.Frame(card, bg=self.C_BG); enf_row.pack(pady=(8, 2), padx=20, fill='x')
+        _enforce_var = tk.BooleanVar(self.win, value=False)
+        def _on_enforce_toggle():
+            try:
+                cfg = Config.load() if hasattr(Config, "load") else {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                lic = cfg.get("license", {}) or {}
+                lic["enforce"] = bool(_enforce_var.get())
+                cfg["license"] = lic
+                Config.save(cfg)
+                reset_cache()
+                _refresh()
+            except Exception as e:
+                # t24 修复包 A (BUG-13)：写盘失败时回滚 UI 到旧值，
+                # 避免「UI 显示新值但磁盘未写入」的不一致状态
+                try:
+                    _enforce_var.set(not bool(_enforce_var.get()))
+                except Exception:
+                    pass
+                try:
+                    messagebox.showerror("保存失败", str(e)[:200])
+                except Exception:
+                    pass
+        # 读当前值
+        try:
+            _cur = Config.load() if hasattr(Config, "load") else {}
+            _enforce_var.set(bool((_cur.get("license") or {}).get("enforce", False)))
+        except Exception:
+            pass
+        tk.Checkbutton(enf_row, text="启用门控（关闭时所有 Pro 功能无限制）",
+                       variable=_enforce_var, command=_on_enforce_toggle,
+                       font=(self.FONT[0], 9), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side='left')
+
+        # license 输入框 + 导入按钮
+        in_row = tk.Frame(card, bg=self.C_BG); in_row.pack(pady=(6, 4), padx=20, fill='x')
+        self._lbl(in_row, text="License 文本：", font=(self.FONT[0], 9),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left', padx=(0, 6))
+        _key_var = tk.StringVar(self.win, value='')
+        try:
+            _cur2 = Config.load() if hasattr(Config, "load") else {}
+            _key_var.set((_cur2.get("license") or {}).get("key", "") or "")
+        except Exception:
+            pass
+        _key_entry = tk.Entry(in_row, textvariable=_key_var, font=self.FONT, width=60,
+                              relief='flat', bd=0, highlightthickness=1,
+                              highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                              bg="#FFFFFF", fg=self.C_TEXT, insertbackground=self.C_TEXT)
+        _key_entry.pack(side='left', padx=(0, 6), fill='x', expand=True)
+
+        def _on_import():
+            try:
+                # t24 修复包 A (BUG-14)：写盘失败时回滚 _key_var 为旧值；
+                # 进入 try 前快照旧文本，失败时还原（避免「UI 显示新文本但磁盘未写入」）
+                _old_key = _key_var.get()
+                text = _key_var.get().strip()
+                if not text:
+                    messagebox.showinfo("导入 license", "请先粘贴 license 文本")
+                    return
+                from auth.license import verify_license, reset_cache
+                lic = verify_license(text)
+                if not lic:
+                    messagebox.showerror("导入 license",
+                                         "license 文本无效（验签失败/已过期/指纹不匹配）")
+                    return
+                cfg = Config.load() if hasattr(Config, "load") else {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                lic_cfg = cfg.get("license", {}) or {}
+                lic_cfg["key"] = text
+                cfg["license"] = lic_cfg
+                Config.save(cfg)
+                reset_cache()
+                _refresh()
+                messagebox.showinfo("导入 license",
+                                    f"已导入：tier={lic.get('tier')}  到期={lic.get('expire_at')}")
+            except Exception as e:
+                # t24 修复包 A (BUG-14)：写盘失败时回滚 _key_var 为旧值
+                try:
+                    _key_var.set(_old_key)
+                except Exception:
+                    pass
+                try:
+                    messagebox.showerror("导入失败", str(e)[:200])
+                except Exception:
+                    pass
+        self._mk_btn(in_row, "导入并验证", _on_import, kind='primary',
+                  font=(self.FONT[0], 9)).pack(side='left')
+
+        # 永久免费声明
+        self._lbl(card,
+                  text=("永久免费功能：表格导入 · 手动输入 · 批量识别 · 双模型验证 · Excel 导出。"
+                        "门控只针对新增高级功能：实时截图识别次数 / 历史趋势窗口。"),
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED,
+                  wraplength=560, justify='left').pack(pady=(4, 12), padx=20, anchor='w')
 
     def _probe_columns(self):
         """探测：截图 → AI 定位表格 → 全量识别所有列 → 保存 all 列清单"""
@@ -764,13 +1006,13 @@ class SettingsUIMixin:
         pwd_frame = tk.Frame(parent, bg=self.C_BG)
         pwd_frame.pack(fill="x", padx=20, pady=5)
         self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
-        pwd_var = tk.StringVar(self.win, value=config.get('password', ''))
-        pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="*" if config.get('password') else "", bg=self.C_BG)
+        # v1.4.8 P1-A：默认不保存密码——初始值永远不读已存密码（即便 config 里还有 legacy 值）
+        # 仅当用户主动勾选「记住密码」且点保存时才落盘。已存密码提示用户可手动清除。
+        pwd_var = tk.StringVar(self.win, value='')  # 永远从空开始，不预填
+        pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="", bg=self.C_BG)
         pwd_entry.pack(side="left", padx=5)
-        if not config.get('password'):
-            pwd_entry.configure(fg=self.C_MUTED)
-            pwd_var.set('输入密码')
-            pwd_entry.configure(show="")
+        pwd_var.set('输入密码')
+        pwd_entry.configure(fg=self.C_MUTED)
         def _pwd_on_focus(e):
             if pwd_var.get() == '输入密码': pwd_var.set(''); pwd_entry.configure(fg=self.C_TEXT, show='*')
         def _pwd_on_blur(e):
@@ -785,7 +1027,13 @@ class SettingsUIMixin:
                        font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
                        selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left")
 
-        self._lbl(parent, text="⚠ 密码以明文存储在本机配置文件，请确保电脑安全",
+        # v1.4.8 P1-A：「记住密码」默认关——勾选才落盘；取消勾选则清空已存密码
+        remember_var = tk.BooleanVar(dlg, value=False)
+        tk.Checkbutton(pwd_frame, text="记住密码", variable=remember_var,
+                       font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left", padx=(8,0))
+
+        self._lbl(parent, text="⚠ 默认不保存密码（更安全）；勾选「记住密码」才会写入本机配置",
                  font=(self.FONT[0], 7), fg=self.C_MUTED).pack(pady=(10,0))
 
         def save_backend():
@@ -793,17 +1041,33 @@ class SettingsUIMixin:
             s = _CfgB.load()  # 安全回退
             if not isinstance(s, dict):
                 s = {}  # 顶层合法 JSON 但不是 dict（如 []）时防 TypeError
+            # 关键判定：只有勾选「记住密码」才把密码写入；否则强制为空
+            typed_pwd = '' if pwd_var.get() == '输入密码' else pwd_var.get()
+            # v1.4.8 P1-C：勾选记住 → DPAPI 加密落盘（防明文 settings.json 被拷走即丢账号）
+            if remember_var.get() and typed_pwd:
+                try:
+                    from dpapi_utils import enc as _dpapi_enc, is_available as _dpi_avail
+                    if _dpi_avail():
+                        _enc = _dpapi_enc(typed_pwd)
+                        if _enc:
+                            typed_pwd = _enc
+                except Exception:
+                    pass  # DPAPI 不可用 → 静默保留明文（与设计一致：降级可用）
+            final_pwd = typed_pwd if remember_var.get() else ''
             s['backend'] = {
                 'url': url_var.get().strip(),
                 'account': '' if acc_var.get() in ('输入手机号', '') else acc_var.get().strip(),
-                'password': '' if pwd_var.get() == '输入密码' else pwd_var.get()
+                'password': final_pwd
             }
             try:
                 _CfgB.save(s)  # 原子写入
             except Exception as e:
                 messagebox.showerror("保存失败", str(e), parent=dlg)
                 return
-            messagebox.showinfo("已保存", "商家后台配置已保存", parent=dlg)
+            if final_pwd:
+                messagebox.showinfo("已保存", "商家后台配置已保存（密码已记忆）", parent=dlg)
+            else:
+                messagebox.showinfo("已保存", "商家后台配置已保存（密码未保存）", parent=dlg)
 
         self._mk_btn(parent, "保存配置", save_backend, kind='primary',
                   font=self.FONT_BOLD, width=15).pack(pady=15)
@@ -879,7 +1143,20 @@ class SettingsUIMixin:
             kf.pack(fill="x", padx=12, pady=4)
             self._lbl(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
-            kv = tk.StringVar(self.win, value=cfg.get('api_key', ''))
+            # v1.4.8 P1-C：若存的是 dpapi:v1: 密文，解密后填入；解密失败（跨机/损坏）
+            # → Config.decrypt_value 返回空串 → 提示用户重填，绝不让界面卡住
+            from utils import Config as _CfgKey
+            _stored_key = cfg.get('api_key', '')
+            _dec_key = _CfgKey.decrypt_value(_stored_key) if _stored_key else ''
+            if _stored_key and not _dec_key and _stored_key.startswith("dpapi:v1:"):
+                # 凭据失效：仅一次提示，UI 不阻塞
+                try:
+                    self.win.after(200, lambda k=key: messagebox.showwarning(
+                        "凭据失效", f"提供商「{info['name']}」的 API Key 加密存储已失效\n"
+                        f"（可能跨机/换账户），请重新填写。", parent=self.win))
+                except Exception:
+                    pass
+            kv = tk.StringVar(self.win, value=_dec_key)
             ke = _api_entry(kf, kv, show='*')
             ke.pack(side="left", padx=6)
             sv = tk.BooleanVar(self.win, value=False)
@@ -939,6 +1216,13 @@ class SettingsUIMixin:
         def save_all():
             import json
             from utils import Config
+            # v1.4.8 P1-C：用户键入的明文 API Key 在落盘前用 DPAPI 加密；
+            # 已加密的（用户复制粘贴回原值）直接跳过；空串明文不加密。
+            try:
+                from dpapi_utils import enc as _dpapi_enc, is_available as _dpi_avail
+            except Exception:
+                _dpapi_enc = None
+                _dpi_avail = lambda: False
             new_providers = {}
             for key in PRESET_PROVIDERS:
                 model = model_vars[key].get().strip()
@@ -946,8 +1230,13 @@ class SettingsUIMixin:
                 if model and model not in history:
                     history.insert(0, model)
                 history = history[:10]  # 保留最近10个
+                _typed_key = key_vars[key].get().strip()
+                # 若用户粘贴回已是 dpapi:v1: 密文 → 跳过再加密（防双重包裹）
+                if _typed_key and not _typed_key.startswith("dpapi:v1:") and _dpi_avail() and _dpapi_enc:
+                    _enc_key = _dpapi_enc(_typed_key)
+                    _typed_key = _enc_key if _enc_key else _typed_key
                 new_providers[key] = {
-                    'api_key': key_vars[key].get().strip(),
+                    'api_key': _typed_key,
                     'model': model,
                     'model_history': history,
                     'endpoint': getattr(self, f'_api_ep_{key}').get().strip(),

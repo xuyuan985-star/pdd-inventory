@@ -116,35 +116,166 @@ def get_latest_release():
         print(f"[更新器] 检查失败: {e}")
         return None, []
 
-def download_asset(asset, dest, progress_stage: str = "download"):
+def download_asset(asset, dest, progress_stage: str = "download", expected_sha256=None):
     """下载 release 附件到 dest，返回 (success: bool, error: str)。
-    下载过程中上报进度（current/total bytes）。镜像优先，失败回退官方直连。"""
+    下载过程中上报进度（current/total bytes）。
+
+    v1.4.8 镜像链（按 settings.update.* 顺序尝试，空配置=跳过该源）：
+      1) GitHub（kotori 镜像前缀，prefer_mirror=True）
+      2) GitHub 官方直连（browser_download_url）
+      3) settings.update.mirror_oss     阿里云 OSS 模板（URL 末尾追加 asset.name）
+      4) settings.update.mirror_lanzou  蓝奏云直链模板（URL 末尾追加 asset.name）
+    任一源成功后即返回；任一步骤失败（含 HTTP 错误/超时/校验不匹配）自动换下一源，
+    失败的临时文件清理后继续。
+
+    v1.4.8 P1-B-fix（t17）：expected_sha256 非空时，下载成功后立即算 SHA256 比对；
+    不匹配 → 视为该源不可信，log 警告 + 清理残文件 + continue 换下一源（不再走下游校验）。
+    expected_sha256 缺省 None 时保持原行为（下游 main() 仍做校验）。
+    """
     from github_api import mirror_download_url
-    url = mirror_download_url(asset["browser_download_url"], prefer_mirror=True)
-    fallback_url = asset["browser_download_url"]
     name = asset["name"]
     size = asset.get("size", 0)
     print(f"[更新器] 下载 {name} ({size} bytes)...")
     _write_progress(progress_stage, f"正在下载 {name}", 0, size)
+    # 构建下载源链：[(label, url), ...]，按 settings.update.* 顺序追加
+    sources = [
+        ("github-kotori", mirror_download_url(asset["browser_download_url"], prefer_mirror=True)),
+        ("github", asset["browser_download_url"]),
+    ]
     try:
-        _mirror_err = ""
+        _cfg = _read_update_mirrors()
+    except Exception:
+        _cfg = {}
+    _oss = (_cfg.get("mirror_oss") or "").strip().rstrip("/")
+    if _oss:
+        sources.append(("oss", f"{_oss}/{name}"))
+    _lanzou = (_cfg.get("mirror_lanzou") or "").strip().rstrip("/")
+    if _lanzou:
+        sources.append(("lanzou", f"{_lanzou}/{name}"))
+
+    attempted = []
+    for label, url in sources:
         try:
             req = Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ-Updater"})
             with urlopen(req, timeout=120) as resp:
                 _stream_to_file(resp, dest, size, name, progress_stage)
+            # v1.4.8 P1-B-fix（t17）：期望哈希给定 → 立即就地校验；不匹配则换源
+            if expected_sha256:
+                try:
+                    if not _verify_sha256(dest, expected_sha256):
+                        attempted.append(f"{label}(hash_mismatch)")
+                        print(f"[更新器] 源 {label} 哈希不匹配，已换下一源")
+                        try:
+                            log.warning(f"download source {label} hash mismatch, trying next")
+                        except Exception:
+                            pass
+                        try:
+                            if os.path.exists(dest):
+                                os.remove(dest)
+                        except OSError:
+                            pass
+                        continue
+                except Exception as _he:
+                    # 哈希计算本身失败（IO 错误等）→ 视为该源不可用，换下一源
+                    attempted.append(f"{label}(hash_err:{_trunc_err(_he)})")
+                    print(f"[更新器] 源 {label} 哈希校验异常: {_he}")
+                    try:
+                        log.warning(f"download source {label} hash error: {_he}")
+                    except Exception:
+                        pass
+                    try:
+                        if os.path.exists(dest):
+                            os.remove(dest)
+                    except OSError:
+                        pass
+                    continue
+            print(f"[更新器] 源 {label} 下载成功")
+            try:
+                log.info(f"download source: {label} url={url}")
+            except Exception:
+                pass
+            return True, ""
         except Exception as e:
-            _mirror_err = str(e)
-            # 镜像失败 → 官方直连兜底
-            req = Request(fallback_url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ-Updater"})
-            with urlopen(req, timeout=120) as resp:
-                _stream_to_file(resp, dest, size, name, progress_stage)
-        return True, ""
-    except Exception as e:
-        msg = str(e)
-        if _mirror_err:
-            msg = f"镜像失败({_mirror_err[:100]}) 且官方也失败: {msg}"
-        print(f"[更新器] 下载失败: {msg}")
-        return False, msg
+            attempted.append(f"{label}({_trunc_err(e)})")
+            print(f"[更新器] 源 {label} 失败: {e}")
+            try:
+                log.warning(f"download source {label} failed: {e}")
+            except Exception:
+                pass
+            # 清理可能写了一半的临时文件，避免下一次源误用旧内容
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+            except OSError:
+                pass
+            continue
+    msg = "所有下载源均失败: " + ", ".join(attempted)
+    print(f"[更新器] {msg}")
+    return False, msg
+
+
+def _trunc_err(e: Exception) -> str:
+    """异常信息截断到 ~80 字，日志更易读。"""
+    s = str(e) or type(e).__name__
+    if len(s) > 80:
+        s = s[:80] + "..."
+    return s
+
+
+def _candidate_settings_paths() -> list:
+    """v1.4.8 P1-B-fix（t17）：返回候选 settings.json 路径，按优先级排序。
+    - frozen（PyInstaller 打包）：%APPDATA%/PDD补货助手 → exe 同目录（便携兜底）
+    - 非 frozen（源码运行）：脚本目录
+    与 utils.get_base_dir 的逻辑同款但内联（updater.py 禁止 import utils）。
+    """
+    paths = []
+    if getattr(sys, 'frozen', False):
+        # 1) APPDATA 优先（主程序实际写入位置）
+        try:
+            appdata = os.environ.get('APPDATA') or os.path.expanduser('~')
+            paths.append(os.path.join(appdata, 'PDD补货助手', 'settings.json'))
+        except Exception:
+            pass
+        # 2) exe 同目录兜底（便携模式 / 自定义部署）
+        try:
+            paths.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)),
+                                      'settings.json'))
+        except Exception:
+            pass
+    else:
+        # 源码运行：脚本目录
+        try:
+            paths.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      'settings.json'))
+        except Exception:
+            pass
+    return paths
+
+
+def _read_update_mirrors() -> dict:
+    """读取 settings.update.mirror_oss / mirror_lanzou 镜像配置。
+    不依赖 utils.Config（守住约束：updater.py 独立可移植，单文件 + 零 utils 依赖，
+    防止 utils.py 变更反向污染更新器）。失败/缺键返回空 dict → 调用方按空=跳过处理。
+
+    v1.4.8 P1-B-fix（t17）：路径查找顺序
+    - frozen：先 %APPDATA%/PDD补货助手/settings.json（主程序写入位置），再 exe 同目录
+    - 非 frozen：脚本目录/settings.json
+    找到第一个存在的文件即用；都不存在返 {}。
+    """
+    for sf in _candidate_settings_paths():
+        try:
+            if not os.path.exists(sf):
+                continue
+            with open(sf, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                continue
+            upd = data.get("update")
+            if isinstance(upd, dict):
+                return upd
+        except Exception:
+            continue
+    return {}
 
 
 def _wait_pid_exit(pid: int, expected_exe: str = '', timeout: float = 30.0):
@@ -916,55 +1047,77 @@ def main():
     asset_name = os.path.basename(exe_asset["name"].replace('\\', '/'))
     new_exe = os.path.join(tmp, asset_name)
 
-    ok, err = download_asset(exe_asset, new_exe)
-    if not ok:
-        print(f"[更新器] 下载失败: {err}")
-        _write_progress("error", f"下载失败: {err}", error=err)
-        _pause()
-        return 1
-
-    # SHA256 校验：查找同名 .sha256 文件并验证
+    # v1.4.8 P1-B-fix（t17）：先把 .sha256 拉下来学期望哈希，
+    # 再用 download_asset(expected_sha256=...) 走「下载+就地校验+不匹配换源」一条龙。
+    # 旧流程：先下载包 → 失败也不换源（哈希失败发生在下游）→ 直接 return 1。
+    # 新流程：先下载 .sha256 学期望 → 传期望进 download_asset → 任一源哈希不匹配自动换源。
+    expected_sha256 = None
     sha_asset = None
     for a in assets:
         if a["name"] == exe_asset["name"] + ".sha256":
             sha_asset = a; break
-    if sha_asset:
-        sha_path = new_exe + ".sha256"
-        ok, _ = download_asset(sha_asset, sha_path, progress_stage="verify")
-        if ok:
-            with open(sha_path, 'r') as sf:
-                expected = sf.read().strip().split()[0]
-            # 校验文件格式合法性：必须是 64 位 hex，服务器给脏数据
-            # （如 "abc"）时明确报格式错误，而不是误导"文件可能被篡改"（v1.4 审查修复）
-            import re as _re_sha
-            if not _re_sha.fullmatch(r'[0-9a-fA-F]{64}', expected):
-                print(f"[更新器] SHA256 校验文件格式非法，已拒绝安装")
-                _write_progress("error", "SHA256 校验文件格式非法", error="sha256 format")
-                os.remove(new_exe)
-                _pause()
-                return 1
-            if not _verify_sha256(new_exe, expected):
-                print("[更新器] SHA256 校验失败！文件可能被篡改，已拒绝安装")
-                _write_progress("error", "SHA256 校验失败，文件可能被篡改", error="sha256 mismatch")
-                os.remove(new_exe)
-                _pause()
-                return 1
-            print("[更新器] SHA256 校验通过")
-            os.remove(sha_path)
-        else:
-            print("[更新器] SHA256 校验文件下载失败，已拒绝安装（安全策略）")
-            _write_progress("error", "SHA256 校验文件下载失败", error="sha256 file")
-            os.remove(new_exe)
-            _pause()
-            return 1
-    else:
+    if not sha_asset:
         # v1.4.5（bug hunt F13）：fail-open → fail-closed——发布物未带 .sha256 即拒绝安装，
         # 防止截断/篡改包在无校验下直达安装
         print("[更新器] 未找到 .sha256 校验文件，已拒绝安装（安全策略）")
         _write_progress("error", "缺少 SHA256 校验文件，已拒绝安装", error="sha256 missing")
-        os.remove(new_exe)
         _pause()
         return 1
+    sha_path = new_exe + ".sha256"
+    ok, _ = download_asset(sha_asset, sha_path, progress_stage="verify")
+    if not ok:
+        # 校验文件本身就拉不到 → 拒绝安装（安全策略：宁可让用户手动升级也不盲装）
+        print("[更新器] SHA256 校验文件下载失败，已拒绝安装（安全策略）")
+        _write_progress("error", "SHA256 校验文件下载失败", error="sha256 file")
+        try:
+            if os.path.exists(new_exe):
+                os.remove(new_exe)
+        except OSError:
+            pass
+        _pause()
+        return 1
+    try:
+        with open(sha_path, 'r') as sf:
+            expected_sha256 = sf.read().strip().split()[0]
+    except Exception as _re:
+        print(f"[更新器] SHA256 校验文件读取失败: {_re}")
+        _write_progress("error", "SHA256 校验文件读取失败", error="sha256 read")
+        try:
+            os.remove(sha_path)
+        except OSError:
+            pass
+        _pause()
+        return 1
+    # 校验文件格式合法性：必须是 64 位 hex，服务器给脏数据
+    # （如 "abc"）时明确报格式错误，而不是误导"文件可能被篡改"（v1.4 审查修复）
+    import re as _re_sha
+    if not _re_sha.fullmatch(r'[0-9a-fA-F]{64}', expected_sha256):
+        print(f"[更新器] SHA256 校验文件格式非法，已拒绝安装")
+        _write_progress("error", "SHA256 校验文件格式非法", error="sha256 format")
+        try:
+            os.remove(sha_path)
+        except OSError:
+            pass
+        _pause()
+        return 1
+    # 期望哈希有效 → 传给 download_asset 走「下载+就地哈希校验+不匹配换源」
+    ok, err = download_asset(exe_asset, new_exe, expected_sha256=expected_sha256)
+    if not ok:
+        print(f"[更新器] 下载失败（所有源均不匹配或不可达）: {err}")
+        _write_progress("error", f"下载失败: {err}", error=err)
+        try:
+            if os.path.exists(sha_path):
+                os.remove(sha_path)
+        except OSError:
+            pass
+        _pause()
+        return 1
+    # 走到这里 = 任一源下载成功 + 哈希已就地校验通过
+    print("[更新器] SHA256 校验通过")
+    try:
+        os.remove(sha_path)
+    except OSError:
+        pass
 
     # 替换
     try:

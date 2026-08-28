@@ -495,6 +495,13 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
 
     key = provider.get('api_key', '') or os.environ.get(
         {'doubao':'ARK_API_KEY','qwen':'DASHSCOPE_API_KEY','glm':'ZHIPU_API_KEY'}.get(active, ''), '')
+    # v1.4.8 P1-C-fix（t18）：settings.json 里 api_key 已是 dpapi:v1: 密文，
+    # 裸发给厂商必 401。运行时解密（明文直通 / 密文 → 明文 / 失败 → ""）
+    try:
+        from utils import decrypt_secret
+        key = decrypt_secret(key)
+    except Exception:
+        pass
     model_name = forced_model or provider.get('model', '')
     endpoint = provider.get('endpoint', '')
     use_responses = False
@@ -577,6 +584,12 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 endpoint = _alt.get('endpoint', '')
                 key = _alt.get('api_key', '') or os.environ.get(
                     {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
+                # v1.4.8 P1-C-fix（t18）：强制模型走副 provider 时同样需要解密 key
+                try:
+                    from utils import decrypt_secret
+                    key = decrypt_secret(key)
+                except Exception:
+                    pass
                 model_name = forced_model or _alt.get('model', '')
                 use_responses = False
 
@@ -628,6 +641,13 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
         if is_glm and (_is_official_ali or _is_official_ark):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers_global.get('glm', {}).get('api_key', '') if isinstance(providers_global, dict) else ''
+            # v1.4.8 P1-C-fix（t18）：fallback 到智谱端点时同样需解密
+            if cur_key:
+                try:
+                    from utils import decrypt_secret
+                    cur_key = decrypt_secret(cur_key)
+                except Exception:
+                    pass
             if not cur_key:
                 continue
             cur_responses = False
@@ -792,13 +812,17 @@ _TAIL_NUM_RE = r'[ \t\u3000\r\n]\d+(?:[.,，、]\d+)*[ \t\u3000\r\n]*$'
 
 
 def _ocr_dlog(msg: str):
-    """轻量诊断日志：写入 get_base_dir()/output/ocr_dlog.txt（output/ 已 gitignore）。"""
+    """轻量诊断日志：写入 get_base_dir()/output/ocr_dlog.txt（output/ 已 gitignore）。
+    v1.4.8 P1-C：落盘前对 api_key / password / Authorization / Bearer 等敏感字段脱敏。
+    """
     try:
         import os
+        from utils import _sanitize_for_log
         _p = os.path.join(get_base_dir(), 'output', 'ocr_dlog.txt')
         os.makedirs(os.path.dirname(_p), exist_ok=True)
+        _safe = _sanitize_for_log(msg) if isinstance(msg, str) else msg
         with open(_p, 'a', encoding='utf-8') as _f:
-            _f.write(msg + '\n')
+            _f.write(_safe + '\n')
     except Exception:
         pass
 
@@ -1146,6 +1170,14 @@ def _write_ocr_debug(cols, rows, note=''):
                 _hist = [_hist]
         except Exception:
             _hist = []
+        # v1.4.8 P1-C：note 字段可能含 API 报错文本（带 Authorization/Bearer/api_key），
+        # 落盘前脱敏（仅字符串字段；columns/rows 是表格数据，不会含凭据）
+        try:
+            from utils import _sanitize_for_log
+            if isinstance(_rec.get('note'), str):
+                _rec['note'] = _sanitize_for_log(_rec['note'])
+        except Exception:
+            pass
         _hist.append(_rec)
         with open(_p, 'w', encoding='utf-8') as _f:
             json.dump(_hist[-40:], _f, ensure_ascii=False, indent=1)

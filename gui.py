@@ -11,6 +11,11 @@ from settings_ui import SettingsUIMixin
 from stats_ui import StatsPagesMixin
 from logger import log
 
+# v1.4.8 P1-A：EULA 文本常量（docs/EULA.md 的代码内嵌版，打包后无需读 docs/）
+from eula_text import EULA_VERSION, EULA_TITLE, render_eula_text
+# t24 F2 清理：self._tier 死状态删除后，_auth_get_tier 不再有调用方，一并删除 import
+# （未来若需要 get_tier 预热，按需重新 import）
+
 # v1.4.7 WS-A：本地历史库（识别数据累积/趋势查询）。
 # 守护式导入：增量包缺文件等极端场景历史功能整体降级停用，主程序不受影响。
 try:
@@ -213,6 +218,23 @@ class _CanvasBtn:
         self._apply()
 
 
+# t14 P3-B：模块级 helper（必须在 class App 之前定义，否则在类内引用失败）
+def _to_float_safe(v, default=0.0):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
+
+def _fmt_yuan(v: float) -> str:
+    try:
+        if v >= 1.0:
+            return f"¥{v:.2f}"
+        return f"¥{v:.4f}".rstrip('0').rstrip('.')
+    except Exception:
+        return "¥0"
+
+
 class App(SettingsUIMixin, StatsPagesMixin):
     # Design system — New Minimalism / Flat Design
     C_PRIMARY = '#111111'      # 近黑（主标题/文字）
@@ -396,7 +418,33 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 多地区缓存
         self.cache = {}  # {region: {'plans': [...], 'items': [...]}}
         self.active_region = None
-        
+
+        # v1.4.8 P1-A：首启 EULA 强弹窗（必须在 _build_ui 之前，否则用户先看到主界面再被强行打断更不友好）
+        # 拒绝则直接退出，符合"未同意不得使用"；模板自愈已加 eula_accepted_v1 字段。
+        # t16 修复：弹窗必须阻塞（wait_window）才有效；仅当 _show_eula_dialog 返回 True 才继续。
+        if not self._check_eula_accepted():
+            if not self._show_eula_dialog():
+                # 拒绝路径：销毁主窗口 + 退出进程（行为不变）
+                try:
+                    self.win.destroy()
+                except Exception:
+                    pass
+                sys.exit(0)
+            # 同意路径：再校验一次写盘结果（双保险，防 _show_eula_dialog 内部写盘失败但仍返回 True）
+            if not self._check_eula_accepted():
+                try:
+                    self.win.destroy()
+                except Exception:
+                    pass
+                sys.exit(0)
+
+        # t24 修复包 A (F2)：删除 v1.5.0 P2-A 死代码 self._tier 赋值块
+        # 根因：self._tier 只写不读；_auth_get_tier 调用结果无下游使用。
+        # 实际授权门控路径（_live_screenshot → check_live_quota）每次现读 Config，
+        # 不依赖 self._tier 缓存。t24 修复 BUG-1 后 get_tier 自身带 300s TTL
+        # 已足够覆盖 enforce 热切换场景，无需启动期预热。
+        # （_auth_get_tier 的 import 在 L16 同批清理——若未来需要再 import）
+
         self._build_ui()
         self._check_update()  # 后台检查更新
         self._check_announcement()  # 后台检查公告（v1.4 新增，借鉴 March7th）
@@ -451,6 +499,121 @@ class App(SettingsUIMixin, StatsPagesMixin):
             check_announcement(self.win, self._show_announcement)
         except Exception:
             pass
+
+    def _check_eula_accepted(self) -> bool:
+        """读取 Config['eula_accepted_v1']，若为 True 则视为已同意；否则弹窗。
+
+        失败安全：任何异常都返回 False（按 v1.4.x 失败哲学：宁可显式拒绝，不静默放行）。
+        """
+        try:
+            from utils import Config
+            cfg = Config.load()
+            return bool(isinstance(cfg, dict) and cfg.get('eula_accepted_v1', False))
+        except Exception:
+            return False
+
+    def _show_eula_dialog(self) -> bool:
+        """EULA 首启强弹窗（局部事件循环阻塞，关闭后返回是否同意）。
+
+        Returns:
+            True  - 用户勾选"我已阅读并同意"且写盘成功（Config['eula_accepted_v1']=True）
+            False - 用户拒绝（点"拒绝并退出"按钮）→ 弹窗已关闭，调用方应退出进程
+
+        阻塞顺序（避免 TclError: grab failed: window not viewable）：
+            update_idletasks() → wait_visibility() → grab_set() → wait_window()
+        update_idletasks 先把几何/映射请求 flush，wait_visibility 等窗口真正 mapped，
+        此时再 grab_set 才不会因"未映射窗口无法 grab"抛错。wait_window 进入局部事件循环，
+        直到 dlg.destroy() 后才返回，__init__ 期间不会"无阻塞直接进 _build_ui"。
+        """
+        dlg = tk.Toplevel(self.win)
+        dlg.title(EULA_TITLE)
+        dlg.geometry(self._geo(720, 560))
+        dlg.resizable(True, True)
+        dlg.minsize(int(560 * self.dpi_scale), int(420 * self.dpi_scale))
+        dlg.transient(self.win)
+        dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # 屏蔽右上 X；必须点按钮
+
+        # 顶部简短说明
+        tk.Label(dlg, text=EULA_TITLE, font=(self.FONT[0] if hasattr(self, 'FONT') else 'Microsoft YaHei', 11, 'bold')
+                 ).pack(pady=(12, 4))
+        tk.Label(dlg, text=f"协议版本：{EULA_VERSION}（详细条款见 docs/EULA.md）",
+                 font=(self.FONT[0] if hasattr(self, 'FONT') else 'Microsoft YaHei', 8),
+                 fg='#888888').pack()
+
+        # Text + Scrollbar 展示完整条款
+        text_frame = tk.Frame(dlg)
+        text_frame.pack(fill="both", expand=True, padx=16, pady=8)
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side="right", fill="y")
+        text_widget = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set,
+                              font=('Microsoft YaHei', 9), padx=8, pady=8)
+        text_widget.insert("1.0", render_eula_text())
+        text_widget.configure(state="disabled")  # 只读
+        scrollbar.config(command=text_widget.yview)
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        # 勾选框
+        accepted_var = tk.BooleanVar(dlg, value=False)
+        tk.Checkbutton(dlg, text="我已阅读并同意上述条款",
+                       variable=accepted_var, font=('Microsoft YaHei', 10)
+                       ).pack(pady=(4, 8))
+
+        # 按钮区
+        btn_frame = tk.Frame(dlg)
+        btn_frame.pack(pady=(0, 12))
+
+        # 用容器存结果，destroy 之后 wait_window 之前能读到最终值
+        result = {"accepted": False, "saved": False}
+
+        def on_continue():
+            if not accepted_var.get():
+                messagebox.showwarning("未同意", "请先勾选「我已阅读并同意」后再继续",
+                                       parent=dlg)
+                return
+            # 写盘：eula_accepted_v1 = True
+            try:
+                from utils import Config
+                cfg = Config.load()
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                cfg['eula_accepted_v1'] = True
+                Config.save(cfg)
+            except Exception as e:
+                messagebox.showerror("保存失败",
+                                     f"协议状态保存失败，将无法继续使用：{e}",
+                                     parent=dlg)
+                return
+            result["accepted"] = True
+            result["saved"] = True
+            dlg.grab_release()
+            dlg.destroy()
+
+        def on_reject():
+            # 用户拒绝 → 不写盘 → 关闭弹窗 → wait_window 返回 → 函数返回 False
+            result["accepted"] = False
+            result["saved"] = False
+            dlg.grab_release()
+            dlg.destroy()
+
+        tk.Button(btn_frame, text="拒绝并退出", command=on_reject,
+                  width=14, font=('Microsoft YaHei', 10)).pack(side="left", padx=8)
+        tk.Button(btn_frame, text="同意并继续", command=on_continue,
+                  width=14, font=('Microsoft YaHei', 10, 'bold')).pack(side="left", padx=8)
+
+        # —— 阻塞序列：先让窗口真正可见，再 grab，再进入局部事件循环 ——
+        try:
+            dlg.update_idletasks()
+            dlg.wait_visibility()  # 等到 dlg 在屏幕真正 mapped，grab_set 才不会失败
+            dlg.grab_set()         # 模态：阻塞主窗口输入
+        except Exception:
+            # 极端场景下（无 X server / 测试环境）grab 失败也要继续走，不能让弹窗构造本身崩溃
+            pass
+
+        dlg.wait_window()  # ★ 关键：进入局部事件循环，dlg.destroy() 后才返回
+
+        # wait_window 之后 result 已由 on_continue/on_reject 设置；
+        # 仅当用户点了"同意并继续"且写盘成功才返回 True
+        return bool(result.get("accepted") and result.get("saved"))
 
     def _show_announcement(self, title, content, image_url=''):
         """展示公告弹窗（Toplevel，支持可选图片）"""
@@ -780,26 +943,36 @@ class App(SettingsUIMixin, StatsPagesMixin):
         for _ in range(3):
             self._add_row()
         
-        # ── 全局工具栏（单行：左组功能 / 右组截图+当前地区，不再放置加行/删行按钮）──
+        # ── 全局工具栏（v1.5.0 首页双入口布局 · 识别 / 导入 并列为主）──
+        # 1) 第一排（主数据入口）：实时截图 + 📥 导入表格——两者样式一致、左右并列、几何对称
+        #    沿用 dark 二级（保留 primary 给导出 Excel）；padx/pady 加宽、bold 字体
+        #    让"选一个数据来源"的语义视觉上立起来。EULA 已在启动弹窗保证（t7 P1-A）。
+        primary_row = tk.Frame(self.page_home, bg=self.C_BG)
+        primary_row.pack(fill="x", padx=15, pady=(8, 4))
+        # 实时截图 = 左侧主入口（最常用，作为默认焦点）
+        self.live_btn = self._mk_btn(primary_row, "实时截图", self._live_screenshot, kind='dark',
+                                     font=(self.FONT[0], 9, 'bold'),
+                                     pack_side="left", padx=12)  # v1.4.5 bug hunt F24：保存引用供批量期间禁用
+        # 📥 导入表格 = 右侧并列主入口（从原 text 弱样式提升为 dark，与左侧几何对称）
+        self._mk_btn(primary_row, "📥 导入表格", self._import_table, kind='dark',
+                     font=(self.FONT[0], 9, 'bold'),
+                     pack_side="left", padx=12)  # 与左侧实时截图同 padx——视觉等重
+        # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
+        # 仍放第一排尾部，与两个主入口同框；不影响主入口的视觉对等
+        self._single_dual_var = tk.BooleanVar(self.win, value=True)
+        tk.Checkbutton(primary_row, text="🛡 双模型", variable=self._single_dual_var,
+                       font=(self.FONT[0], 8), bg=self.C_SURFACE, fg=self.C_MUTED,
+                       selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE).pack(side="right", padx=(8, 0))
+
+        # 2) 第二排（次要功能）：刷新计算 + 批量识别——仍在第一屏可见可点，不新增层级
         btn_row = tk.Frame(self.page_home, bg=self.C_BG)
-        btn_row.pack(fill="x", padx=15, pady=(8, 6))
-        # 左组：功能按钮（间距统一，防视觉不均）
+        btn_row.pack(fill="x", padx=15, pady=(0, 6))
         self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
-                     font=(self.FONT[0], 9, 'bold'), pack_side="left")
+                     font=(self.FONT[0], 9), pack_side="left")
         self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='dark',
                      pack_side="left", padx=10)
-        # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
-        self._single_dual_var = tk.BooleanVar(self.win, value=True)
-        tk.Checkbutton(btn_row, text="🛡 双模型", variable=self._single_dual_var,
-                       font=(self.FONT[0], 8), bg=self.C_SURFACE, fg=self.C_MUTED,
-                       selectcolor=self.C_SURFACE, activebackground=self.C_SURFACE).pack(side="left", padx=10)
-        # 右组：截图识别 + 实时截图
+        # 「截图识别」保留在第二排右侧（针对已有图片文件场景，与实时截图互补）
         self._mk_btn(btn_row, "截图识别", self._ocr_fill, kind='text', pack_side="right")
-        self.live_btn = self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='text',
-                                     pack_side="right", padx=5)  # v1.4.5 bug hunt F24：保存引用供批量期间禁用
-        # v1.4.7 WS-B：CSV/XLSX 结构化导入入口（非 PDD 表格也能走补货计算管线）
-        self._mk_btn(btn_row, "📥 导入表格", self._import_table, kind='text',
-                     pack_side="right", padx=5)
         
         # ── 当前地区（刷新计算按钮正下方一行，左对齐；识别后更新）──
         region_line = tk.Frame(self.page_home, bg=self.C_BG)
@@ -1797,6 +1970,28 @@ class App(SettingsUIMixin, StatsPagesMixin):
         except Exception:
             _off = 1
 
+        # t13 P3-A：补货模型分发（用户裁定：默认 classic，原公式一行不改）
+        try:
+            from utils import get_replenishment_cfg
+            _rep_cfg = get_replenishment_cfg()
+        except Exception:
+            _rep_cfg = {'model': 'classic', 'safety_days': 2, 'in_transit_qty': 0}
+        _rep_model = str(_rep_cfg.get('model') or 'classic')
+        _rep_safety = int(_rep_cfg.get('safety_days', 2) or 0)
+        _rep_intransit = int(_rep_cfg.get('in_transit_qty', 0) or 0)
+
+        # 加权模式专用：history_lookup 适配 history_db.query_sku_history 签名
+        _history_lookup = None
+        if _rep_model == 'weighted':
+            def _history_lookup(sku_id, reg, days, name=None):
+                try:
+                    import history_db as _hdb
+                    if sku_id:
+                        return _hdb.query_sku_history(sku_key=sku_id, days=days, region=reg, name='') or []
+                    return _hdb.query_sku_history(sku_key='', days=days, region=reg, name=name or '') or []
+                except Exception:
+                    return []
+
         for item in items:
             name = item.get('name', '')
             stock = _to_int(item.get('stock', 0))
@@ -1806,34 +2001,82 @@ class App(SettingsUIMixin, StatsPagesMixin):
             # 无则回退当前地区——修复其他省份商品被按最后省份计算
             _it_region = item.get('region') or region
             shipping = self._get_shipping(_it_region, name)  # 逐商品查运输时效
-            
-            if daily <= 0:
-                # 无销量商品：不强制补货，标记观察（销量0可能数据未更新，交客户人工判断）
-                status = '无销量·观察'
-                color = 'gray'
-                qty = 0
-                ratio = 0.0
-                reorder = 0.0
-            else:
-                ratio = stock / calc_daily
-                lead_time = shipping + _off
-                reorder = ratio - lead_time
 
-                if reorder <= 0:
-                    status = '立刻补货'
-                    color = 'red'
-                    qty = max(daily * 8, 100)
-                    qty = ((qty + 99) // 100) * 100
-                elif reorder <= 2:
-                    status = f'{reorder:.0f}天后下单'
-                    color = 'yellow'
-                    qty = max(daily * 8, 100)
-                    qty = ((qty + 99) // 100) * 100
-                else:
-                    status = f'{reorder:.0f}天后下单'
-                    color = 'green'
+            if _rep_model == 'weighted':
+                # t13 P3-A：加权模式——走 utils.calc_replenishment_weighted（任何异常回退经典）
+                try:
+                    from utils import calc_replenishment_weighted
+                    _w = calc_replenishment_weighted(
+                        item, _it_region, shipping, _rep_safety, _rep_intransit,
+                        _history_lookup,
+                    )
+                    status = _w['status']
+                    color = _w['color']
+                    qty = _w['qty']
+                    ratio = _w['ratio']
+                    reorder = _w['reorder']
+                    daily = _w.get('daily', daily)
+                    _model_tag = _w.get('model', 'weighted')
+                except Exception:
+                    # t24 修复包 A (F1)：加权模式异常 → 经典公式兜底。
+                    # 标注 'classic(error)' 与 'classic(no_history)' 区分：
+                    # - no_history：加权查到空结果，主动回退（已知语义）
+                    # - error：加权抛异常（DB 损坏/字段缺失/未知），是被动回退
+                    _model_tag = 'classic(error)'
+                    if daily <= 0:
+                        status = '无销量·观察'
+                        color = 'gray'
+                        qty = 0
+                        ratio = 0.0
+                        reorder = 0.0
+                    else:
+                        ratio = stock / calc_daily
+                        lead_time = shipping + _off
+                        reorder = ratio - lead_time
+                        if reorder <= 0:
+                            status = '立刻补货'
+                            color = 'red'
+                            qty = max(daily * 8, 100)
+                            qty = ((qty + 99) // 100) * 100
+                        elif reorder <= 2:
+                            status = f'{reorder:.0f}天后下单'
+                            color = 'yellow'
+                            qty = max(daily * 8, 100)
+                            qty = ((qty + 99) // 100) * 100
+                        else:
+                            status = f'{reorder:.0f}天后下单'
+                            color = 'green'
+                            qty = 0
+            else:
+                # 经典模式（用户裁定：一行公式都不许改）——原样保留
+                _model_tag = 'classic'
+                if daily <= 0:
+                    # 无销量商品：不强制补货，标记观察（销量0可能数据未更新，交客户人工判断）
+                    status = '无销量·观察'
+                    color = 'gray'
                     qty = 0
-            
+                    ratio = 0.0
+                    reorder = 0.0
+                else:
+                    ratio = stock / calc_daily
+                    lead_time = shipping + _off
+                    reorder = ratio - lead_time
+
+                    if reorder <= 0:
+                        status = '立刻补货'
+                        color = 'red'
+                        qty = max(daily * 8, 100)
+                        qty = ((qty + 99) // 100) * 100
+                    elif reorder <= 2:
+                        status = f'{reorder:.0f}天后下单'
+                        color = 'yellow'
+                        qty = max(daily * 8, 100)
+                        qty = ((qty + 99) // 100) * 100
+                    else:
+                        status = f'{reorder:.0f}天后下单'
+                        color = 'green'
+                        qty = 0
+
             plans.append({
                 'name': name, 'stock': stock,
                 'daily': daily, 'ratio': round(ratio, 1),
@@ -1848,6 +2091,13 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 '_raw': item.get('_raw') or {},
                 '_sel_cols': _sel_cols,
                 '_sel_cols_map': _sel_cols_map,
+                # t13 P3-A / t24 F1：补货模型标注
+                #   classic         = 经典模式（默认）
+                #   weighted        = 加权模式（成功查到历史）
+                #   classic(no_history) = 加权模式主动回退（查到空结果）
+                #   classic(error)  = 加权模式被动回退（异常/DB 损坏）
+                'model': _model_tag,
+                'model': _model_tag,
             })
         
         # Sort
@@ -2272,6 +2522,19 @@ class App(SettingsUIMixin, StatsPagesMixin):
             if not selected:
                 messagebox.showwarning("未选择", "请至少选择一个地区", parent=dlg)
                 return
+
+            # t14 P3-B：批量前成本预估确认（用户裁定：仅在前置弹窗确认，与 F9/_api_fatal/预算三态无关）
+            # 估算失败不阻塞批量（静默跳过+log）；取消则干净退出，不置任何熔断标志
+            try:
+                if not self._preview_batch_cost(len(selected), dual_verify=dual_var.get()):
+                    return
+            except Exception as _e:
+                try:
+                    from logger import log as _log
+                    _log.warning(f"[batch] 成本预估异常：{str(_e)[:120]}")
+                except Exception:
+                    pass
+
             # HUD 实时日志窗（默认开启，替代原测试模式开关）：主线程创建
             hud = tk.Toplevel(self.win)
             hud.title("")
@@ -3297,15 +3560,131 @@ class App(SettingsUIMixin, StatsPagesMixin):
         else:
             messagebox.showwarning("批量识别失败",
                                    "未成功识别任何地区\n\n请检查：\n1. 网络是否正常\n2. API Key / 模型配置\n3. PDD 页面是否在前台显示")
-    
+
+    def _preview_batch_cost(self, region_count: int, dual_verify: bool = False) -> bool:
+        """t14 P3-B：批量前成本预估确认。
+
+        按「省份数 × 预计轮次」估算调用次数区间：
+        - 每次省份：1 次总数读取 + 1 次/轮表格定位 + 1 次/轮 OCR × 模型数
+        - 轮次区间：3 ~ 8 轮（保守估计，每轮 ~10-20 商品滚动加载）
+
+        用 usage.pricing 折算金额（CNY 区间）：
+        - input_per_million: input token 单价 (CNY/M tokens)
+        - output_per_million: output token 单价
+        - image_per_call: 图片调用单价（按次计费模型）
+
+        价格表为空或缺价 → 弹窗标题「（价格未配置，仅按 token 数提示）」，
+        显示预计调用次数而非金额。
+
+        用户取消 → 返回 False（不置任何熔断标志，纯前置确认）。
+        估算逻辑任何异常 → 吞掉 + log + 返回 True（绝不阻塞批量）。
+
+        :return: True=用户确认继续；False=用户取消
+        """
+        try:
+            # 1. 估算轮次（保守：3 ~ 8 轮）
+            min_rounds, max_rounds = 3, 8
+            n_models = 2 if dual_verify else 1
+            # 每次省份每轮调用：1 定位 + 1 OCR × 模型数
+            per_round_calls_per_region = 1 + 1 * n_models
+            min_calls = region_count * (1 + min_rounds * per_round_calls_per_region)  # 含总数读取 1 次
+            max_calls = region_count * (1 + max_rounds * per_round_calls_per_region)
+
+            # 2. 读价格表
+            try:
+                from utils import get_usage_cfg
+                cfg = get_usage_cfg()
+                pricing = (cfg or {}).get('pricing', {}) or {}
+            except Exception:
+                pricing = {}
+            # 价格表是否完整（至少需要 input 或 output 或 image 之一）
+            has_pricing = bool(
+                pricing.get('input_per_million')
+                or pricing.get('output_per_million')
+                or pricing.get('image_per_call')
+            )
+
+            # 3. 计算金额区间
+            in_price = _to_float_safe(pricing.get('input_per_million'))
+            out_price = _to_float_safe(pricing.get('output_per_million'))
+            img_price = _to_float_safe(pricing.get('image_per_call'))
+            # 每调用默认 token：input 1500 / output 800（保守估计；多模态图片通常 1000-2000）
+            avg_input_tokens = 1500
+            avg_output_tokens = 800
+
+            def _cost(calls):
+                # 假设每调用既有 input 也有 output；按 image 模型时仅算 image
+                in_c = calls * avg_input_tokens / 1_000_000 * in_price if in_price else 0
+                out_c = calls * avg_output_tokens / 1_000_000 * out_price if out_price else 0
+                img_c = calls * img_price if img_price else 0
+                return in_c + out_c + img_c
+
+            title_suffix = ""
+            if has_pricing:
+                min_cny = _cost(min_calls)
+                max_cny = _cost(max_calls)
+                cost_text = f"预计金额：{_fmt_yuan(min_cny)} ~ {_fmt_yuan(max_cny)} CNY"
+            else:
+                title_suffix = "（价格未配置，仅按 token 数提示）"
+                cost_text = f"预计调用：{min_calls} ~ {max_calls} 次"
+
+            # 4. 弹窗确认
+            msg = (
+                f"批量识别即将开始：\n"
+                f"  地区数：{region_count}\n"
+                f"  模式：{'双模型' if dual_verify else '单模型'}\n"
+                f"  预计轮次/省：{min_rounds} ~ {max_rounds}\n"
+                f"  {cost_text}\n\n"
+                f"是否继续？"
+            )
+            try:
+                from tkinter import messagebox as _mb
+                ok = _mb.askyesno(f"批量前成本预估 {title_suffix}".strip(), msg, parent=self.win)
+            except Exception:
+                # 极罕见：messagebox 不可用时默认放行（绝不阻塞）
+                return True
+            return bool(ok)
+        except Exception:
+            # 估算逻辑失败 → 静默放行（用户裁定：绝不阻塞批量）
+            return True
+
+
     def _live_screenshot(self):
-        """即时截图：最小化窗口 → 立刻截全屏 → OCR → 恢复（最小化最多 2 秒）"""
         # v1.4.7 WS-C：单次识别入口重置「本次」消耗口径
         try:
             import usage_store as _us
             _us.session_reset()
         except Exception:
             pass
+
+        # t12 P2-C：免费版每日 50 次实时截图识别门控（enforce=false 时跳过）
+        # 用户裁定：表格导入/手动输入永不限制；批量识别/双模型/Excel 导出也不在门控范围
+        try:
+            from utils import Config
+            _cfg = Config.load() if hasattr(Config, "load") else {}
+            _lic_cfg = _cfg.get("license", {}) if isinstance(_cfg, dict) else {}
+            _lic_key = _lic_cfg.get("key", "") or ""
+            _lic_enforce = bool(_lic_cfg.get("enforce", False))
+            if _lic_enforce:
+                from auth.license import check_live_quota
+                import usage_store as _us2
+                _used = _us2.count_today_live_screenshot()
+                _gate = check_live_quota(_used, _lic_key, enforce=True)
+                if not _gate.get("allowed", True):
+                    try:
+                        from tkinter import messagebox
+                        messagebox.showwarning(
+                            "实时截图识别次数已用完",
+                            _gate.get("reason", "已达上限") + "\n\n"
+                            "表格导入与手动输入不受此限制。\n"
+                            "升级 Pro 或在「设置 → 授权管理」切换 enforce=false。",
+                        )
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            pass  # 失败安全：永不阻塞
+
         self.status_text.set("最小化窗口，请确认PDD页面在后面...")
         self._clear_input_rows()  # 先清旧数据
         self.win.update()

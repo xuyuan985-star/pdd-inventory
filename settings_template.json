@@ -54,5 +54,15 @@
   "history": {
     "retention_days": 180,
     "max_rows": 200000
+  },
+  "eula_accepted_v1": false,
+  "license": {
+    "key": "",
+    "enforce": false
+  },
+  "replenishment": {
+    "model": "classic",
+    "safety_days": 2,
+    "in_transit_qty": 0
   }
 }

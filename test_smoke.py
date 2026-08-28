@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import unittest
+import inspect
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -63,6 +64,219 @@ class TestConfigMerge(unittest.TestCase):
         self.assertTrue(u.version_newer('v1.5', 'v1.4'))
         self.assertFalse(u.version_newer('v1.3', 'v1.4'))
         self.assertTrue(u.version_newer('v1.10', 'v1.9'))
+
+
+class TestDPAPI(unittest.TestCase):
+    """v1.4.8 P1-C：DPAPI 凭据加密 + Config._migrate_secrets + 解密失败降级"""
+
+    def test_is_encrypted_prefix(self):
+        """is_encrypted 识别 dpapi:v1: 前缀；空/None/明文 都返回 False。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_dpapi', os.path.join(HERE, 'dpapi_utils.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        self.assertTrue(m.is_encrypted('dpapi:v1:abc123'))
+        self.assertFalse(m.is_encrypted('sk-plain-text'))
+        self.assertFalse(m.is_encrypted(''))
+        self.assertFalse(m.is_encrypted(None))
+        self.assertFalse(m.is_encrypted(123))
+
+    def test_encrypt_decrypt_roundtrip(self):
+        """enc(plain) → dec(blob) == plain；空串/None 短路返回。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_dpapi', os.path.join(HERE, 'dpapi_utils.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        if not m.is_available():
+            self.skipTest('DPAPI 不可用（沙盒/Wine）')
+        plain = 'sk-test-key-1234567890-abcdef'
+        blob = m.enc(plain)
+        self.assertTrue(blob.startswith('dpapi:v1:'))
+        self.assertNotIn(plain, blob, '明文不应出现在密文里')
+        self.assertEqual(m.dec(blob), plain)
+        # Unicode + 长字符串
+        self.assertEqual(m.dec(m.enc('中文+emoji🔐')), '中文+emoji🔐')
+        self.assertEqual(m.dec(m.enc('x' * 5000)), 'x' * 5000)
+        # 空/None 短路
+        self.assertEqual(m.enc(''), '')
+        self.assertEqual(m.enc(None), '')  # None 入参按空串处理（不抛）
+        self.assertEqual(m.dec(''), '')
+
+    def test_decrypt_non_encrypted_passthrough(self):
+        """dec 对无 dpapi:v1: 前缀的字符串原样返回（向后兼容未迁移配置）。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_dpapi', os.path.join(HERE, 'dpapi_utils.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        self.assertEqual(m.dec('sk-anything-not-encrypted'), 'sk-anything-not-encrypted')
+        self.assertEqual(m.dec('random text'), 'random text')
+
+    def test_decrypt_corrupt_blob_raises_dpapi_error(self):
+        """dpapi:v1: 后跟非 base64 或损坏数据 → 抛 DPAPIError（让调用方置空）。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_dpapi', os.path.join(HERE, 'dpapi_utils.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        if not m.is_available():
+            self.skipTest('DPAPI 不可用')
+        # 合法 base64 但不是 DPAPI 输出 → CryptUnprotectData 返回 False
+        bad = 'dpapi:v1:' + 'A' * 200
+        with self.assertRaises(m.DPAPIError):
+            m.dec(bad)
+        # 非 base64 → 抛 DPAPIError（base64 decode 失败包成 DPAPIError）
+        with self.assertRaises(m.DPAPIError):
+            m.dec('dpapi:v1:!!!not-base64!!!')
+
+    def test_config_decrypt_value_handles_corrupt(self):
+        """Config.decrypt_value 对损坏密文返回空串（不让 UI 阻塞启动）。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_utils', os.path.join(HERE, 'utils.py'))
+        u = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(u)
+        # 明文直通
+        self.assertEqual(u.Config.decrypt_value('plain-text'), 'plain-text')
+        # 空串
+        self.assertEqual(u.Config.decrypt_value(''), '')
+        # 损坏密文 → 返回空串（不抛）
+        self.assertEqual(u.Config.decrypt_value('dpapi:v1:' + 'X' * 200), '')
+
+    def test_migrate_secrets_encrypts_plaintext(self):
+        """_migrate_secrets: 明文 api_key / backend.password → dpapi:v1: 密文 + meta.dpi_v=1。
+        tmp 目录注入明文 settings.json + 最小 template.json，复现首启迁移场景。"""
+        import importlib.util, os, json, tempfile, shutil
+        spec = importlib.util.spec_from_file_location('pdd_utils', os.path.join(HERE, 'utils.py'))
+        u = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(u)
+        spec2 = importlib.util.spec_from_file_location('pdd_dpapi', os.path.join(HERE, 'dpapi_utils.py'))
+        d = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(d)
+        if not d.is_available():
+            self.skipTest('DPAPI 不可用')
+
+        tmp = tempfile.mkdtemp()
+        try:
+            # 注入明文 settings.json
+            sf = os.path.join(tmp, 'settings.json')
+            user = {
+                'api': {
+                    'active_provider': 'doubao',
+                    'providers': {
+                        'doubao': {'api_key': 'sk-PLAINTEXT-DOUBAO-KEY', 'model': 'Doubao-1.5',
+                                   'endpoint': 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'},
+                    }
+                },
+                'backend': {
+                    'url': 'https://mms.pinduoduo.com/',
+                    'account': '13800138000',
+                    'password': 'MyPlainP@ssw0rd',
+                },
+            }
+            with open(sf, 'w', encoding='utf-8') as f:
+                json.dump(user, f, ensure_ascii=False, indent=2)
+            # 最小 template
+            tf = os.path.join(tmp, 'settings_template.json')
+            with open(tf, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'theme': 's', 'api': {'active_provider': 'doubao', 'providers': {
+                        'doubao': {'api_key': '', 'model': '', 'model_history': [], 'endpoint': ''}
+                    }},
+                    'export_path': '', 'backend': {'url': '', 'account': '', 'password': ''},
+                    'calibrate': {'mode': 'ai', 'ai': {}},
+                    'announcement': {'url': '', 'mirror_url': ''},
+                    'usage': {'enabled': True, 'batch_budget_cny': 0, 'monthly_budget_cny': 0, 'pricing': {}},
+                    'history': {'retention_days': 180, 'max_rows': 200000},
+                    'eula_accepted_v1': False,
+                }, f, ensure_ascii=False, indent=2)
+            # 把 Config 的 base_dir 重定向到 tmp（不能 monkey-patch utils.get_base_dir —
+            # 它被 import 时绑定，改 utils.get_base_dir 不影响 Config 内调用；改 m 即可）
+            u.get_base_dir = lambda: tmp
+            u.Config._load_cache = {'mtime': -1, 'data': None}
+            u.Config._template_cache = None
+
+            # 触发 load
+            loaded = u.Config.load()
+            # 内存里应已是密文
+            self.assertTrue(loaded['api']['providers']['doubao']['api_key'].startswith('dpapi:v1:'))
+            self.assertTrue(loaded['backend']['password'].startswith('dpapi:v1:'))
+            self.assertEqual(loaded.get('meta', {}).get('dpi_v'), 1)
+            # 落盘也应已是密文
+            with open(sf, 'r', encoding='utf-8') as f:
+                on_disk = json.load(f)
+            self.assertTrue(on_disk['api']['providers']['doubao']['api_key'].startswith('dpapi:v1:'))
+            self.assertTrue(on_disk['backend']['password'].startswith('dpapi:v1:'))
+            # 解密可还原
+            self.assertEqual(d.dec(loaded['api']['providers']['doubao']['api_key']),
+                             'sk-PLAINTEXT-DOUBAO-KEY')
+            self.assertEqual(d.dec(loaded['backend']['password']), 'MyPlainP@ssw0rd')
+
+            # 二次 load 应幂等（meta.dpi_v=1 阻止再迁移；on-disk 不再变化）
+            u.Config._load_cache = {'mtime': -1, 'data': None}
+            loaded2 = u.Config.load()
+            self.assertEqual(loaded2['api']['providers']['doubao']['api_key'],
+                             loaded['api']['providers']['doubao']['api_key'])
+            self.assertEqual(loaded2.get('meta', {}).get('dpi_v'), 1)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_migrate_secrets_noop_on_already_encrypted(self):
+        """已加密字段 + meta.dpi_v=1 → _migrate_secrets 直接返回 False（幂等）。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_utils', os.path.join(HERE, 'utils.py'))
+        u = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(u)
+        spec2 = importlib.util.spec_from_file_location('pdd_dpapi', os.path.join(HERE, 'dpapi_utils.py'))
+        d = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(d)
+        if not d.is_available():
+            self.skipTest('DPAPI 不可用')
+
+        data = {
+            'api': {'providers': {'doubao': {'api_key': 'dpapi:v1:already-encrypted-blob'}}},
+            'meta': {'dpi_v': 1},
+        }
+        result = u.Config._migrate_secrets(data)
+        self.assertFalse(result)
+        # 字段未被改
+        self.assertEqual(data['api']['providers']['doubao']['api_key'],
+                         'dpapi:v1:already-encrypted-blob')
+
+    def test_sanitize_for_log_redacts_secrets(self):
+        """_sanitize_for_log 脱敏 api_key / password / Authorization / Bearer 等敏感字段。"""
+        from utils import _sanitize_for_log
+        # 直传字符串
+        self.assertNotIn('sk-1234567890', _sanitize_for_log('api_key=sk-1234567890'))
+        self.assertNotIn('MyP@ss', _sanitize_for_log('password=MyP@ss'))
+        self.assertNotIn('eyJhb', _sanitize_for_log('Authorization: Bearer eyJhb.xxx'))
+        # JSON 形式
+        out = _sanitize_for_log('{"api_key": "sk-secret", "model": "Doubao-1.5"}')
+        self.assertNotIn('sk-secret', out)
+        self.assertIn('Doubao-1.5', out)
+        # 键名仍可见（方便排查）
+        self.assertIn('api_key', out)
+        # Bearer 单独
+        self.assertNotIn('eyJhbGciOiJIUzI1NiJ9', _sanitize_for_log('Bearer eyJhbGciOiJIUzI1NiJ9.payload'))
+        # 无敏感字段直通
+        self.assertEqual(_sanitize_for_log('no secrets here'), 'no secrets here')
+        # 异常输入不抛
+        self.assertIsNone(_sanitize_for_log(None))
+        self.assertEqual(_sanitize_for_log(''), '')
+
+    def test_log_sanitizes_in_real_log_call(self):
+        """log.info/warning 实际走过的 Formatter 链会脱敏（防裸字符串拼接漏过）。"""
+        from logger import log, _PlainFormatter
+        import logging, io
+        buf = io.StringIO()
+        h = logging.StreamHandler(buf)
+        h.setFormatter(_PlainFormatter('%(levelname)s | %(message)s'))
+        log.logger.addHandler(h)
+        try:
+            log.info('user entered api_key=sk-12345 secret value')
+            log.warning('Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig')
+        finally:
+            log.logger.removeHandler(h)
+        out = buf.getvalue()
+        self.assertNotIn('sk-12345', out, f'api_key leaked in log: {out!r}')
+        self.assertNotIn('eyJhbGciOiJIUzI1NiJ9', out, f'Bearer token leaked: {out!r}')
 
 
 class TestUpdater(unittest.TestCase):
@@ -2616,6 +2830,669 @@ class TestNavRefactorV147(unittest.TestCase):
         self.assertIn('价格表', fn({'by_model': {
             'a': {'cost': -1.0}, 'b': {'cost': -0.5},
         }}))
+
+
+class TestKeyDecryptWiring(unittest.TestCase):
+    """v1.4.8 P1-C-fix（t18）：ocr/vision 运行时 api_key 解密接线防回归。
+
+    背景：迁移后 settings.json 里 api_key 是 dpapi:v1: 密文，运行时读取点必须经
+    utils.decrypt_secret 解密；否则所有视觉 API 调用拿密文当 key，全线 401。
+    """
+
+    def _src(self, name):
+        with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_ocr_vision_wiring_present(self):
+        """ocr.py（≥3 处）与 vision.py（≥2 处）的 api_key 读取点已接 decrypt_secret。"""
+        ocr_src = self._src('ocr.py')
+        vision_src = self._src('vision.py')
+        self.assertGreaterEqual(ocr_src.count('decrypt_secret('), 3,
+                                'ocr.py 运行时 api_key 读取点必须经 decrypt_secret 解密')
+        self.assertGreaterEqual(vision_src.count('decrypt_secret('), 2,
+                                'vision.py 运行时 api_key 读取点必须经 decrypt_secret 解密')
+        # 三个已知读取点形态逐一存在：主读取 / 降档模型 fallback / GLM fallback
+        self.assertIn("key = decrypt_secret(key)", ocr_src)
+        self.assertIn("cur_key = decrypt_secret(cur_key)", ocr_src)
+        self.assertIn("_glm_key = decrypt_secret(_glm_key)", vision_src)
+
+    def test_decrypt_secret_roundtrip_and_fallback(self):
+        """utils.decrypt_secret：明文直通 / 密文往返+memo / 损坏密文返空 / 非字符串原样。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_utils_wiring', os.path.join(HERE, 'utils.py'))
+        u = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(u)
+        spec2 = importlib.util.spec_from_file_location('pdd_dpapi_wiring', os.path.join(HERE, 'dpapi_utils.py'))
+        m = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(m)
+        if not m.is_available():
+            self.skipTest('DPAPI 不可用（沙盒/Wine）')
+        # 明文直通（无 dpapi:v1: 前缀零开销）+ 空值/非字符串语义
+        self.assertEqual(u.decrypt_secret('sk-plain-key'), 'sk-plain-key')
+        self.assertEqual(u.decrypt_secret(''), '')
+        self.assertIsNone(u.decrypt_secret(None))
+        self.assertEqual(u.decrypt_secret(123), 123)
+        # 密文往返 + memo 缓存
+        blob = m.enc('sk-wiring-test-key')
+        self.assertEqual(u.decrypt_secret(blob), 'sk-wiring-test-key')
+        self.assertIn(blob, u._decrypt_memo, '解密结果应进 memo 缓存')
+        self.assertEqual(u.decrypt_secret(blob), 'sk-wiring-test-key')
+        # 损坏密文 → 返回 ""（调用方按 key 为空路径处理，不抛）
+        self.assertEqual(u.decrypt_secret('dpapi:v1:not-a-valid-blob'), '')
+
+    def test_config_save_get_set_are_class_methods(self):
+        """回归：decrypt_secret（模块级）曾插在 class Config 中间把类截断，
+        save/get/set 沦为其函数体内死代码 → Config.save 不存在，所有配置写盘静默失效。
+        断言类方法齐全 + set→磁盘→读回往返成立。"""
+        import importlib.util
+        import tempfile
+        import shutil
+        import json
+        spec = importlib.util.spec_from_file_location('pdd_utils_save', os.path.join(HERE, 'utils.py'))
+        u = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(u)
+        for name in ('load', 'save', 'get', 'set', '_migrate_secrets', 'decrypt_value'):
+            self.assertTrue(callable(getattr(u.Config, name, None)), f'Config.{name} 缺失')
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, 'settings_template.json'), 'w', encoding='utf-8') as f:
+                json.dump({}, f)
+            u.get_base_dir = lambda: tmp
+            u.Config._load_cache = {'mtime': -1, 'data': None}
+            u.Config._template_cache = None
+            u.Config.set('t18_probe', {'ok': 1})
+            with open(os.path.join(tmp, 'settings.json'), 'r', encoding='utf-8') as f:
+                disk = json.load(f)
+            self.assertEqual(disk.get('t18_probe'), {'ok': 1})
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestEULA(unittest.TestCase):
+    """t7+t16 EULA 回归测试。"""
+
+    def test_eula_version_constant(self):
+        from eula_text import EULA_VERSION, EULA_CLAUSES
+        self.assertEqual(EULA_VERSION, 'v1')
+        # 恰 7 条
+        self.assertEqual(len(EULA_CLAUSES), 7)
+
+    def test_eula_text_renders_keywords(self):
+        from eula_text import render_eula_text
+        text = render_eula_text()
+        self.assertIn('账号风险', text)
+        self.assertIn('风险由用户本人承担', text)
+
+    def test_gui_eula_dialog_blocks_with_wait_window(self):
+        """t16 修复：_show_eula_dialog 体内必须包含 wait_visibility + wait_window 阻塞序列。"""
+        import gui
+        src = inspect.getsource(gui)
+        # 找到 _show_eula_dialog 函数体
+        idx = src.find('def _show_eula_dialog')
+        self.assertGreater(idx, 0, "gui.py must define _show_eula_dialog")
+        # 取到下一个 def 为止
+        next_def = src.find('\n    def ', idx + 1)
+        body = src[idx:next_def if next_def > 0 else len(src)]
+        self.assertIn('wait_window', body, "EULA dialog must call wait_window to block")
+        self.assertIn('wait_visibility', body, "EULA dialog must call wait_visibility for stable display")
+
+
+class TestLicense(unittest.TestCase):
+    """t10 P2-A 离线卡密授权测试。"""
+
+    def test_rfc8032_vector1(self):
+        from auth.ed25519_verify import verify, TEST1_PK, TEST1_MSG, TEST1_SIG
+        self.assertTrue(verify(TEST1_PK, TEST1_MSG, TEST1_SIG))
+
+    def test_rfc8032_vector2(self):
+        from auth.ed25519_verify import verify, TEST2_PK, TEST2_MSG, TEST2_SIG
+        self.assertTrue(verify(TEST2_PK, TEST2_MSG, TEST2_SIG))
+
+    def test_tampered_msg_rejected(self):
+        from auth.ed25519_verify import verify, TEST1_PK, TEST1_SIG
+        self.assertFalse(verify(TEST1_PK, b'x', TEST1_SIG))
+
+    def test_tampered_sig_rejected(self):
+        from auth.ed25519_verify import verify, TEST1_PK, TEST1_MSG, TEST1_SIG
+        bad = TEST1_SIG[:-1] + b'\\x00'
+        self.assertFalse(verify(TEST1_PK, TEST1_MSG, bad))
+
+    def test_get_tier_enforce_false_is_pro(self):
+        from auth.license import get_tier
+        # enforce=False：恒 pro（即便 license_text 为空或乱填）
+        self.assertEqual(get_tier("", enforce=False), 'pro')
+        self.assertEqual(get_tier("garbage", enforce=False), 'pro')
+
+    def test_get_tier_enforce_true_empty_is_free(self):
+        from auth.license import get_tier
+        # enforce=True 且无 license → free
+        self.assertEqual(get_tier("", enforce=True), 'free')
+        self.assertEqual(get_tier("garbage", enforce=True), 'free')
+
+    def test_machine_fingerprint_stable(self):
+        from auth.license import get_machine_fingerprint
+        a = get_machine_fingerprint()
+        b = get_machine_fingerprint()
+        self.assertEqual(a, b)
+        self.assertEqual(len(a), 32)  # 16 字节 hex = 32 chars
+
+    def test_get_tier_cache_ttl_expires_and_reevaluates(self):
+        """t24 修复包 A (BUG-1)：缓存 TTL=300s 到期后必须重验。
+
+        修前：get_tier('', enforce=True) 第一次返 'free'，缓存永不过期，
+        外部修改 settings.json 后该进程内仍返 'free' 直到重启。
+        修后：TTL 到期后强制重验（即使同 license_text）。
+        """
+        import time as _time
+        import auth.license as _lic
+        _lic.reset_cache()
+        # 第 1 次：返 free
+        r1 = _lic.get_tier('garbage_for_ttl_test', enforce=True)
+        self.assertEqual(r1, 'free')
+        # 直接改 _CACHE 把时间戳设到 1000s 前，模拟 TTL 过期
+        cache_key = 'True:garbage_for_ttl_test'
+        _lic._CACHE[cache_key] = ('pro', _time.time() - 1000)  # 注入「过期但 tier=pro」
+        # 第 2 次：TTL 已过期，应重验并返 free（而不是命中缓存的 'pro'）
+        r2 = _lic.get_tier('garbage_for_ttl_test', enforce=True)
+        self.assertEqual(r2, 'free')
+        # 验证：缓存值已被刷新（ts 更新）
+        self.assertGreater(_lic._CACHE[cache_key][1], _time.time() - 10)
+        # 清理
+        _lic.reset_cache()
+
+    def test_get_tier_cache_ttl_fresh_hit_uses_cache(self):
+        """t24 修复包 A (BUG-1)：TTL 内命中应直接返缓存，不重验。
+
+        防回归：避免 TTL 实现错误把「同 license_text 重复调用」也走重验路径。
+        """
+        import time as _time
+        import auth.license as _lic
+        _lic.reset_cache()
+        # 首次返 free
+        _lic.get_tier('cache_fresh_test', enforce=True)
+        cache_key = 'True:cache_fresh_test'
+        # 注入「未过期但 tier=pro」模拟缓存被外部改
+        _lic._CACHE[cache_key] = ('pro', _time.time() - 10)  # 10s 前，远未到 300s
+        # 命中缓存（TTL 内）应直接返 'pro'
+        r = _lic.get_tier('cache_fresh_test', enforce=True)
+        self.assertEqual(r, 'pro')
+        _lic.reset_cache()
+
+    def test_settings_ui_enforce_rollback_on_save_failure(self):
+        """t24 修复包 A (BUG-13)：_on_enforce_toggle 写盘失败时必须回滚 UI。
+
+        直接验证源码：except 分支内必须执行 _enforce_var.set(not bool(_enforce_var.get()))。
+        """
+        import inspect
+        import settings_ui as _sui
+        src = inspect.getsource(_sui)
+        # 必须存在「失败时反转 _enforce_var」的语句
+        self.assertIn('_enforce_var.set(not bool(_enforce_var.get()))', src)
+
+    def test_settings_ui_import_rollback_on_save_failure(self):
+        """t24 修复包 A (BUG-14)：_on_import 写盘失败时必须回滚 _key_var 为旧值。
+
+        直接验证源码：except 分支内必须执行 _key_var.set(_old_key)。
+        """
+        import inspect
+        import settings_ui as _sui
+        src = inspect.getsource(_sui)
+        # 进入 try 前快照
+        self.assertIn('_old_key = _key_var.get()', src)
+        # 失败时回滚
+        self.assertIn('_key_var.set(_old_key)', src)
+
+
+class TestGating(unittest.TestCase):
+    """t12 P2-C Pro 门控测试。
+
+    用户裁定：enforce=false 时所有门控失效（默认全免，永久免费功能不受影响）。
+    enforce=true + tier=free 时：实时截图 50 次/日，历史趋势 30 天。
+    enforce=true + tier=pro 时：不限。
+    永久免费（不门控）：表格导入、手动输入、批量识别、双模型验证、Excel 导出。
+    """
+
+    def setUp(self):
+        # 重置 license 缓存，确保 enforce 参数每次都被重新计算
+        try:
+            from auth.license import reset_cache
+            reset_cache()
+        except Exception:
+            pass
+        # 备份 settings.json license 段
+        self._orig_cfg = None
+        try:
+            from utils import Config
+            self._orig_cfg = Config.load() if hasattr(Config, "load") else {}
+        except Exception:
+            pass
+
+    def tearDown(self):
+        # 还原 settings.json license 段
+        try:
+            if self._orig_cfg is not None:
+                from utils import Config
+                Config.save(self._orig_cfg)
+        except Exception:
+            pass
+        try:
+            from auth.license import reset_cache
+            reset_cache()
+        except Exception:
+            pass
+
+    def test_enforce_false_is_pro_and_no_quota(self):
+        """enforce=false：get_tier 恒 pro、check_live_quota 恒 allowed、history 不限"""
+        from auth.license import get_tier, is_pro, check_live_quota, get_history_days_limit
+        self.assertEqual(get_tier("", enforce=False), 'pro')
+        self.assertEqual(get_tier("garbage", enforce=False), 'pro')
+        self.assertTrue(is_pro("", enforce=False))
+        # 999999 是 used 也无影响
+        gate = check_live_quota(999999, "", enforce=False)
+        self.assertTrue(gate["allowed"])
+        # history 无限
+        self.assertEqual(get_history_days_limit("", enforce=False), 999999)
+
+    def test_enforce_true_free_live_quota_blocks_at_50(self):
+        """enforce=true + free：used >= 50 阻断，< 50 通过"""
+        from auth.license import check_live_quota
+        # used=49 → 通过
+        g = check_live_quota(49, "garbage_no_valid_license", enforce=True)
+        self.assertTrue(g["allowed"])
+        # used=50 → 阻断
+        g = check_live_quota(50, "garbage_no_valid_license", enforce=True)
+        self.assertFalse(g["allowed"])
+        # used=100 → 阻断
+        g = check_live_quota(100, "garbage_no_valid_license", enforce=True)
+        self.assertFalse(g["allowed"])
+
+    def test_enforce_true_pro_live_quota_unlimited(self):
+        """enforce=true + Pro：不限（无 license 时 is_pro=False 走 free 路径，
+        所以这里只能断言"is_pro=False 的 free 路径在 enforce=true 下被钳制"，
+        真正 Pro 验证需密钥——保留扩展点）。"""
+        from auth.license import check_live_quota
+        # 无 license + enforce=true → free 路径 → 50 次上限
+        g = check_live_quota(60, "", enforce=True)
+        self.assertFalse(g["allowed"])
+
+    def test_enforce_true_free_history_30_days(self):
+        """enforce=true + free：history 钳到 30 天"""
+        from auth.license import get_history_days_limit
+        # 无 license → free
+        self.assertEqual(get_history_days_limit("", enforce=True), 30)
+        self.assertEqual(get_history_days_limit("garbage", enforce=True), 30)
+
+    def test_check_live_quota_result_shape(self):
+        """返回 dict 字段完整（allowed/limit/used/remaining/reason）"""
+        from auth.license import check_live_quota
+        g = check_live_quota(10, "garbage", enforce=True)
+        for k in ("allowed", "limit", "used", "remaining", "reason"):
+            self.assertIn(k, g)
+        self.assertEqual(g["used"], 10)
+
+    def test_get_license_info_enforce_false(self):
+        """enforce=false：返回 is_pro=True，status 含「试用期」"""
+        from auth.license import get_license_info
+        info = get_license_info("", enforce=False)
+        self.assertTrue(info["is_pro"])
+        self.assertIn("试用期", info["status_text"])
+        self.assertFalse(info["enforce"])
+
+    def test_get_license_info_enforce_true_no_key(self):
+        """enforce=true 且无 license：is_pro=False，tier=free"""
+        from auth.license import get_license_info
+        info = get_license_info("", enforce=True)
+        self.assertFalse(info["is_pro"])
+        self.assertEqual(info["tier"], "free")
+        self.assertIn("免费版", info["status_text"])
+
+    def test_get_license_info_enforce_true_garbage(self):
+        """enforce=true + 无效 license：等同无 license → free"""
+        from auth.license import get_license_info
+        info = get_license_info("garbage_license_text_xxx", enforce=True)
+        self.assertFalse(info["is_pro"])
+
+    def test_count_today_live_screenshot_smoke(self):
+        """usage_store.count_today_live_screenshot() 返回整数，失败返 0"""
+        import usage_store as us
+        n = us.count_today_live_screenshot()
+        self.assertIsInstance(n, int)
+        self.assertGreaterEqual(n, 0)
+
+    def test_license_module_constants(self):
+        """t12 阈值常量正确导出"""
+        from auth.license import FREE_DAILY_LIVE_SCREENSHOT, FREE_HISTORY_DAYS, UNLIMITED
+        self.assertEqual(FREE_DAILY_LIVE_SCREENSHOT, 50)
+        self.assertEqual(FREE_HISTORY_DAYS, 30)
+        self.assertEqual(UNLIMITED, 999999)
+
+
+class TestReplenishmentModels(unittest.TestCase):
+    """t13 P3-A 补货模型框架：经典原样保留 + 加权新增。
+
+    用户裁定（最高优先约束）：
+    - 经典模式（默认）一行公式逻辑都不许改，行为与改动前完全一致
+    - 加权模式：日销 = 0.5×7日 + 0.3×14日 + 0.2×30日
+    - 加权无历史 → 回退经典 + 标注「经典(无历史)」
+    - 加权任何异常 → 逐商品回退经典，绝不中断整批
+    """
+
+    def setUp(self):
+        try:
+            from utils import Config
+            self._orig = Config.load() if hasattr(Config, "load") else {}
+        except Exception:
+            self._orig = {}
+
+    def tearDown(self):
+        try:
+            from utils import Config
+            if self._orig is not None:
+                Config.save(self._orig)
+        except Exception:
+            pass
+
+    def test_get_replenishment_cfg_defaults(self):
+        """默认 = classic + safety_days=2 + in_transit_qty=0"""
+        from utils import get_replenishment_cfg
+        cfg = get_replenishment_cfg()
+        self.assertEqual(cfg['model'], 'classic')
+        self.assertEqual(cfg['safety_days'], 2)
+        self.assertEqual(cfg['in_transit_qty'], 0)
+
+    def test_get_replenishment_cfg_weighted(self):
+        from utils import get_replenishment_cfg
+        from utils import Config
+        cfg = Config.load() if hasattr(Config, "load") else {}
+        cfg['replenishment'] = {'model': 'weighted', 'safety_days': 5, 'in_transit_qty': 200}
+        Config.save(cfg)
+        cfg2 = get_replenishment_cfg()
+        self.assertEqual(cfg2['model'], 'weighted')
+        self.assertEqual(cfg2['safety_days'], 5)
+        self.assertEqual(cfg2['in_transit_qty'], 200)
+
+    def test_classic_formula_unchanged(self):
+        """经典公式：固定输入 → 固定输出（与改动前完全一致）"""
+        from utils import calc_replenishment_classic
+        # 输入：stock=0, sales=10, shipping=1, offset=1
+        # daily=10, ratio=0/10=0, lead_time=2, reorder=-2 → 立刻补货
+        # qty = max(10*8, 100) = 100, round to 100
+        p = calc_replenishment_classic({'name': 'X', 'stock': 0, 'sales': 10}, '广东', 1, 1)
+        self.assertEqual(p['status'], '立刻补货')
+        self.assertEqual(p['color'], 'red')
+        self.assertEqual(p['qty'], 100)
+        self.assertEqual(p['model'], 'classic')
+        # 输入：stock=200, sales=10, shipping=1, offset=1
+        # ratio=20, lead_time=2, reorder=18 → green
+        p2 = calc_replenishment_classic({'name': 'X', 'stock': 200, 'sales': 10}, '广东', 1, 1)
+        self.assertEqual(p2['color'], 'green')
+        self.assertEqual(p2['qty'], 0)
+        # 无销量
+        p3 = calc_replenishment_classic({'name': 'X', 'stock': 50, 'sales': 0}, '广东', 1, 1)
+        self.assertEqual(p3['status'], '无销量·观察')
+        self.assertEqual(p3['qty'], 0)
+
+    def test_weighted_with_history_uses_weighted_avg(self):
+        """加权模式：含历史数据 → 加权日销 (0.5×7 + 0.3×14 + 0.2×30)"""
+        from utils import calc_replenishment_weighted
+        from datetime import datetime, timedelta
+        today = datetime.now()
+        rows = []
+        # 近 7 日每天 20 件
+        for i in range(7):
+            d = (today - timedelta(days=i)).strftime('%Y-%m-%d')
+            rows.append({'captured_at': d, 'sales': 20, 'name': 'X'})
+        # 近 8-14 日每天 10 件
+        for i in range(8, 15):
+            d = (today - timedelta(days=i)).strftime('%Y-%m-%d')
+            rows.append({'captured_at': d, 'sales': 10, 'name': 'X'})
+        # 近 15-30 日每天 5 件
+        for i in range(15, 31):
+            d = (today - timedelta(days=i)).strftime('%Y-%m-%d')
+            rows.append({'captured_at': d, 'sales': 5, 'name': 'X'})
+        def hlookup(sku, reg, days, name=None):
+            return rows
+        item = {'name': 'X', 'stock': 0, 'sales': 999, 'sku_id': 'SKU001'}
+        p = calc_replenishment_weighted(item, '广东', 2, 2, 0, hlookup)
+        self.assertEqual(p['model'], 'weighted')
+        # 加权日销 = 0.5*avg(7) + 0.3*avg(14) + 0.2*avg(30)
+        # avg(7)=20, avg(14)=(7*20+7*10)/14=15, avg(30)=(7*20+7*10+16*5)/30=290/30≈9.67
+        # → 0.5*20 + 0.3*15 + 0.2*9.67 ≈ 16.43
+        self.assertAlmostEqual(p['daily'], 16.4, delta=0.5)
+        # 立刻补货（stock=0/daily=14 ≈ 0, lead_time=2+2=4）
+        self.assertEqual(p['color'], 'red')
+        self.assertIn('立刻补货', p['status'])
+
+    def test_weighted_no_history_falls_back(self):
+        """加权无历史 → 经典公式 + 标注「经典(无历史)」"""
+        from utils import calc_replenishment_weighted
+        def hlookup(*a, **kw):
+            return []
+        item = {'name': 'X', 'stock': 0, 'sales': 10, 'sku_id': 'SKU001'}
+        p = calc_replenishment_weighted(item, '广东', 1, 2, 0, hlookup)
+        self.assertEqual(p['model'], 'classic(no_history)')
+        # 与经典公式一致：立刻补货、qty=100
+        self.assertEqual(p['status'], '立刻补货')
+        self.assertEqual(p['qty'], 100)
+
+    def test_weighted_exception_falls_back(self):
+        """加权 history_lookup 抛异常 → 经典公式 + 标注回退"""
+        from utils import calc_replenishment_weighted
+        def hlookup(*a, **kw):
+            raise RuntimeError("db corrupted")
+        item = {'name': 'X', 'stock': 0, 'sales': 10, 'sku_id': 'SKU001'}
+        p = calc_replenishment_weighted(item, '广东', 1, 2, 0, hlookup)
+        self.assertEqual(p['model'], 'classic(no_history)')
+        self.assertEqual(p['status'], '立刻补货')
+
+    def test_calc_replenishment_dispatch_classic(self):
+        """calc_replenishment 入口：model='classic' 走经典路径"""
+        from utils import calc_replenishment
+        items = [{'name': 'A', 'stock': 0, 'sales': 10}]
+        def sl(item, reg): return 1
+        def hl(*a, **kw): return []
+        plans = calc_replenishment(items, '广东', 'classic', 2, 0, sl, hl, offset=1)
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0]['model'], 'classic')
+        self.assertEqual(plans[0]['status'], '立刻补货')
+
+    def test_calc_replenishment_dispatch_weighted_with_history(self):
+        """calc_replenishment 入口：model='weighted' + 有历史 → 加权"""
+        from utils import calc_replenishment
+        from datetime import datetime, timedelta
+        today = datetime.now()
+        rows = [{'captured_at': (today - timedelta(days=i)).strftime('%Y-%m-%d'),
+                 'sales': 10, 'name': 'A'} for i in range(20)]
+        items = [{'name': 'A', 'stock': 0, 'sales': 10, 'sku_id': 'S1'}]
+        def sl(item, reg): return 1
+        def hl(sku, reg, days, name=None):
+            return rows if sku else []
+        plans = calc_replenishment(items, '广东', 'weighted', 2, 0, sl, hl)
+        self.assertEqual(plans[0]['model'], 'weighted')
+
+    def test_calc_replenishment_per_item_exception_falls_back(self):
+        """任何异常 → 逐商品回退经典，绝不中断整批"""
+        from utils import calc_replenishment
+        items = [
+            {'name': 'A', 'stock': 0, 'sales': 10},
+            {'name': 'B', 'stock': 0, 'sales': 10, 'sku_id': 'B1'},
+        ]
+        def sl(item, reg): return 1
+        def hl(*a, **kw):
+            raise RuntimeError("kaboom")
+        plans = calc_replenishment(items, '广东', 'weighted', 2, 0, sl, hl)
+        self.assertEqual(len(plans), 2)
+        for p in plans:
+            # 无有效历史 → 经典(无历史) 兜底
+            self.assertIn(p['model'], ('classic(no_history)', 'classic'))
+
+    def test_settings_template_has_replenishment(self):
+        """settings_template.json 包含 replenishment 默认段"""
+        import json
+        with open(os.path.join(HERE, 'settings_template.json'), 'r', encoding='utf-8') as f:
+            tpl = json.load(f)
+        self.assertIn('replenishment', tpl)
+        self.assertEqual(tpl['replenishment']['model'], 'classic')
+        self.assertEqual(tpl['replenishment']['safety_days'], 2)
+        self.assertEqual(tpl['replenishment']['in_transit_qty'], 0)
+
+    def test_export_xlsx_has_model_column(self):
+        """export_xlsx.py 输出 headers 含「模型」列（缺省不破坏旧表，新增最右列）"""
+        import export_xlsx
+        src = inspect.getsource(export_xlsx.export_cache_to_xlsx)
+        self.assertIn("'模型'", src)
+        self.assertIn("'补货量'", src)  # 旧列仍在
+
+    def test_gui_calc_from_items_dispatches_by_model(self):
+        """gui.py _calc_from_items 含 weighted 分发（读 config.replenishment.model）"""
+        import gui
+        src = inspect.getsource(gui.App._calc_from_items)
+        # 必须有 weighted 分支
+        self.assertIn('weighted', src)
+        # 必须有 model 标注写入
+        self.assertIn("'model': _model_tag", src)
+        # 经典分支必须保留原公式关键词（防回归）
+        self.assertIn("立刻补货", src)
+        self.assertIn("daily * 8", src)
+
+
+class TestBatchCostPreview(unittest.TestCase):
+    """t14 P3-B 批量前成本预估确认。
+
+    用户裁定：
+    - 价格表完整 → 显示金额区间（CNY 区间）
+    - 价格表为空/缺价 → 标题「（价格未配置，仅按 token 数提示）」，显示调用次数
+    - 用户取消 → 干净退出，不置任何熔断标志（与 F9/_api_fatal/预算三态无关）
+    - 估算失败 → 静默跳过确认，绝不阻塞批量
+    """
+
+    def setUp(self):
+        try:
+            from utils import Config
+            self._orig = Config.load() if hasattr(Config, "load") else {}
+        except Exception:
+            self._orig = {}
+
+    def tearDown(self):
+        try:
+            from utils import Config
+            if self._orig is not None:
+                Config.save(self._orig)
+        except Exception:
+            pass
+
+    def test_gui_has_preview_batch_cost_method(self):
+        """gui.App 有 _preview_batch_cost 方法"""
+        import gui
+        self.assertTrue(hasattr(gui.App, '_preview_batch_cost'))
+        import inspect
+        sig = inspect.signature(gui.App._preview_batch_cost)
+        self.assertIn('region_count', sig.parameters)
+        self.assertIn('dual_verify', sig.parameters)
+
+    def test_gui_batch_start_invokes_preview(self):
+        """批量启动 start_batch 内 _preview_batch_cost 调用"""
+        import gui
+        src = inspect.getsource(gui)
+        self.assertIn('_preview_batch_cost', src)
+        # 确认调用点在双批守卫之后、未选地区检查之后
+        self.assertIn('if not self._preview_batch_cost(', src)
+
+    def test_helper_to_float_safe(self):
+        """helper _to_float_safe 健壮"""
+        from gui import _to_float_safe
+        self.assertEqual(_to_float_safe('1.5'), 1.5)
+        self.assertEqual(_to_float_safe('invalid', 0.0), 0.0)
+        self.assertEqual(_to_float_safe(None, 0.0), 0.0)
+        self.assertEqual(_to_float_safe(0), 0.0)
+        self.assertEqual(_to_float_safe(0, 99), 0)  # 0 is not the default
+
+    def test_helper_fmt_yuan(self):
+        """helper _fmt_yuan 格式化"""
+        from gui import _fmt_yuan
+        # ≥1 元用 ¥1.23 格式
+        self.assertIn('¥', _fmt_yuan(1.5))
+        # <1 元用 4 位小数
+        r = _fmt_yuan(0.001)
+        self.assertIn('¥', r)
+        # 0 → ¥0
+        self.assertIn('¥0', _fmt_yuan(0))
+
+    def test_preview_batch_cost_uses_pricing_cfg(self):
+        """_preview_batch_cost 读 utils.get_usage_cfg().pricing（不硬编码）"""
+        import gui
+        src = inspect.getsource(gui.App._preview_batch_cost)
+        self.assertIn('get_usage_cfg', src)
+        self.assertIn('pricing', src)
+        self.assertIn('input_per_million', src)
+        self.assertIn('output_per_million', src)
+
+    def test_preview_batch_cost_falls_back_on_no_pricing(self):
+        """价格表为空 → 标题含「价格未配置」"""
+        import gui
+        src = inspect.getsource(gui.App._preview_batch_cost)
+        self.assertIn('价格未配置', src)
+        self.assertIn('预计调用', src)
+
+    def test_preview_batch_cost_exception_does_not_block(self):
+        """估算函数顶部 try/except，异常 → 放行（绝不阻塞批量）"""
+        import gui
+        src = inspect.getsource(gui.App._preview_batch_cost)
+        # 必须有顶层 try/except 包整个函数
+        self.assertIn('try:', src)
+        self.assertIn('except Exception:', src)
+        # 异常路径必须 return True（放行）
+        # 函数最后一段 "return True" 在 except 块内
+        idx = src.rfind('return True')
+        self.assertGreater(idx, 0)
+
+    def test_preview_batch_cost_per_round_estimation(self):
+        """轮次估计 3~8，calls 公式合理"""
+        import gui
+        src = inspect.getsource(gui.App._preview_batch_cost)
+        # 显式声明保守轮次 3 ~ 8
+        self.assertIn('min_rounds, max_rounds = 3, 8', src)
+        # 调用次数公式
+        self.assertIn('per_round_calls_per_region', src)
+        self.assertIn('1 + 1 * n_models', src)
+
+    def test_settings_template_has_pricing_or_empty(self):
+        """settings_template.json 中 usage.pricing 默认 {}（不破坏；用户配置即生效）"""
+        import json
+        with open(os.path.join(HERE, 'settings_template.json'), 'r', encoding='utf-8') as f:
+            tpl = json.load(f)
+        # pricing 缺省或 {} 都 OK
+        pricing = tpl.get('usage', {}).get('pricing', {}) or {}
+        self.assertIsInstance(pricing, dict)
+
+    def test_t24_f1_classic_error_label_distinguishes(self):
+        """t24 修复包 A (F1)：gui.py 加权 except 回退标注 'classic(error)'。
+
+        与 utils.calc_replenishment_weighted 的 'classic(no_history)' 区分：
+        - classic(no_history) = utils 内部查到空结果主动回退
+        - classic(error)       = gui 层 utils 抛异常被动回退
+        """
+        import gui
+        src = inspect.getsource(gui)
+        # gui.py:2029 必须用 'classic(error)' 标注被动回退
+        self.assertIn("'classic(error)'", src)
+        # 注释中必须解释两个标签区别
+        self.assertIn('classic(error)', src)
+        self.assertIn('classic(no_history)', src)
+
+    def test_t24_f2_self_tier_dead_code_removed(self):
+        """t24 修复包 A (F2)：gui.py 删除 self._tier 死状态 + _auth_get_tier import。
+
+        防回归：避免后续又把死代码加回来。
+        """
+        import gui
+        src = inspect.getsource(gui)
+        # 不应再有 self._tier 赋值（死状态）
+        self.assertNotIn('self._tier = ', src)
+        # 不应再有 `from auth.license import get_tier as _auth_get_tier` 这种 import 行
+        self.assertNotIn('from auth.license import get_tier as _auth_get_tier', src)
+        # 不应再调用 _auth_get_tier(...)
+        self.assertNotIn('_auth_get_tier(', src)
 
 
 if __name__ == '__main__':

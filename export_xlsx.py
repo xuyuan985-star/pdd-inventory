@@ -112,7 +112,7 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
             break
     if not sel_cols:
         sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
-    headers = ['地区', '仓库'] + list(sel_cols) + ['可售卖天数', '状态', '补货量']
+    headers = ['地区', '仓库'] + list(sel_cols) + ['可售卖天数', '状态', '补货量', '模型']
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = styles['header_font']
@@ -150,6 +150,8 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
                         v = strip_tail_noise(v)  # 仅勾选文本列剥「查看地址/日期时间」词条噪音
                 vals.append(_sanitize_cell(v))
             vals += [p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
+            # t13 P3-A：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
+            vals.append(_sanitize_cell(p.get('model', 'classic')))
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(row=row, column=ci, value=v)
                 c.font = styles['cell_font']

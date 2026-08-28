@@ -2,9 +2,44 @@
 PDD EZ — 公共工具函数
 提供数据目录路径和设置读取，消除 main/ocr/gui 中的重复定义。
 """
-import os, sys, json, threading
+import os, re, sys, json, threading
 
-VERSION = "v1.4.7"
+VERSION = "v1.5.1"
+
+
+# ── v1.4.8 P1-C：日志/调试脱敏（logger.py / ocr.py 共用）─────────
+# 替换值为 ***，保留键名/前缀以便排查调用栈。
+# 不引入第三方依赖；纯 stdlib re。
+_SENSITIVE_KEYS = (
+    'api_key', 'apikey', 'api-key',
+    'password', 'passwd', 'pwd',
+    'authorization', 'x-api-key', 'x-auth-token',
+    'access_token', 'refresh_token', 'secret',
+)
+_SENSITIVE_KV_RE = re.compile(
+    r'(?i)("??\'??)(' + '|'.join(re.escape(k) for k in _SENSITIVE_KEYS) + r')("??\'??)'
+    r'\s*[:=]\s*("??)([^\s,"\'}\]\)]+)\4'
+)
+_BEARER_RE = re.compile(r'(?i)(Bearer\s+)[A-Za-z0-9._\-\=]+')
+
+
+def _sanitize_for_log(text):
+    """对日志/调试文本中的敏感字段做脱敏（替换值为 ***）。
+    失败返回原文（不阻塞调用方）。支持 key=value / key: value / "key":"value" /
+    Bearer xxx / Authorization: xxx 多种形式。"""
+    if not isinstance(text, str) or not text:
+        return text
+    try:
+        text = _BEARER_RE.sub(r'\1***', text)
+
+        def _kv_sub(m):
+            q4 = m.group(4) or ''
+            tail = q4 if q4 else ''
+            return f'{m.group(1)}{m.group(2)}{m.group(3)}: {q4}***{tail}'
+        text = _SENSITIVE_KV_RE.sub(_kv_sub, text)
+        return text
+    except Exception:
+        return text
 
 
 def version_newer(remote: str, local: str) -> bool:
@@ -131,6 +166,244 @@ def get_history_cfg() -> dict:
     return dict(h) if isinstance(h, dict) else {}
 
 
+# ============================================================
+# t13 P3-A 补货模型框架
+# 用户裁定：经典模式（现行公式）原样保留为默认模式，一行公式逻辑都不许改；
+# 加权模式作为额外可选模型，回退时标注「经典(无历史)」
+# ============================================================
+MODEL_CLASSIC = 'classic'
+MODEL_WEIGHTED = 'weighted'
+DEFAULT_REPLENISHMENT_CFG = {
+    'model': MODEL_CLASSIC,
+    'safety_days': 2,
+    'in_transit_qty': 0,
+}
+
+
+def get_replenishment_cfg() -> dict:
+    """读取补货策略配置。结构：{model:'classic'|'weighted', safety_days:int, in_transit_qty:int}。
+
+    缺字段时回退默认（用户裁定：default=classic，永不破坏现有行为）。
+    """
+    try:
+        s = Config.load()
+        r = s.get('replenishment')
+        if not isinstance(r, dict):
+            return dict(DEFAULT_REPLENISHMENT_CFG)
+        out = dict(DEFAULT_REPLENISHMENT_CFG)
+        m = str(r.get('model') or '').strip().lower()
+        if m in (MODEL_CLASSIC, MODEL_WEIGHTED):
+            out['model'] = m
+        try:
+            out['safety_days'] = max(0, int(r.get('safety_days', DEFAULT_REPLENISHMENT_CFG['safety_days'])))
+        except Exception:
+            out['safety_days'] = DEFAULT_REPLENISHMENT_CFG['safety_days']
+        try:
+            out['in_transit_qty'] = max(0, int(r.get('in_transit_qty', DEFAULT_REPLENISHMENT_CFG['in_transit_qty'])))
+        except Exception:
+            out['in_transit_qty'] = DEFAULT_REPLENISHMENT_CFG['in_transit_qty']
+        return out
+    except Exception:
+        return dict(DEFAULT_REPLENISHMENT_CFG)
+
+
+def _to_int_safe(v, default=0):
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return default
+
+
+def calc_replenishment_classic(item: dict, region: str, shipping: int, offset: int) -> dict:
+    """经典模式补货（与原 gui.py _calc_from_items 同款公式，逐字逐行保留）。
+
+    输入：item={name,stock,sales,...}, region, shipping(运输天数), offset(刷新偏置)
+    输出：{status, color, qty, ratio, reorder, model='classic'}（字段顺序与原实现一致）
+
+    用户裁定：此函数是原公式的精确复刻——任何修改都视为破坏 t13 铁律。
+    """
+    name = item.get('name', '')
+    stock = _to_int_safe(item.get('stock', 0))
+    daily = max(_to_int_safe(item.get('sales', 0)), 0)
+    calc_daily = daily if daily > 0 else 1
+    if daily <= 0:
+        status = '无销量·观察'
+        color = 'gray'
+        qty = 0
+        ratio = 0.0
+        reorder = 0.0
+    else:
+        ratio = stock / calc_daily
+        lead_time = shipping + offset
+        reorder = ratio - lead_time
+        if reorder <= 0:
+            status = '立刻补货'
+            color = 'red'
+            qty = max(daily * 8, 100)
+            qty = ((qty + 99) // 100) * 100
+        elif reorder <= 2:
+            status = f'{reorder:.0f}天后下单'
+            color = 'yellow'
+            qty = max(daily * 8, 100)
+            qty = ((qty + 99) // 100) * 100
+        else:
+            status = f'{reorder:.0f}天后下单'
+            color = 'green'
+            qty = 0
+    return {
+        'status': status, 'color': color, 'qty': qty,
+        'ratio': round(ratio, 1),
+        'reorder': reorder,
+        'daily': daily, 'stock': stock,
+        'model': MODEL_CLASSIC,
+    }
+
+
+def _weighted_daily(history_rows: list, asof_ts: str = None) -> float:
+    """加权日销：0.5×近7日 + 0.3×近14日 + 0.2×近30日。
+
+    history_rows：query_sku_history 返回的列表，按 captured_at 升序；
+                  每行至少含 'captured_at' 和 'sales' 字段。
+    返回 0.0 表示无有效数据（调用方据此回退经典模式）。
+    """
+    from datetime import datetime
+    if not history_rows or not isinstance(history_rows, list):
+        return 0.0
+    try:
+        # 取每行 (captured_at, sales) 元组，过滤 None/无效
+        pairs = []
+        for r in history_rows:
+            if not isinstance(r, dict):
+                continue
+            try:
+                sales_v = float(r.get('sales') or 0)
+            except Exception:
+                sales_v = 0.0
+            ts = str(r.get('captured_at') or '')
+            if not ts:
+                continue
+            try:
+                d = datetime.fromisoformat(ts[:10])
+            except Exception:
+                continue
+            pairs.append((d, sales_v))
+        if not pairs:
+            return 0.0
+        pairs.sort(key=lambda x: x[0])
+        latest = pairs[-1][0]
+        def avg(days):
+            floor = latest.toordinal() - days + 1
+            vals = [s for (d, s) in pairs if d.toordinal() >= floor and s > 0]
+            if not vals:
+                return 0.0
+            return sum(vals) / len(vals)
+        d7 = avg(7)
+        d14 = avg(14)
+        d30 = avg(30)
+        if d7 == 0 and d14 == 0 and d30 == 0:
+            return 0.0
+        return 0.5 * d7 + 0.3 * d14 + 0.2 * d30
+    except Exception:
+        return 0.0
+
+
+def calc_replenishment_weighted(item: dict, region: str, shipping: int,
+                                 safety_days: int, in_transit_qty: int,
+                                 history_lookup) -> dict:
+    """加权模式补货。
+
+    日销 = 0.5×近7日 + 0.3×近14日 + 0.2×近30日（无数据返 0.0 → 回退经典）。
+    补货量 = max(0, (shipping + safety_days) × 日销 - in_transit - stock)，100 取整。
+    状态阈值沿用经典：ratio(=stock/daily) - lead_time <= 0 立刻补货 / <=2 yellow / 否则 green。
+
+    history_lookup：callable(item, region, days) → list[dict]（与 history_db.query_sku_history 兼容）；
+                    返回 [] 或异常均回退经典 + 标注「经典(无历史)」。
+    """
+    name = item.get('name', '')
+    stock = _to_int_safe(item.get('stock', 0))
+    sku_id = item.get('sku_id', '') or ''
+    _it_region = item.get('region') or region
+    fallback = calc_replenishment_classic(item, _it_region, shipping, 1)
+    fallback['model'] = 'classic(no_history)'  # 标注回退
+    try:
+        # SKU 优先；无则用 (region, name) 关联
+        if sku_id:
+            rows = history_lookup(sku_id, _it_region, 30) or []
+        else:
+            rows = history_lookup('', _it_region, 30, name=name) or []
+    except Exception:
+        return fallback
+    if not rows:
+        return fallback
+    daily_w = _weighted_daily(rows)
+    if daily_w <= 0:
+        return fallback
+    # 公式：ratio 与 reorder 与经典一致，qty 用 (shipping + safety) × daily - in_transit - stock
+    ratio = stock / daily_w
+    lead_time = shipping + safety_days
+    reorder = ratio - lead_time
+    if reorder <= 0:
+        status = '立刻补货'
+        color = 'red'
+        qty_raw = (shipping + safety_days) * daily_w - in_transit_qty - stock
+    elif reorder <= 2:
+        status = f'{reorder:.0f}天后下单'
+        color = 'yellow'
+        qty_raw = (shipping + safety_days) * daily_w - in_transit_qty - stock
+    else:
+        status = f'{reorder:.0f}天后下单'
+        color = 'green'
+        qty_raw = 0
+    qty = max(0, int(qty_raw))
+    qty = ((qty + 99) // 100) * 100
+    return {
+        'status': status, 'color': color, 'qty': qty,
+        'ratio': round(ratio, 1),
+        'reorder': reorder,
+        'daily': round(daily_w, 2), 'stock': stock,
+        'model': MODEL_WEIGHTED,
+    }
+
+
+def calc_replenishment(items, region, model, safety_days, in_transit_qty,
+                       shipping_lookup, history_lookup, offset=1) -> list:
+    """t13 P3-A 补货模型入口：分发到 classic 或 weighted。
+
+    shipping_lookup：callable(item, region) → int（运输天数；无则返 1）
+    history_lookup：callable(sku_id, region, days[, name]) → list[dict]（与 query_sku_history 兼容）
+    返回与原 _calc_from_items 同款字段的 plan dict 列表，附加 'model' 字段。
+    任何异常 → 逐商品回退经典公式（绝不中断整批）。
+    """
+    out = []
+    for item in items:
+        try:
+            it_region = item.get('region') or region
+            try:
+                shipping = int(shipping_lookup(item, it_region) or 1)
+            except Exception:
+                shipping = 1
+            if model == MODEL_WEIGHTED:
+                plan = calc_replenishment_weighted(
+                    item, it_region, shipping,
+                    int(safety_days or 0), int(in_transit_qty or 0),
+                    history_lookup,
+                )
+            else:
+                plan = calc_replenishment_classic(item, it_region, shipping, int(offset or 1))
+        except Exception:
+            # 终极兜底：经典公式也炸了也要返一个能用的结构
+            try:
+                plan = calc_replenishment_classic(item, item.get('region') or region, 1, 1)
+            except Exception:
+                plan = {
+                    'status': '计算异常', 'color': 'gray', 'qty': 0,
+                    'ratio': 0.0, 'reorder': 0.0, 'daily': 0, 'stock': 0,
+                    'model': 'classic(error)',
+                }
+        out.append(plan)
+    return out
+
+
 class Config:
     """settings.json 读写（唯一通道 + 模板自愈 + 原子写）。
 
@@ -229,8 +502,15 @@ class Config:
         tpl = Config._load_template()
         if tpl and not _parse_fail:
             merged = Config._merge(tpl, data)
-            # 有补全 → 写回自愈（用户配置缺失字段被补上）
-            if merged != data:
+            # v1.4.8 P1-C：DPAPI 凭据加密迁移（首启静默）。
+            # 仅迁移【原始用户数据】里的明文敏感字段，不动模板默认（模板里都是空串）。
+            # 已加密的（dpapi:v1: 前缀）跳过；meta.dpi_v=1 标记防重复迁移。
+            try:
+                _migrated = Config._migrate_secrets(merged)
+            except Exception:
+                _migrated = False
+            # 有补全（模板字段缺失）或迁移改动 → 写回自愈
+            if merged != data or _migrated:
                 try:
                     Config.save(merged)
                 except Exception:
@@ -241,6 +521,85 @@ class Config:
         Config._load_cache['mtime'] = _mtime
         Config._load_cache['data'] = data
         return _copy.deepcopy(data)
+
+    # ── v1.4.8 P1-C：DPAPI 凭据加密迁移（docs/SOLUTION_tech_t6.md §①）──
+    @staticmethod
+    def _migrate_secrets(data: dict) -> bool:
+        """首启检到 api.providers.*.api_key 或 backend.password 为非空明文→静默加密覆写。
+        写入 meta.dpi_v=1 防重复迁移；已加密的（dpapi:v1: 前缀）跳过。
+        DPAPI 不可用时静默跳过（保留明文——确保 DPAPI 沙盒环境下程序仍可用）。
+
+        返回 True 表示做了迁移，False 表示无需/无法迁移。
+        整个函数 try/except 包裹，绝不抛——Config.load 主链必须能完成。
+        """
+        try:
+            from dpapi_utils import enc as _dpapi_enc, is_encrypted as _is_enc, is_available as _is_avail
+        except Exception:
+            return False
+        if not _is_avail():
+            return False
+        meta = data.get('meta')
+        if not isinstance(meta, dict):
+            meta = {}
+        if meta.get('dpi_v') == 1:
+            return False  # 已迁移过
+
+        changed = False
+        # 1) api.providers.*.api_key
+        try:
+            api = data.get('api')
+            if isinstance(api, dict):
+                provs = api.get('providers')
+                if isinstance(provs, dict):
+                    for pname, pcfg in provs.items():
+                        if not isinstance(pcfg, dict):
+                            continue
+                        k = pcfg.get('api_key')
+                        if isinstance(k, str) and k and not _is_enc(k):
+                            enc_v = _dpapi_enc(k)
+                            if enc_v:
+                                pcfg['api_key'] = enc_v
+                                changed = True
+        except Exception:
+            pass
+        # 2) backend.password
+        try:
+            backend = data.get('backend')
+            if isinstance(backend, dict):
+                p = backend.get('password')
+                if isinstance(p, str) and p and not _is_enc(p):
+                    enc_v = _dpapi_enc(p)
+                    if enc_v:
+                        backend['password'] = enc_v
+                        changed = True
+        except Exception:
+            pass
+
+        if changed:
+            meta['dpi_v'] = 1
+            data['meta'] = meta
+        return changed
+
+    @staticmethod
+    def decrypt_value(value):
+        """UI 读取已加密字段的便捷包装：dpapi 前缀 → 明文；其他 → 原样；
+        解密失败（跨机/损坏）→ 返回 ""（让 UI 提示用户重填，绝不抛阻塞启动）。
+        """
+        if not value:
+            return ""
+        if not isinstance(value, str):
+            return value
+        # 快速前缀判定：避免每个字段都 import dpapi_utils
+        if not value.startswith("dpapi:v1:"):
+            return value
+        try:
+            from dpapi_utils import dec as _dpapi_dec, DPAPIError
+            return _dpapi_dec(value)
+        except DPAPIError:
+            # 凭据失效：返回空串，由 UI 层 messagebox 提示后置空
+            return ""
+        except Exception:
+            return ""
 
     @staticmethod
     def save(data: dict):
@@ -284,6 +643,56 @@ class Config:
         data = Config.load()
         data[key] = value
         Config.save(data)
+
+
+# ── v1.4.8 P1-C-fix：运行时凭据解密（t18）───────────────────────
+# ocr.py / vision.py 在每次 API 调用前从 provider dict 拿 api_key；
+# t9 之后 settings.json 里存的是 dpapi:v1: 密文，裸拿 = 401 全军覆没。
+# 这里提供一个运行时入口：明文直通 + 密文解密 + 失败降级 + 进程内 memo
+# （同一进程反复调用的热点路径，避免每次都走 CryptUnprotectData）。
+_decrypt_memo = {}
+_DECRYPT_MEMO_MAX = 256
+
+
+def decrypt_secret(value):
+    """运行时凭据解密入口（ocr.py / vision.py 调用）：
+    - 空 / None / 非字符串：原样返回（不抛）
+    - 非 dpapi:v1: 前缀：原样返回（明文直通 / 未来 v2/v3 前缀走对应分支）
+    - 解密失败（跨机/损坏）：返回 ""（调用方应按"key 为空"路径处理 — 通常已 raise RuntimeError）
+    - 成功：缓存进 _decrypt_memo（最多 256 项，LRU 不严格 — dict 大小硬上限防泄漏）
+    """
+    if not value:
+        return value if value is None else ""
+    if not isinstance(value, str):
+        return value
+    if not value.startswith("dpapi:v1:"):
+        return value
+    # 命中缓存
+    if value in _decrypt_memo:
+        return _decrypt_memo[value]
+    # 缓存上限保护：满了就清空（最坏情况每次都重解一次，不致命）
+    if len(_decrypt_memo) >= _DECRYPT_MEMO_MAX:
+        try:
+            _decrypt_memo.clear()
+        except Exception:
+            pass
+    try:
+        from dpapi_utils import dec as _dpapi_dec, DPAPIError
+        try:
+            plain = _dpapi_dec(value)
+        except DPAPIError:
+            return ""
+        except Exception:
+            return ""
+    except Exception:
+        # 极早期 import 失败（dpapi_utils 损坏/路径错）：返回空串
+        return ""
+    if plain:
+        try:
+            _decrypt_memo[value] = plain
+        except Exception:
+            pass
+    return plain
 
 
 def get_base_dir() -> str:

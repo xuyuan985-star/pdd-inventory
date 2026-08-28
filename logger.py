@@ -5,11 +5,27 @@ PDD EZ — 日志模块（借鉴 March7thAssistant utils/logger/logger.py）
     from logger import log
     log.info("...")
     log.hr("开始批量识别")
+
+v1.4.8 P1-C：所有 Formatter 落盘前对 api_key / password / Authorization / Bearer 等
+敏感字段脱敏（替换为 ***），防止日志文件被分享/上传时泄露凭据。
+脱敏实现：from utils import _sanitize_for_log（utils.py 是任务允许改的文件之一），
+这里通过延迟 import 避免 logger.py 在启动期就依赖 utils（utils 自身不依赖 logger，
+但保持 logger 独立可移植仍然有价值）。
 """
 import os
 import sys
 import logging
 from datetime import datetime, timedelta
+
+
+def _get_sanitizer():
+    """延迟 import utils._sanitize_for_log——logger.py 顶层不依赖 utils。
+    utils.py 不可用（极早期 import 阶段）时回退到 identity（绝不阻塞日志）。"""
+    try:
+        from utils import _sanitize_for_log
+        return _sanitize_for_log
+    except Exception:
+        return lambda x: x
 
 
 # ── 控制台彩色（Windows 10+ ANSI 支持）──
@@ -26,13 +42,34 @@ class _ColoredFormatter(logging.Formatter):
 
     def format(self, record):
         prefix = self.COLORS.get(record.levelname, '')
+        sanitize = _get_sanitizer()
+        try:
+            record.msg = sanitize(record.msg)
+        except Exception:
+            pass
+        if record.args:
+            try:
+                record.args = tuple(sanitize(a) if isinstance(a, str) else a for a in record.args)
+            except Exception:
+                pass
         msg = super().format(record)
         return f"{prefix}{msg}{self.RESET}"
 
 
 # ── 文件无色 Formatter（日志文件不带 ANSI 转义）──
 class _PlainFormatter(logging.Formatter):
-    pass
+    def format(self, record):
+        sanitize = _get_sanitizer()
+        try:
+            record.msg = sanitize(record.msg)
+        except Exception:
+            pass
+        if record.args:
+            try:
+                record.args = tuple(sanitize(a) if isinstance(a, str) else a for a in record.args)
+            except Exception:
+                pass
+        return super().format(record)
 
 
 class Logger:

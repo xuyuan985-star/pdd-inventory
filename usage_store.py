@@ -735,3 +735,38 @@ def reset_month(month: str = None) -> bool:
         except Exception:
             pass
         return False
+
+
+# ──────────────────────────────────────────────────────────────────
+# t12 P2-C：实时截图识别当日计数（按日期/call_site 双键匹配）
+# 用于免费版每日 50 次门控（enforce=true 时）
+# ──────────────────────────────────────────────────────────────────
+def count_today_live_screenshot() -> int:
+    """统计今天「实时截图」识别次数（call_site 包含 'live' 或 'live_screenshot'）。
+
+    复用 _read_jsonl_lines；只读不写，失败返 0（绝不阻塞 GUI）。
+    用户裁定：enforce=false 默认全免时本函数不被调用，调用方先查 is_pro/enforce。
+    """
+    try:
+        today = datetime.datetime.now().strftime('%Y-%m-%d')
+        n = 0
+        for line in _read_jsonl_lines():
+            try:
+                if not isinstance(line, dict):
+                    continue
+                ts = str(line.get('ts') or '')
+                if not ts.startswith(today):
+                    continue
+                # call_site = 'live_screenshot' / 'live' / 'real_time' 等都算实时截图
+                cs = str(line.get('call_site') or '').lower()
+                extra = line.get('extra') or {}
+                if not isinstance(extra, dict):
+                    extra = {}
+                source = str(extra.get('source') or '').lower()
+                if 'live' in cs or 'screenshot' in cs or 'live' in source or 'screenshot' in source:
+                    n += 1
+            except Exception:
+                continue
+        return n
+    except Exception:
+        return 0
