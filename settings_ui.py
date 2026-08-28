@@ -73,7 +73,8 @@ class SettingsUIMixin:
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
         # ── 定位校准（AI 智能定位，v1.3 起唯一模式）──
-        self._build_calibrate_tab(content)
+        # t27 ⑤：原 _build_calibrate_tab 改名为 _build_calibrate_inline
+        self._build_calibrate_inline(content)
         ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
         # ── 识别列配置模块（浅灰白卡片容器）──
@@ -93,7 +94,7 @@ class SettingsUIMixin:
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(pady=(0,10))
 
         # ── 副模型（双模型验证用，🛡 勾选时生效）──
-        sec_row = tk.Frame(content, bg=self.C_BG); sec_row.pack(pady=(4,2))
+        sec_row = tk.Frame(content, bg=self.C_BG); sec_row.pack(padx=20, pady=4)   # t28 (b-1): 与卡片左缘对齐
         self._lbl(sec_row, text="副模型（双模型验证）:", font=(self.FONT[0], 8),
                  fg=self.C_TEXT).pack(side="left")
         from utils import get_secondary_model, save_secondary_model, get_api_config
@@ -120,7 +121,7 @@ class SettingsUIMixin:
                         _sec_models.append(_v)
         except Exception:
             pass
-        ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=22,
+        ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=20,   # t28 (b-1): 22→20
                      values=_sec_models,
                      font=(self.FONT[0], 8)).pack(side="left", padx=8)
         def _save_sec():
@@ -129,9 +130,9 @@ class SettingsUIMixin:
             self.col_status_var.set(f"副模型已保存：{_v}")
             self.status_text.set(f"副模型已保存：{_v}")
         self._mk_btn(sec_row, '保存', _save_sec, kind='primary',
-                  font=(self.FONT[0], 7)).pack(side="left")
+                  font=(self.FONT[0], 8)).pack(side="left")   # t28 (b-1): 7→8 视觉对齐
         self._lbl(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0,6))
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(padx=20, pady=(0, 8))   # t28 (b-1/a-3): 左缘对齐+8px
 
         # ── 授权管理（t12 P2-C）──
         self._build_license_card(content)
@@ -182,7 +183,7 @@ class SettingsUIMixin:
         self._lbl(sd_row, text="安全库存天数：", font=(self.FONT[0], 9),
                   bg=self.C_BG, fg=self.C_TEXT).pack(side='left', padx=(0, 6))
         _sd_var = tk.IntVar(self.win, value=int(cur.get('safety_days', 2) or 0))
-        tk.Spinbox(sd_row, from_=0, to=30, textvariable=_sd_var, width=6,
+        tk.Spinbox(sd_row, from_=0, to=30, textvariable=_sd_var, width=8,   # t28 (e-2): 6→8
                    font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
                    highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                    bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(side='left')
@@ -278,7 +279,7 @@ class SettingsUIMixin:
         _refresh()
 
         # enforce 开关
-        enf_row = tk.Frame(card, bg=self.C_BG); enf_row.pack(pady=(8, 2), padx=20, fill='x')
+        enf_row = tk.Frame(card, bg=self.C_BG); enf_row.pack(pady=(6, 2), padx=20, fill='x')   # t28 (b-4): (8,2)→(6,2) 紧凑
         _enforce_var = tk.BooleanVar(self.win, value=False)
         def _on_enforce_toggle():
             try:
@@ -323,7 +324,7 @@ class SettingsUIMixin:
             _key_var.set((_cur2.get("license") or {}).get("key", "") or "")
         except Exception:
             pass
-        _key_entry = tk.Entry(in_row, textvariable=_key_var, font=self.FONT, width=60,
+        _key_entry = tk.Entry(in_row, textvariable=_key_var, font=self.FONT, width=48,   # t28 (b-4): 60→48 留位按钮
                               relief='flat', bd=0, highlightthickness=1,
                               highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                               bg="#FFFFFF", fg=self.C_TEXT, insertbackground=self.C_TEXT)
@@ -767,8 +768,12 @@ class SettingsUIMixin:
                 except:
                     pass
 
-    def _build_calibrate_tab(self, parent, dlg=None):
-        """校准页：AI 智能视觉定位（v1.4 起唯一模式，绝对坐标已移除）"""
+    def _build_calibrate_inline(self, parent):
+        """t27 实施包 A (⑤)：原 _build_calibrate_tab 改名为 _build_calibrate_inline。
+        原因：grep 显示零外部引用（仅 _build_general_page L76 调用），
+        命名 "tab" 误导（实际是 _build_general_page 内的 section，不是独立 nav page）。
+        保留为私有 method 而非 inline 函数体，因为函数体 200+ 行，inline 改动太大。
+        """
         import json, time as _time
         from datetime import datetime
 
@@ -971,16 +976,16 @@ class SettingsUIMixin:
         config = self._get_backend_config()
 
         url_frame = tk.Frame(parent, bg=self.C_BG)
-        url_frame.pack(fill="x", padx=20, pady=(15,5))
-        self._lbl(url_frame, text="后台地址:", font=self.FONT, width=10, anchor="e").pack(side="left")
+        url_frame.pack(fill="x", padx=20, pady=(14, 4))   # t28 (b-2): (15,5)→(14,4) 与其它页标题距对齐
+        self._lbl(url_frame, text="后台地址:", font=self.FONT, width=9, anchor="e").pack(side="left")   # t28 (b-2): 10→9
         url_var = tk.StringVar(self.win, value=config.get('url', 'https://mms.pinduoduo.com/'))
         tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40, bg=self.C_BG,
                  fg=self.C_TEXT, relief='flat', bd=0, highlightthickness=1,
                  highlightbackground="#EAEAEA").pack(side="left", padx=5)
 
         acc_frame = tk.Frame(parent, bg=self.C_BG)
-        acc_frame.pack(fill="x", padx=20, pady=5)
-        self._lbl(acc_frame, text="登录账号:", font=self.FONT, width=10, anchor="e").pack(side="left")
+        acc_frame.pack(fill="x", padx=20, pady=6)   # t28 (b-2): 5→6
+        self._lbl(acc_frame, text="登录账号:", font=self.FONT, width=9, anchor="e").pack(side="left")   # t28 (b-2): 10→9
         acc_var = tk.StringVar(self.win, value=config.get('account', ''))
         acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED, bg=self.C_BG)
         acc_entry.pack(side="left", padx=5)
@@ -1004,8 +1009,8 @@ class SettingsUIMixin:
         _ph_entry(acc_entry, '输入手机号', acc_var)
 
         pwd_frame = tk.Frame(parent, bg=self.C_BG)
-        pwd_frame.pack(fill="x", padx=20, pady=5)
-        self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=10, anchor="e").pack(side="left")
+        pwd_frame.pack(fill="x", padx=20, pady=6)   # t28 (b-2): 5→6
+        self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=9, anchor="e").pack(side="left")   # t28 (b-2): 10→9
         # v1.4.8 P1-A：默认不保存密码——初始值永远不读已存密码（即便 config 里还有 legacy 值）
         # 仅当用户主动勾选「记住密码」且点保存时才落盘。已存密码提示用户可手动清除。
         pwd_var = tk.StringVar(self.win, value='')  # 永远从空开始，不预填
@@ -1086,13 +1091,16 @@ class SettingsUIMixin:
             'glm':     {'name': '智谱清言（GLM）',   'endpoint': 'https://open.bigmodel.cn/api/paas/v4/chat/completions'},
         }
 
-        self._lbl(parent, text="API 提供商管理", font=self.FONT_TITLE, bg=self.C_BG, fg=self.C_TEXT).pack(pady=(18,2))
+        # t27 实施包 A (③)：page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
+        self._lbl(parent, text="API 提供商管理", font=self.FONT_HEADING, bg=self.C_BG, fg=self.C_TEXT).pack(
+            padx=20, pady=(14, 2))   # t28 (b-3): 左缘对齐卡片
         self._lbl(parent, text="每个提供商独立配置 Key 和模型名，数据仅保存在本机",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack()
+                 font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
+            padx=20, pady=(0, 4))   # t28 (b-3): 左缘对齐
 
         # 活跃提供商选择（机能单选：选中圆点填充亮黄）
         active_frame = tk.Frame(parent, bg=self.C_BG)
-        active_frame.pack(fill="x", padx=24, pady=(14,6))
+        active_frame.pack(fill="x", padx=20, pady=(8, 4))   # t28 (b-3): padx=24→20, pady=(14,6)→(8,4)
         self._lbl(active_frame, text="当前使用:", font=self.FONT_BOLD, bg=self.C_BG, fg=self.C_TEXT).pack(side="left", padx=(0,8))
         active_var = tk.StringVar(self.win, value=active)
         for key, info in PRESET_PROVIDERS.items():
@@ -1100,7 +1108,7 @@ class SettingsUIMixin:
                           value=key, font=self.FONT, bg=self.C_BG, fg=self.C_TEXT,
                           selectcolor=self.C_ACCENT, activebackground=self.C_BG,
                           bd=0, relief='flat', highlightthickness=0,
-                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=12)
+                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=(12, 0))   # t28 (b-3): padx=12→(12,0) 与左缘对齐
 
         # 三张提供商卡片（浅灰机能卡片 + 细黑切角边框，带滚轮）
         canvas = tk.Canvas(parent, highlightthickness=0, bg=self.C_BG)
@@ -1134,13 +1142,14 @@ class SettingsUIMixin:
             # 浅灰机能卡片（细黑边框 + 内边距）
             card = tk.Frame(cards_frame, bg=self.C_BG, highlightthickness=1,
                             highlightbackground="#EAEAEA", bd=0)
-            card.pack(fill="x", padx=4, pady=8)
+            card.pack(fill="x", padx=8, pady=8)   # t28 (b-3): padx=4→8 卡片间 8px
             self._lbl(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
-                     bg=self.C_BG, fg=self.C_TEXT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))
+                     bg=self.C_BG, fg=self.C_TEXT, anchor="w").pack(
+                fill="x", padx=16, pady=(8, 2))   # t28 (b-3): padx=12→16
 
             # API Key 行
             kf = tk.Frame(card, bg=self.C_BG)
-            kf.pack(fill="x", padx=12, pady=4)
+            kf.pack(fill="x", padx=16, pady=6)   # t28 (b-3): padx=12→16, pady=4→6
             self._lbl(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             # v1.4.8 P1-C：若存的是 dpapi:v1: 密文，解密后填入；解密失败（跨机/损坏）
@@ -1182,7 +1191,7 @@ class SettingsUIMixin:
                 history.insert(0, cfg['model'])
 
             mf = tk.Frame(card, bg=self.C_BG)
-            mf.pack(fill="x", padx=12, pady=4)
+            mf.pack(fill="x", padx=16, pady=6)   # t28 (b-3)
             self._lbl(mf, text="模型名称:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             mv = tk.StringVar(self.win, value=cfg.get('model', ''))
@@ -1194,7 +1203,7 @@ class SettingsUIMixin:
 
             # Endpoint 行（预填，可改，完全由用户控制）
             ef = tk.Frame(card, bg=self.C_BG)
-            ef.pack(fill="x", padx=12, pady=4)
+            ef.pack(fill="x", padx=16, pady=6)   # t28 (b-3)
             self._lbl(ef, text="Endpoint:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             ev = tk.StringVar(self.win, value=cfg.get('endpoint', info['endpoint']))
@@ -1204,7 +1213,7 @@ class SettingsUIMixin:
             # 豆包专属：自定义推理接入点（可选）
             if key == 'doubao':
                 cef = tk.Frame(card, bg=self.C_BG)
-                cef.pack(fill="x", padx=12, pady=4)
+                cef.pack(fill="x", padx=16, pady=6)   # t28 (b-3)
                 self._lbl(cef, text="推理接入点:", font=self.FONT, width=9, anchor="e",
                          bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
                 cev = tk.StringVar(self.win, value=cfg.get('custom_endpoint', ''))

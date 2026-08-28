@@ -917,15 +917,19 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                        pack_side="right", padx=5)
         
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
+        # t27 实施包 A (①)：导航默认展开——main_paned 初始即 add(nav_frame, before=content_frame)。
+        # 修 P-A1 严重问题（新用户根本看不到 8 项功能）；_toggle_nav 保留提供折叠入口。
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
         self.main_paned.pack(fill="both", expand=True, padx=15, pady=(2, 15))
         # 左侧导航栏
-        self.nav_frame = tk.Frame(self.main_paned, width=170, bg=self.C_BG)
+        self.nav_frame = tk.Frame(self.main_paned, width=176, bg=self.C_BG)
         self.nav_frame._skip_theme = True  # 导航栏保持 C_SURFACE 区分色，主题切换不覆盖
         self.nav_frame.pack_propagate(False)
         self.nav_buttons = {}
         # 右侧内容
         self.content_frame = tk.Frame(self.main_paned)
+        # t27 ①：默认 add nav_frame（before=content_frame，stretch="never" 固定宽度 176）
+        self.main_paned.add(self.nav_frame, minsize=176, stretch="never")
         self.main_paned.add(self.content_frame, stretch="always")
         # 页面帧
         self.page_home = tk.Frame(self.content_frame, bg=self.C_BG)
@@ -982,8 +986,11 @@ class App(SettingsUIMixin, StatsPagesMixin):
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=(0, 4))
         
         # ── 导出按钮 + 单条合并状态行（导出正下方，不拆分）──
+        # t27 实施包 A (④)：导出 Excel 按钮降权——13pt bold 16w×2h 视觉权重
+        # 超过数据入口（9pt bold），违反动线。改为与次级按钮一致（9pt bold 常规
+        # 尺寸），kind/command 不动。
         self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
-                  kind='primary', font=(self.FONT[0], 13, 'bold'), width=16, height=2,
+                  kind='primary', font=(self.FONT[0], 9, 'bold'),
                   pack_side=None)
         self.export_btn.pack(pady=(12, 4))
         tk.Label(self.page_home, textvariable=self.status_text,
@@ -1117,31 +1124,53 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 self._build_nav()
 
     def _build_nav(self):
-        items = [
-            ("🏠 首页", self.page_home),
-            ("⚙ 通用", self.page_general),
-            ("📦 商品", self.page_products),
-            ("📈 历史趋势", self.page_history),
-            ("💰 用量明细", self.page_usage),
-            ("🔑 API", self.page_api),
-            ("🎨 主题", self.page_theme),
-            ("🔗 后台", self.page_backend),
+        # t27 实施包 A (②)：8 项分 3 组——【工作区】【数据】【设置】
+        # 组标 = self._lbl 8pt C_MUTED（pady=(10,2) 组前/ (0,4) 组后）
+        # 组间 1px C_BORDER 分隔 Frame（fill x）
+        # nav 按钮 padx=14 pady=7（保留语义化比旧 padx=12 略宽对齐 176px 宽）
+        groups = [
+            ('工作区', [
+                ("🏠 首页", self.page_home),
+                ("📦 商品", self.page_products),
+            ]),
+            ('数据', [
+                ("📈 历史趋势", self.page_history),
+                ("💰 用量明细", self.page_usage),
+            ]),
+            ('设置', [
+                ("⚙ 通用", self.page_general),
+                ("🔑 API", self.page_api),
+                ("🎨 主题", self.page_theme),
+                ("🔗 后台", self.page_backend),
+            ]),
         ]
-        for text, page in items:
-            _nf = tk.Frame(self.nav_frame, bg=self.C_BG, bd=0, highlightthickness=0)
-            _nf._skip_theme = True
-            _ni = tk.Frame(_nf, bg=self.C_BG, bd=0, highlightthickness=0)
-            _ni._skip_theme = True
-            _ni.pack(side="left", padx=(0, 0), pady=0, fill="x", expand=True)
-            btn = tk.Button(_ni, text=text, relief="flat",
-                           font=(self.FONT[0], 9), anchor="w", padx=12, pady=6,
-                           bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_SURFACE,
-                           bd=0, command=lambda p=page: self._show_page(p))
-            btn._page = page
-            btn._nf = _nf
-            btn.pack(fill="x")
-            _nf.pack(fill="x")
-            self.nav_buttons[text] = btn
+        first = True
+        for group_name, items in groups:
+            if not first:
+                # t27 ②：组间 1px C_BORDER 分隔
+                _sep = tk.Frame(self.nav_frame, bg=self.C_BORDER, height=1)
+                _sep._skip_theme = True
+                _sep.pack(fill="x", padx=10, pady=6)
+            first = False
+            # t27 ②：组标（8pt C_MUTED）
+            self._lbl(self.nav_frame, text=group_name, font=(self.FONT[0], 8),
+                      bg=self.C_BG, fg=self.C_MUTED).pack(anchor='w', padx=14, pady=(10, 2))
+            for text, page in items:
+                _nf = tk.Frame(self.nav_frame, bg=self.C_BG, bd=0, highlightthickness=0)
+                _nf._skip_theme = True
+                _ni = tk.Frame(_nf, bg=self.C_BG, bd=0, highlightthickness=0)
+                _ni._skip_theme = True
+                _ni.pack(side="left", padx=(0, 0), pady=0, fill="x", expand=True)
+                # t27 ②：nav 按钮 padx=14 pady=7
+                btn = tk.Button(_ni, text=text, relief="flat",
+                               font=(self.FONT[0], 9), anchor="w", padx=14, pady=7,
+                               bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_SURFACE,
+                               bd=0, command=lambda p=page: self._show_page(p))
+                btn._page = page
+                btn._nf = _nf
+                btn.pack(fill="x")
+                _nf.pack(fill="x")
+                self.nav_buttons[text] = btn
         self._highlight_nav(self.page_home)
 
     def _highlight_nav(self, page):

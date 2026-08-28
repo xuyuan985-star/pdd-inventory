@@ -3495,5 +3495,365 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertNotIn('_auth_get_tier(', src)
 
 
+class TestNavGrouping(unittest.TestCase):
+    """t27 实施包 A：导航默认展开 + 三组分组 + 标题统一 + 导出降权 + 死代码清理。
+
+    用户裁定：t25 IA 审计 → t27 实施 4 项定稿（提案 1+2+5+4+6）。
+    约束：零新配色/字体/token；首页双入口布局不动；业务逻辑零变化。
+    """
+
+    def test_nav_default_expanded_in_build_ui(self):
+        """t27 ①：gui.py _build_ui 初始即 add(nav_frame, before=content_frame)。
+
+        修 P-A1（新用户看不到 8 项功能）——main_paned 不能再只 add content_frame。
+        """
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._build_ui)
+        # 必须存在 main_paned.add(self.nav_frame, ...) 在 _build_ui 内
+        self.assertIn('self.main_paned.add(self.nav_frame', src)
+        # 必须在 add(content_frame) 之前
+        nav_add_pos = src.find('self.main_paned.add(self.nav_frame')
+        content_add_pos = src.find('self.main_paned.add(self.content_frame')
+        self.assertGreater(nav_add_pos, 0)
+        self.assertGreater(content_add_pos, 0)
+        self.assertLess(nav_add_pos, content_add_pos)
+        # 宽度统一 176
+        self.assertIn('width=176', src)
+        # _toggle_nav 仍保留（提供折叠入口给熟练用户）
+        self.assertTrue(hasattr(gui.App, '_toggle_nav'))
+
+    def test_nav_three_group_layout(self):
+        """t27 ②：_build_nav 必须按【工作区】【数据】【设置】三组布局。
+
+        修 P-A2（8 项平铺无分组，命名不一致）。
+        """
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._build_nav)
+        # 必须有 groups 列表 + 3 个组名
+        self.assertIn('工作区', src)
+        self.assertIn('数据', src)
+        self.assertIn('设置', src)
+        # 组标必须用 _lbl + 8pt C_MUTED
+        self.assertIn("font=(self.FONT[0], 8)", src)
+        self.assertIn("fg=self.C_MUTED", src)
+        # 组间分隔 Frame 用 C_BORDER
+        self.assertIn('C_BORDER', src)
+        # nav 按钮 padx=14 pady=7
+        self.assertIn('padx=14, pady=7', src)
+
+    def test_page_titles_unified_to_font_heading(self):
+        """t27 ③：所有 page 顶部标题统一 FONT_HEADING + 无 emoji（emoji 在导航）。
+
+        修 P-A4（page 标题字体/pady/emoji 不统一）。
+        """
+        import settings_ui
+        import stats_ui
+        import inspect
+        # 4 个 settings_ui page 标题：商品/主题/校准/后台
+        for name in ('_build_product_region_tab', '_build_skin_tab',
+                     '_build_calibrate_inline', '_build_backend_tab'):
+            method = getattr(settings_ui.SettingsUIMixin, name, None)
+            self.assertIsNotNone(method, f'{name} must exist')
+            src = inspect.getsource(method)
+            self.assertIn('font=self.FONT_HEADING', src)
+        # settings_ui._build_api_page 标题改 FONT_HEADING
+        api_src = inspect.getsource(settings_ui.SettingsUIMixin._build_api_page)
+        self.assertIn('font=self.FONT_HEADING', api_src)
+        self.assertNotIn('font=self.FONT_TITLE', api_src)
+        # 2 个 stats_ui page 标题改 FONT_HEADING + 去 emoji
+        # 注意：仅检查顶部 _lbl 的 text 字段（page title），docstring 里的 emoji 不算
+        hist_src = inspect.getsource(stats_ui.StatsPagesMixin._build_history_page)
+        self.assertIn('font=self.FONT_HEADING', hist_src)
+        self.assertNotIn('font=self.FONT_TITLE', hist_src)
+        # 顶部标题 _lbl 文本不含 emoji（docstring 可保留）
+        import re as _re
+        hist_title_match = _re.search(r'self\._lbl\(page,\s*text="([^"]+)"', hist_src)
+        self.assertIsNotNone(hist_title_match)
+        self.assertNotIn('📈', hist_title_match.group(1))
+        self.assertNotIn('💰', hist_title_match.group(1))
+        usage_src = inspect.getsource(stats_ui.StatsPagesMixin._build_usage_page)
+        self.assertIn('font=self.FONT_HEADING', usage_src)
+        self.assertNotIn('font=self.FONT_TITLE', usage_src)
+        usage_title_match = _re.search(r'self\._lbl\(page,\s*text="([^"]+)"', usage_src)
+        self.assertIsNotNone(usage_title_match)
+        self.assertNotIn('💰', usage_title_match.group(1))
+
+    def test_export_btn_demoted_weight(self):
+        """t27 ④：「导出 Excel」13pt bold 16w×2h 降为 9pt bold 常规。
+
+        修 P-A3（结果动作视觉权重超过数据入口）。
+        """
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._build_ui)
+        # 必须不再用 13, bold + width=16, height=2
+        self.assertNotIn("font=(self.FONT[0], 13, 'bold')", src)
+        self.assertNotIn('width=16, height=2', src)
+        # 必须用 9pt bold（与 btn_row 一致）
+        self.assertIn("font=(self.FONT[0], 9, 'bold')", src)
+        # 仍 kind='primary' 保持视觉重要
+        # kind='primary' 在 _mk_btn 调用中保留
+        self.assertIn("kind='primary'", src)
+        # command 仍指向 self._export
+        self.assertIn('self._export', src)
+
+    def test_calibrate_tab_dead_code_removed(self):
+        """t27 ⑤：_build_calibrate_tab 改名为 _build_calibrate_inline（零外部引用）。"""
+        import settings_ui
+        import inspect
+        # 必须有 _build_calibrate_inline
+        self.assertTrue(hasattr(settings_ui.SettingsUIMixin, '_build_calibrate_inline'))
+        # 必须没有 _build_calibrate_tab（已重命名）
+        self.assertFalse(hasattr(settings_ui.SettingsUIMixin, '_build_calibrate_tab'))
+        # gui.py 0 命中 _build_calibrate_tab（死代码确实死）
+        import gui
+        gui_src = inspect.getsource(gui)
+        self.assertNotIn('_build_calibrate_tab', gui_src)
+
+    def test_no_new_color_font_token_added(self):
+        """t27 约束：零新配色/字体/token。"""
+        import gui
+        import settings_ui
+        import stats_ui
+        # 不能引入新的 hex 颜色 / 字体字号
+        for src in (inspect.getsource(gui), inspect.getsource(settings_ui), inspect.getsource(stats_ui)):
+            # 不应有 #FFFFFF / #000000 等明确的新色（仅允许已有 C_BG/C_TEXT/C_MUTED/C_BORDER/C_PRIMARY 等 token）
+            # 这里只检查没有 C_FOO_BAR / FONT_BAR_BAZ 这种新命名
+            import re
+            # 不应有 C_XXX 形式的新常量（除已存在的 C_BG/C_TEXT/C_MUTED/C_BORDER/C_SURFACE/C_PRIMARY/C_ACCENT/C_CARD_HDR/C_RED_BG/C_YELLOW_BG）
+            new_c = re.findall(r'self\.C_[A-Z_]+', src)
+            allowed_c = {'C_BG', 'C_TEXT', 'C_MUTED', 'C_BORDER', 'C_SURFACE',
+                         'C_PRIMARY', 'C_SECONDARY', 'C_ACCENT', 'C_CARD_HDR',
+                         'C_RED_BG', 'C_YELLOW_BG'}
+            # 去掉 self. 前缀再比较
+            new_c_stripped = {c.replace('self.', '') for c in new_c}
+            unexpected = new_c_stripped - allowed_c
+            self.assertEqual(unexpected, set(),
+                             f'意外的新 C_ token: {unexpected}')
+
+    def test_home_dual_entry_layout_intact(self):
+        """t27 约束：首页 primary_row / btn_row 双入口几何不动。"""
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._build_ui)
+        # primary_row 实时截图 + 导入表格 仍 dark bold
+        self.assertIn("实时截图", src)
+        self.assertIn("self._live_screenshot", src)
+        self.assertIn("📥 导入表格", src)
+        self.assertIn("self._import_table", src)
+        # kind='dark' 两次（左右主入口）
+        dark_count = src.count("kind='dark'")
+        self.assertGreaterEqual(dark_count, 3)  # 实时截图 + 导入 + 至少 1 个 btn_row
+
+
+# ══════════════════════════════════════════════════════════════════
+# t28 GMI-3：UI 实施包 B · 历史页空态行为 + 版式参数源码断言
+# ══════════════════════════════════════════════════════════════════
+
+class TestHistoryEmptyState(unittest.TestCase):
+    """t28 (④高价值)：history_db.query_daily 返回 [] 时，_history_page_refresh
+    不抛、Treeview 插入占位提示行、summary label 切到「暂无历史数据」引导语。
+    设计：源码级 mock 模式（不实际起 Tk 窗口），用最小组件模拟 self._hist_page / self._hist_tree / self._hist_summary_label，
+    直接调用 monkeypatch 后的 _history_page_refresh。"""
+
+    def setUp(self):
+        # 加载 stats_ui 模块（独立模块对象，避免污染导入缓存）
+        spec = importlib.util.spec_from_file_location(
+            'pdd_stats_ui_t28', os.path.join(HERE, 'stats_ui.py'))
+        self.sui = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.sui)
+
+    def test_empty_rows_inserts_placeholder_and_summary(self):
+        """rows=[] → Treeview 插占位提示行 + summary label 切到引导语 + 不抛异常。"""
+        from unittest.mock import MagicMock, patch
+
+        # monkeypatch stats_ui.history_db.query_daily 返 []（空态）、query_regions 返 []
+        with patch.object(self.sui.history_db, 'query_daily', return_value=[]), \
+             patch.object(self.sui.history_db, 'query_regions', return_value=[]):
+            # 构造最小组件替身
+            page = MagicMock()
+            tree = MagicMock()
+            summary_lbl = MagicMock()
+            reg_var = MagicMock(); reg_var.get.return_value = '全部'  # StringVar 替身
+            reg_combo = MagicMock()                                  # dict-style ['values'] = ...
+            days_var = MagicMock(); days_var.get.return_value = '90'  # StringVar 替身
+
+            # 构造轻量 StatsPagesMixin 替身（只挂必要属性 + _history_page_refresh 方法）
+            class _Stub:
+                pass
+            stub = _Stub()
+            stub._hist_page = page
+            stub._hist_tree = tree
+            stub._hist_summary_label = summary_lbl
+            stub._hist_reg_var = reg_var
+            stub._hist_reg_combo = reg_combo
+            stub._hist_days_var = days_var
+            stub._current_page = page   # 守门条件满足（否则 _history_page_refresh 直接 return）
+            # 把方法 bind 到 stub
+            stub._history_page_refresh = self.sui.StatsPagesMixin._history_page_refresh.__get__(stub, _Stub)
+            # _lbl 静态方法（gui.py 类属性）需要正确解析——直接 patch 类方法
+            stub._lbl = lambda *a, **kw: MagicMock()
+            stub._hist_busy = False
+            # 业务逻辑：调用 refresh，应不抛
+            try:
+                stub._history_page_refresh()
+            except Exception as e:
+                self.fail(f'_history_page_refresh 抛异常：{e!r}')
+
+            # 断言 1：Treeview 收到 1 次 insert（占位提示行），values 含「暂无数据」
+            self.assertEqual(tree.insert.call_count, 1)
+            # tree.insert('', 'end', values=('--', '暂无数据', '--', '--', '--'))
+            vals = tree.insert.call_args.kwargs['values']
+            self.assertEqual(vals, ('--', '暂无数据', '--', '--', '--'),
+                             f'空态占位行 values 不符：{vals!r}')
+
+            # 断言 2：summary label 切到「暂无历史数据」引导语
+            self.assertEqual(summary_lbl.config.call_count, 1)
+            kwargs = summary_lbl.config.call_args.kwargs
+            self.assertIn('暂无历史数据', kwargs.get('text', ''),
+                          f'summary label 文本不含引导语：{kwargs.get("text", "")!r}')
+
+            # 断言 3：守门后 _hist_busy 被释放（finally 块执行）
+            self.assertFalse(stub._hist_busy, '_hist_busy 未在 finally 释放')
+
+    def test_non_empty_rows_no_placeholder(self):
+        """rows=[{'day':'2026-08-28',...}] → Treeview 收到业务行、无占位行、summary 显示「共 N 条」。"""
+        from unittest.mock import MagicMock, patch
+        sample = [{'day': '2026-08-28', 'region': '全部', 'items': 5, 'alerts': 1, 'stock_total': 100}]
+
+        with patch.object(self.sui.history_db, 'query_daily', return_value=sample), \
+             patch.object(self.sui.history_db, 'query_regions', return_value=[]):
+            page = MagicMock()
+            tree = MagicMock()
+            summary_lbl = MagicMock()
+            reg_var = MagicMock(); reg_var.get.return_value = '全部'
+            reg_combo = MagicMock()
+            days_var = MagicMock(); days_var.get.return_value = '90'
+
+            class _Stub:
+                pass
+            stub = _Stub()
+            stub._hist_page = page
+            stub._hist_tree = tree
+            stub._hist_summary_label = summary_lbl
+            stub._hist_reg_var = reg_var
+            stub._hist_reg_combo = reg_combo
+            stub._hist_days_var = days_var
+            stub._current_page = page
+            stub._history_page_refresh = self.sui.StatsPagesMixin._history_page_refresh.__get__(stub, _Stub)
+            stub._lbl = lambda *a, **kw: MagicMock()
+            stub._hist_busy = False
+
+            stub._history_page_refresh()
+
+            # 业务行 1 条 + 无占位
+            self.assertEqual(tree.insert.call_count, 1)
+            vals = tree.insert.call_args.kwargs['values']
+            self.assertEqual(vals, ('2026-08-28', '全部', 5, 1, 100))
+            # summary 是「共 1 条按日汇总（双击行看当日明细）」
+            kwargs = summary_lbl.config.call_args.kwargs
+            self.assertIn('共 1 条', kwargs.get('text', ''))
+
+
+class TestLayoutParamsSourceAssert(unittest.TestCase):
+    """t28 (③版式参数)：源码断言抽查——settings_ui.py / stats_ui.py 关键 padx/pady
+    与 width 已按 t26 提案落位（防止后续被改回 14/15/5/6/22/60）。"""
+
+    def _src(self, name):
+        with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_stats_ui_padx_aligned_to_16(self):
+        """stats_ui.py：用量页 8 个区域 padx 14→16（topbar / mid / cv / 说明 / 价格表标题 / ptree / 双击说明 / pbtns）。
+
+        8 处 padx=14→16 的修改都是带 # t28 (a-5) 注释的形式；源代码里的 padx=14 已被
+        padx=16 替换并加注释。断言：源码里没有任何【未带 t28 注释的】padx=14 残留。
+        """
+        import re
+        src = self._src('stats_ui.py')
+        # 匹配所有 padx=14 出现位置
+        hits = [(i, src[max(0, i-30):i+50]) for i in range(len(src)) if src[i:i+8] == 'padx=14']
+        # 过滤掉被 t28 注释括起来的（注释里写"padx=14→16"是文档化变更）
+        real_residue = []
+        for pos, ctx in hits:
+            # 检查是否在 t28 注释范围内（前 80 字符含 "# t28"）
+            line_start = src.rfind('\n', 0, pos) + 1
+            line_prefix = src[line_start:pos]
+            if '# t28' not in line_prefix:
+                real_residue.append(ctx)
+        self.assertEqual(real_residue, [],
+                         f'stats_ui.py 仍有 {len(real_residue)} 处 padx=14 真正残留（不在 t28 注释内）：{real_residue}')
+
+    def test_stats_ui_history_hint_has_padx(self):
+        """stats_ui.py：历史页 hint label 加了 padx=(0, 4) 离左缘 4px（t26 c-3）。"""
+        src = self._src('stats_ui.py')
+        # 提示行：双击行看当日明细；明细行双击看单商品库存趋势折线
+        self.assertIn('padx=(0, 4)', src, '历史页 hint label 未加 padx=(0, 4)')
+
+    def test_stats_ui_days_combo_width_6(self):
+        """stats_ui.py：days_combo width 5→6（容纳 3 位数字"180"）。"""
+        src = self._src('stats_ui.py')
+        self.assertIn("values=['30', '90', '180'], width=6", src,
+                      'days_combo width 未从 5 改 6')
+
+    def test_stats_ui_empty_state_strings_present(self):
+        """stats_ui.py：空态文案「暂无历史数据」+ 占位 row「暂无数据」必须存在。"""
+        src = self._src('stats_ui.py')
+        self.assertIn('暂无历史数据 — 识别或导入后会在此处出现', src,
+                      '空态引导语缺失')
+        self.assertIn("'暂无数据'", src, '空态占位行 row 缺失')
+
+    def test_settings_ui_secondary_row_aligned(self):
+        """settings_ui.py：副模型行 sec_row pack 加 padx=20、Combobox width=20、保存按钮 font 7→8。"""
+        src = self._src('settings_ui.py')
+        self.assertIn("sec_row.pack(padx=20, pady=4)", src, '副模型行未加 padx=20')
+        self.assertIn("textvariable=sec_var, state='normal', width=20,", src,
+                      '副模型 Combobox width 未从 22 改 20')
+        self.assertIn("font=(self.FONT[0], 8)).pack(side=\"left\")", src,
+                      '副模型保存按钮 font 未从 7 改 8')
+
+    def test_settings_ui_safety_days_spinbox_width_8(self):
+        """settings_ui.py：补货卡 safety_days Spinbox width 6→8（与 in_transit_qty 对齐）。"""
+        src = self._src('settings_ui.py')
+        # 找到 safety_days 的 Spinbox 调用
+        import re
+        m = re.search(r"Spinbox\(sd_row, from_=0, to=30, textvariable=_sd_var, width=(\d+),", src)
+        self.assertIsNotNone(m, 'safety_days Spinbox 调用未找到')
+        self.assertEqual(m.group(1), '8', f'safety_days Spinbox width 仍为 {m.group(1)}（应改 8）')
+
+    def test_settings_ui_backend_label_width_9(self):
+        """settings_ui.py：后台三行 label width 10→9。"""
+        src = self._src('settings_ui.py')
+        import re
+        # 三处 label 宽度必须都是 9
+        for keyword in ('后台地址', '登录账号', '登录密码'):
+            m = re.search(rf"text=\"{keyword}:\", font=self.FONT, width=(\d+),", src)
+            self.assertIsNotNone(m, f'{keyword} label 未找到')
+            self.assertEqual(m.group(1), '9', f'{keyword} label width 仍为 {m.group(1)}（应改 9）')
+
+    def test_settings_ui_api_cards_aligned_padx_16(self):
+        """settings_ui.py：API 页 4 行 (kf/mf/ef/cef) padx 12→16；卡片 padx 4→8。"""
+        src = self._src('settings_ui.py')
+        # kf/mf/ef/cef 四行 padx=12 应 0 残留（API 卡片范围内）
+        # 但 settings_ui 别处可能有 padx=12，所以限定范围：搜 card = ... 之后到 PRESET_PROVIDERS 之前的 padx=12
+        import re
+        # 简化：直接断言 kf/mf/ef/cef 行 4 行的 padx=16 都存在
+        for kw in ('kf.pack(fill="x", padx=16', 'mf.pack(fill="x", padx=16',
+                   'ef.pack(fill="x", padx=16', 'cef.pack(fill="x", padx=16'):
+            self.assertIn(kw, src, f'API 卡 {kw.split(".")[0]} 行 padx 未改 16')
+
+    def test_settings_ui_license_enf_row_compact(self):
+        """settings_ui.py：授权卡 enf_row pady (8,2)→(6,2) 紧凑；Entry width 60→48 留位按钮。"""
+        src = self._src('settings_ui.py')
+        self.assertIn("enf_row.pack(pady=(6, 2), padx=20, fill='x')", src,
+                      'enf_row pady 未改 (6,2)')
+        import re
+        m = re.search(r"Entry\(in_row, textvariable=_key_var, font=self.FONT, width=(\d+),", src)
+        self.assertIsNotNone(m, 'license Entry 未找到')
+        self.assertEqual(m.group(1), '48', f'license Entry width 仍为 {m.group(1)}（应改 48）')
+
+
 if __name__ == '__main__':
     unittest.main()
