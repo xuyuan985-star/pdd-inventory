@@ -8,7 +8,15 @@ from datetime import datetime
 
 from utils import get_base_dir, get_api_config, VERSION, version_newer
 from settings_ui import SettingsUIMixin
+from stats_ui import StatsPagesMixin
 from logger import log
+
+# v1.4.7 WS-A：本地历史库（识别数据累积/趋势查询）。
+# 守护式导入：增量包缺文件等极端场景历史功能整体降级停用，主程序不受影响。
+try:
+    import history_db
+except Exception:
+    history_db = None
 
 # ── 抢先设置 DPI 感知，防止 pyautogui 截图后窗口缩放 ──
 if sys.platform == 'win32':
@@ -205,7 +213,7 @@ class _CanvasBtn:
         self._apply()
 
 
-class App(SettingsUIMixin):
+class App(SettingsUIMixin, StatsPagesMixin):
     # Design system — New Minimalism / Flat Design
     C_PRIMARY = '#111111'      # 近黑（主标题/文字）
     C_SECONDARY = '#333333'    # 深灰（次级文字）
@@ -393,6 +401,23 @@ class App(SettingsUIMixin):
         self._check_update()  # 后台检查更新
         self._check_announcement()  # 后台检查公告（v1.4 新增，借鉴 March7th）
         self._check_secondary_config()  # v1.4.2：启动校验副模型配置（双模型失效提前提示）
+        # v1.4.7 WS-A：启动按保留策略清理历史库（双阈值；低于阈值为廉价 no-op；失败仅日志）
+        try:
+            if history_db is not None:
+                from utils import get_history_cfg
+                _h = get_history_cfg()
+                history_db.prune(retention_days=_h.get('retention_days', 180),
+                                 max_rows=_h.get('max_rows', 200000))
+        except Exception:
+            pass
+        # v1.4.7 WS-A：首次启用一次性隐私提示（识别数据仅本机持久化用于趋势展示，不上传）
+        self._history_privacy_hint()
+        # v1.4.7 WS-C：费用 Label 首刷 + 每分钟轮询（worker 线程不碰 Tk，刷新全走主线程 after）
+        self._refresh_cost_label()
+        try:
+            self.win.after(60000, self._poll_cost_label)
+        except Exception:
+            pass
 
     def _check_secondary_config(self):
         """启动校验副模型配置（v1.4.2）：副模型是 doubao 裸模型名但缺 ep-xxx 推理
@@ -716,6 +741,12 @@ class App(SettingsUIMixin):
                 pass
         self._pill_is_free = is_free
         self._register_redraw(_retheme_pill)
+        # v1.4.7 WS-C：API 消耗显示（本次/本月，元）——pill 旁小字 Label；
+        # 数值来自 usage_store（估算行不计费），刷新一律 win.after 主线程调度
+        self.cost_label = tk.Label(tool_bar, text="", font=(self.FONT[0], 8),
+                                   fg=self.C_MUTED, bg=self.C_BG)
+        self.cost_label._skip_theme = True
+        self.cost_label.pack(side="left", padx=(0, 10))
         self._mk_btn(tool_bar, "🏪 商家后台", self._open_backend, kind='ghost',
                      pack_side="right", padx=5)
         # v1.4.1：持有更新按钮引用，检查到新版本时按钮直接标注版本号（客户无需盯状态栏）
@@ -740,6 +771,9 @@ class App(SettingsUIMixin):
         self.page_theme = tk.Frame(self.content_frame, bg=self.C_BG)
         self.page_backend = tk.Frame(self.content_frame, bg=self.C_BG)
         self.page_api = tk.Frame(self.content_frame, bg=self.C_BG)
+        # v1.4.x 导航重构：历史趋势 / 用量明细 从弹窗独立成导航页（懒构建见 _show_page）
+        self.page_history = tk.Frame(self.content_frame, bg=self.C_BG)
+        self.page_usage = tk.Frame(self.content_frame, bg=self.C_BG)
         self._current_page = self.page_home
         
         # 初始 3 行数据对象（识别结果表承载显示/编辑，rows 仅存数据）
@@ -763,6 +797,9 @@ class App(SettingsUIMixin):
         self._mk_btn(btn_row, "截图识别", self._ocr_fill, kind='text', pack_side="right")
         self.live_btn = self._mk_btn(btn_row, "实时截图", self._live_screenshot, kind='text',
                                      pack_side="right", padx=5)  # v1.4.5 bug hunt F24：保存引用供批量期间禁用
+        # v1.4.7 WS-B：CSV/XLSX 结构化导入入口（非 PDD 表格也能走补货计算管线）
+        self._mk_btn(btn_row, "📥 导入表格", self._import_table, kind='text',
+                     pack_side="right", padx=5)
         
         # ── 当前地区（刷新计算按钮正下方一行，左对齐；识别后更新）──
         region_line = tk.Frame(self.page_home, bg=self.C_BG)
@@ -911,6 +948,8 @@ class App(SettingsUIMixin):
             ("🏠 首页", self.page_home),
             ("⚙ 通用", self.page_general),
             ("📦 商品", self.page_products),
+            ("📈 历史趋势", self.page_history),
+            ("💰 用量明细", self.page_usage),
             ("🔑 API", self.page_api),
             ("🎨 主题", self.page_theme),
             ("🔗 后台", self.page_backend),
@@ -956,8 +995,24 @@ class App(SettingsUIMixin):
             self._build_backend_tab(page)
         elif page == self.page_api and not hasattr(page, '_built'):
             self._build_api_page(page)
+        elif page == self.page_history and not hasattr(page, '_built'):
+            self._build_history_page(page)
+        elif page == self.page_usage and not hasattr(page, '_built'):
+            self._build_usage_page(page)
         if not hasattr(page, '_built'):
             page._built = True
+        # 导航重构：历史/用量数据页每次切入刷新（after 调度进主线程事件队列，
+        # worker 线程不碰 Tk）；首次构建后同样走一遍，保证数据与切入时刻一致
+        if page == self.page_history:
+            try:
+                self.win.after_idle(self._history_page_refresh)
+            except Exception:
+                pass
+        elif page == self.page_usage:
+            try:
+                self.win.after_idle(self._usage_page_refresh)
+            except Exception:
+                pass
         # 切页只刷新模型徽章；主题全量重涂仅在主题切换时执行（避免每次切页全树 walk）
         self._refresh_model_badge()
 
@@ -1786,6 +1841,9 @@ class App(SettingsUIMixin):
                 'status': status, 'color': color, 'qty': qty,
                 '_row_idx': len(plans),  # 原始 rows 索引（筛选/排序后编辑仍回写正确行）
                 'warehouse': item.get('warehouse', ''),
+                # v1.4.7 WS-A（A1）：sku_id 补进 plans——历史库 SKU 权威关联键
+                # （与 ocr.dedup_items 同语义；无 ID 行由历史库回退 (region, name) 匹配）
+                'sku_id': item.get('sku_id', '') or '',
                 # 通用列原始数据：客户勾选列从 _raw 取原文显示
                 '_raw': item.get('_raw') or {},
                 '_sel_cols': _sel_cols,
@@ -1905,8 +1963,12 @@ class App(SettingsUIMixin):
             w.destroy()
         if not self.cache:
             tk.Label(self.tab_frame, text="暂无缓存数据", font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left")
+            # v1.4.x 导航重构：历史趋势入口固定在 tab 行尾（无缓存时也可见）；
+            # 只做导航页跳转，实现单一来源 = 导航历史页（stats_ui.StatsPagesMixin）
+            self._mk_btn(self.tab_frame, "📈 历史", self._goto_history_page, kind='ghost',
+                         font=("微软雅黑", 8), pack_side="right", padx=6)
             return
-        
+
         tk.Label(self.tab_frame, text="地区: ", font=(self.FONT[0], 8),
                  fg=self.C_MUTED).pack(side="left")
         for reg in sorted(self.cache.keys()):
@@ -1915,6 +1977,10 @@ class App(SettingsUIMixin):
                          kind='tag' if is_active else 'ghost',
                          font=("微软雅黑", 8, "bold" if is_active else "normal"),
                          pack_side="left", padx=2)
+        # v1.4.x 导航重构：历史趋势入口固定在 tab 行尾（复用地区 tab 行），
+        # 点击跳转导航历史页（_show_page），不再弹 Toplevel——与导航页同源
+        self._mk_btn(self.tab_frame, "📈 历史", self._goto_history_page, kind='ghost',
+                     font=("微软雅黑", 8), pack_side="right", padx=6)
     
     def _switch_region(self, region):
         """切换到指定地区的缓存结果"""
@@ -2328,6 +2394,14 @@ class App(SettingsUIMixin):
             _af['flag'] = False
         except Exception:
             pass
+        # v1.4.7 WS-C：「本次」口径——批量启动重置 session 累计
+        # （月度口径由自然月 jsonl 决定，无累计器可清；batch_id P1 简化不串线）
+        try:
+            import usage_store as _us
+            _us.session_reset()
+        except Exception:
+            pass
+        self.win.after(0, self._refresh_cost_label)
         # 任务列表：每个省份一个任务（不填仓库，滚动加载识别全部商品，仓库信息来自 OCR 仓库列）
         tasks = list(regions)
         total = len(tasks); success = 0; total_items = 0
@@ -3186,7 +3260,7 @@ class App(SettingsUIMixin):
                     # 后台线程已完成所有任务：统一填充累积结果
                     if got_data:
                         try:
-                            self._fill_from_ocr(all_batch)
+                            self._fill_from_ocr(all_batch, source='batch')
                         except Exception as e:
                             self.status_text.set(f"❌ 批量数据处理失败: {str(e)[:50]}")
                     self.win.after(100, lambda: self._finish_batch(success, total, total_items))
@@ -3216,6 +3290,7 @@ class App(SettingsUIMixin):
         except Exception:
             pass
         self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：UI 真正收尾时清除标志
+        self._refresh_cost_label()  # v1.4.7 WS-C：批量收尾主动刷费用 Label
         self.status_text.set("就绪 — 批量识别完成")
         if success > 0:
             messagebox.showinfo("批量识别完成", f"成功 {success}/{total} 地区\n合计 {total_items} 商品")
@@ -3225,6 +3300,12 @@ class App(SettingsUIMixin):
     
     def _live_screenshot(self):
         """即时截图：最小化窗口 → 立刻截全屏 → OCR → 恢复（最小化最多 2 秒）"""
+        # v1.4.7 WS-C：单次识别入口重置「本次」消耗口径
+        try:
+            import usage_store as _us
+            _us.session_reset()
+        except Exception:
+            pass
         self.status_text.set("最小化窗口，请确认PDD页面在后面...")
         self._clear_input_rows()  # 先清旧数据
         self.win.update()
@@ -3299,6 +3380,12 @@ class App(SettingsUIMixin):
         threading.Thread(target=task, daemon=True).start()
     
     def _ocr_fill(self):
+        # v1.4.7 WS-C：单次识别入口重置「本次」消耗口径
+        try:
+            import usage_store as _us
+            _us.session_reset()
+        except Exception:
+            pass
         from tkinter import filedialog
         path = filedialog.askopenfilename(
             title="选择PDD后台截图",
@@ -3314,7 +3401,7 @@ class App(SettingsUIMixin):
         def task():
             try:
                 items = self._ocr_generic_to_items(path, dual_verify=_dual_mode_cache)
-                self.win.after(0, lambda i=items: self._fill_from_ocr(i))
+                self.win.after(0, lambda i=items: self._fill_from_ocr(i, source='file'))
             except Exception as e:
                 self.win.after(0, self._show_error, str(e))
         
@@ -3388,8 +3475,13 @@ class App(SettingsUIMixin):
             _ocr_dlog(f"WARN 二次识别择优失败（保留首轮结果）: {str(_e)[:100]}")
         return items
 
-    def _fill_from_ocr(self, items):
-        """用OCR结果填充表格"""
+    def _fill_from_ocr(self, items, source='live'):
+        """用OCR结果填充表格
+
+        v1.4.7 T-B3：source 标记数据来源（'live' 实时截图 | 'batch' 批量 |
+        'file' 图片文件 | 'import' 表格导入），供历史采集区分来源；带默认值，
+        既有调用零影响。
+        """
         self._clear_error()  # 先重置状态，再设置识别进度提示（避免被覆盖）
         self.status_text.set(f"OCR识别到 {len(items)} 项，计算中...")
         self.win.update()
@@ -3510,7 +3602,398 @@ class App(SettingsUIMixin):
         except Exception as e:
             self._show_error(f"计算出错: {e}", popup=True)
             import traceback; traceback.print_exc()
-    
+        # v1.4.7 WS-A（A2 唯一采集挂点）：逐地区计算完成后，把各地区 plans 组装
+        # 落入本地历史库（{region: cache[region]['plans']}）。
+        # 铁律（R8）：任何异常仅日志，绝不中断识别主流程；
+        # 不挂 _calc_from_items——手动编辑触发的重算不产生噪音快照。
+        try:
+            if history_db is not None:
+                _plans_by_region = {}
+                for _reg in by_region:
+                    _cd = self.cache.get(_reg)
+                    if isinstance(_cd, dict) and _cd.get('plans'):
+                        _plans_by_region[_reg] = _cd['plans']
+                if _plans_by_region:
+                    history_db.record_capture(_plans_by_region, source=source)
+        except Exception as _hist_e:
+            try:
+                from ocr import _ocr_dlog
+                _ocr_dlog(f"[history] 采集挂点异常（不影响识别）: {_hist_e}")
+            except Exception:
+                pass
+        # v1.4.7 WS-C：回填收尾点主动刷新费用 Label（此处为主线程上下文，直接调）
+        self._refresh_cost_label()
+
+    # ─────────────────── v1.4.7 WS-C：费用显示（T-C5 GUI 侧）───────────────────
+
+    def _refresh_cost_label(self):
+        """刷新工具条费用 Label：`本次 ¥X.XX｜本月 ¥Y.YY`。
+
+        数据源 usage_store（估算行不计费、缺价按 0——口径见面板"估算仅供参考"）。
+        任何异常吞掉；主线程外调用只允许经 win.after 调度。
+
+        v1.4.7 P3-R1-L3：本月 cost 走 usage_store.get_month_cost() 内存增量（O(1)），
+        替代 aggregate('month') 全量读 jsonl（10 万行级别从 ~50ms 降到常数时间）。
+        """
+        try:
+            lbl = getattr(self, 'cost_label', None)
+            if lbl is None:
+                return
+            try:
+                if not lbl.winfo_exists():
+                    return
+            except Exception:
+                return
+            import usage_store as _us
+            _sess = _us.session_total()
+            _mon = _us.get_month_cost()  # 内存缓存：跨月时一次性全量重算
+            lbl.config(text=f"本次 ¥{_sess:.2f}｜本月 ¥{_mon:.2f}")
+            # P3-R1-L2：写盘连续失败达阈值 → 状态栏一次性提示（不打扰、不重复）
+            try:
+                _fs = _us.get_write_failure_state()
+                if _fs and _fs.get('should_alert'):
+                    _err = _fs.get('last_error') or '未知'
+                    self.status_text.set(
+                        f"⚠ 用量记录已连续 {_fs['consecutive']} 次写入失败（{_err}），"
+                        f"请检查磁盘空间或权限。详见日志。"
+                    )
+                    _us.ack_write_failure_alert()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _poll_cost_label(self):
+        """每 60s 轮询刷新费用 Label（主线程事件调度，worker 线程绝不直调 Tk）。"""
+        self._refresh_cost_label()
+        try:
+            self.win.after(60000, self._poll_cost_label)
+        except Exception:
+            pass  # 窗口已销毁（程序退出）时停止轮询
+
+    # ─────────────────── v1.4.7 WS-A：历史趋势（T-A3 GUI 侧）───────────────────
+
+    def _history_privacy_hint(self):
+        """首次启用一次性提示（A6/§2.1.5）：识别数据仅本机持久化，不上传。"""
+        try:
+            if history_db is None:
+                return
+            from utils import Config
+            s = Config.load()
+            h = s.get('history')
+            h = h if isinstance(h, dict) else {}
+            if h.get('privacy_hint_shown'):
+                return
+            h['privacy_hint_shown'] = True
+            s['history'] = h
+            Config.save(s)
+            messagebox.showinfo(
+                "识别历史功能已启用",
+                "为支持「历史趋势」展示，识别结果将持久化保存到本机数据目录（history.db）。\n\n"
+                "· 数据仅保存在本机，不会上传；\n"
+                "· 可随时在导航「📈 历史趋势」页点「清空全部历史」删除；\n"
+                "· 历史库故障不影响识别主流程。",
+                parent=self.win)
+        except Exception:
+            pass  # 提示失败不影响启动
+
+    def _goto_history_page(self):
+        """地区 tab 行尾「📈 历史」快捷入口 → 导航「📈 历史趋势」页。
+
+        v1.4.x 导航重构：原 _show_history_dialog Toplevel 已整体迁移为导航页
+        （stats_ui.StatsPagesMixin._build_history_page，唯一实现）；此处只做
+        _show_page 跳转，不留第二个独立实现。
+        """
+        self._show_page(self.page_history)
+
+    def _history_day_detail(self, parent, region, day):
+        """某地区某日明细（query_region_days）；双击行看单商品趋势折线。"""
+        if history_db is None:
+            return
+        top = tk.Toplevel(parent)
+        top.title(f"{region} · {day} 明细")
+        top.geometry(self._geo(820, 420))
+        top.configure(bg=self.C_BG)
+        top.transient(parent)
+        cols = ('time', 'name', 'sku', 'stock', 'sales', 'status', 'qty', 'warehouse')
+        heads = (('time', '识别时间', 130), ('name', '商品名', 190), ('sku', 'SKU', 110),
+                 ('stock', '库存', 60), ('sales', '销量', 60), ('status', '状态', 90),
+                 ('qty', '补货量', 70), ('warehouse', '仓库', 100))
+        tree = ttk.Treeview(top, columns=cols, show='headings', height=12)
+        for cid, text, w in heads:
+            tree.heading(cid, text=text)
+            tree.column(cid, width=w, anchor='center')
+        vsb = ttk.Scrollbar(top, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y", padx=(0, 10), pady=(0, 8))
+        tree.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 8))
+        try:
+            rows = history_db.query_region_days(region, day)
+        except Exception:
+            rows = []
+        for r in rows:
+            tree.insert('', 'end', values=(
+                r.get('captured_at', ''), r.get('name', ''), r.get('sku_id', ''),
+                r.get('stock', 0), r.get('sales', 0), r.get('status', ''),
+                r.get('qty', 0), r.get('warehouse', '')))
+        if not rows:
+            tk.Label(top, text="该地区当日无历史明细", font=(self.FONT[0], 9),
+                     fg=self.C_MUTED, bg=self.C_BG).pack(pady=20)
+
+        def on_open(_event):
+            sel = tree.selection()
+            if not sel:
+                return
+            vals = tree.item(sel[0], 'values')
+            if len(vals) >= 3:
+                sku = vals[2]
+                name = vals[1]
+                self._history_sku_chart(top, sku, region, name)
+
+        tree.bind('<Double-1>', on_open)
+        tk.Label(top, text="双击商品行查看单商品库存趋势折线", font=(self.FONT[0], 8),
+                 fg=self.C_MUTED, bg=self.C_BG).pack(pady=(0, 8))
+
+    def _history_sku_chart(self, parent, sku, region, name):
+        """单商品库存趋势折线（Canvas 手绘，零图表库依赖）。
+
+        sku 为空时按 (region, name) 精确回退（与 history_db 关联键语义一致）。
+        """
+        if history_db is None:
+            return
+        try:
+            rows = history_db.query_sku_history(sku, days=3650) if sku else \
+                history_db.query_sku_history('', days=3650, region=region, name=name)
+        except Exception:
+            rows = []
+        rows = rows or []
+        if not rows:
+            messagebox.showinfo("无趋势数据", "该商品暂无足够的历史记录。", parent=parent)
+            return
+        stocks = [float(r.get('stock') or 0) for r in rows]
+        times = [str(r.get('captured_at', '')) for r in rows]
+        top = tk.Toplevel(parent)
+        top.title(f"库存趋势 · {name[:20]}")
+        top.geometry(self._geo(760, 380))
+        top.configure(bg=self.C_BG)
+        top.transient(parent)
+        w, h = 720, 300
+        mL, mR, mT, mB = 64, 24, 34, 44
+        cv = tk.Canvas(top, width=w, height=h, bg=self.C_BG, highlightthickness=0)
+        cv._skip_theme = True
+        cv.pack(padx=12, pady=10)
+        n = len(stocks)
+        ymin, ymax = min(stocks), max(stocks)
+        if ymax <= ymin:
+            ymax = ymin + 1
+        xs = [mL + i * (w - mL - mR) / max(n - 1, 1) for i in range(n)]
+        ys = [mT + (h - mT - mB) * (1 - (s - ymin) / (ymax - ymin)) for s in stocks]
+        cv.create_text(w // 2, 14, text=f"{name[:28]} 库存趋势（{n} 次识别）",
+                       font=(self.FONT[0], 10, 'bold'), fill=self.C_TEXT)
+        cv.create_line(mL, mT, mL, h - mB, fill=self.C_MUTED)
+        cv.create_line(mL, h - mB, w - mR, h - mB, fill=self.C_MUTED)
+        cv.create_text(mL - 8, mT, text=f"{ymax:.0f}", anchor='e',
+                       font=(self.FONT[0], 7), fill=self.C_MUTED)
+        cv.create_text(mL - 8, h - mB, text=f"{ymin:.0f}", anchor='e',
+                       font=(self.FONT[0], 7), fill=self.C_MUTED)
+        for i in range(n - 1):
+            cv.create_line(xs[i], ys[i], xs[i + 1], ys[i + 1],
+                           fill=self.C_ACCENT, width=2)
+        for i in range(n):
+            cv.create_oval(xs[i] - 2, ys[i] - 2, xs[i] + 2, ys[i] + 2,
+                           fill=self.C_ACCENT, outline='')
+        cv.create_text(mL, h - mB + 14, text=times[0][:16], anchor='w',
+                       font=(self.FONT[0], 7), fill=self.C_MUTED)
+        cv.create_text(w - mR, h - mB + 14, text=times[-1][:16], anchor='e',
+                       font=(self.FONT[0], 7), fill=self.C_MUTED)
+        cv.create_text(w // 2, h - mB + 30,
+                       text=f"最新库存 {stocks[-1]:.0f}（{times[-1][5:16]}）",
+                       font=(self.FONT[0], 8), fill=self.C_TEXT)
+
+    # ─────────────────── v1.4.7 WS-B：表格导入（T-B2 GUI 侧）───────────────────
+
+    def _import_table(self):
+        """CSV/XLSX 结构化导入入口：filedialog → 映射预览 → worker 导入 → 报告+清洗+收口。
+
+        流程（T-B2）：线程内不碰 Tk；结果经 win.after 回主线程；name/region/warehouse
+        过 export_xlsx._sanitize_cell（强制复用点②）后 _fill_from_ocr(source='import') 收口。
+        """
+        import table_import
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title="选择要导入的表格（CSV / XLSX）",
+            filetypes=[("表格文件", "*.csv *.xlsx"), ("所有", "*.*")])
+        if not path:
+            return
+        if str(path).lower().endswith('.xls'):
+            messagebox.showerror("不支持的格式",
+                                 "老版 .xls 格式请先用 Excel/WPS 另存为 .xlsx 后再导入。",
+                                 parent=self.win)
+            return
+        try:
+            headers, _rows = table_import.read_table_rows(path)
+        except Exception as e:
+            messagebox.showerror("导入失败", str(e), parent=self.win)
+            return
+        if not headers:
+            messagebox.showerror("导入失败", "文件首个非空行没有表头，无法识别列映射。",
+                                 parent=self.win)
+            return
+        mapping, has_region = self._import_preview_dialog(headers, path)
+        if mapping is None:
+            return  # 用户取消
+        self.status_text.set("导入中...")
+        self.win.update()
+
+        def task():
+            try:
+                items, issues = table_import.import_items(path, mapping=mapping)
+            except Exception as e:
+                self.win.after(0, lambda err=str(e): messagebox.showerror(
+                    "导入失败", str(err)[:200], parent=self.win))
+                return
+            self.win.after(0, lambda i=items, s=issues: self._import_done(i, s, has_region))
+
+        import threading
+        threading.Thread(target=task, daemon=True).start()
+
+    def _import_preview_dialog(self, headers, path):
+        """映射预览对话框：文件表头 ↔ 业务字段对位 + 缺失清单 + 可改下拉 + 生成模板。
+
+        返回 (mapping|None, has_region)：None=用户取消；确认时 mapping 必含
+        name/stock/sales（缺任一不允许导入，宪法 §1 同纪律——不静默 fallback）。
+        """
+        import table_import
+        try:
+            found, missing = table_import.guess_mapping(headers)
+        except Exception:
+            found, missing = {}, ['name', 'stock', 'sales']
+        top = tk.Toplevel(self.win)
+        top.title("导入映射预览")
+        top.geometry(self._geo(500, 400))
+        top.configure(bg=self.C_BG)
+        top.transient(self.win)
+        tk.Label(top, text=f"文件：{os.path.basename(path)}（{len(headers)} 列）",
+                 font=(self.FONT[0], 9), fg=self.C_TEXT, bg=self.C_BG).pack(
+            anchor='w', padx=16, pady=(14, 2))
+        if missing:
+            tk.Label(top, text=f"⚠ 未自动识别关键列：{'、'.join(missing)} — 请在下方下拉手工指定",
+                     font=(self.FONT[0], 8), fg='#C62828', bg=self.C_BG).pack(
+                anchor='w', padx=16, pady=2)
+        else:
+            tk.Label(top, text="✓ 关键列已自动识别，可调整后确认导入",
+                     font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
+                anchor='w', padx=16, pady=2)
+        fields = [('name', '商品名(必填)'), ('stock', '库存(必填)'), ('sales', '销量(必填)'),
+                  ('region', '销售区域(可选)'), ('warehouse', '仓库(可选)')]
+        combo_vars = {}
+        for fid, label in fields:
+            row = tk.Frame(top, bg=self.C_BG)
+            row.pack(fill="x", padx=16, pady=3)
+            tk.Label(row, text=label, width=13, anchor='e', font=(self.FONT[0], 9),
+                     fg=self.C_TEXT, bg=self.C_BG).pack(side="left")
+            v = tk.StringVar(top, value=found.get(fid, '(不使用)'))
+            ttk.Combobox(row, textvariable=v, values=['(不使用)'] + list(headers),
+                         state='readonly', width=26,
+                         font=(self.FONT[0], 9)).pack(side="left", padx=8)
+            combo_vars[fid] = v
+
+        def gen_template():
+            try:
+                out_dir = os.path.join(get_base_dir(), 'output')
+                os.makedirs(out_dir, exist_ok=True)
+                tpath = table_import.write_template(
+                    os.path.join(out_dir, 'PDD导入模板.xlsx'))
+                try:
+                    os.startfile(tpath)
+                except Exception:
+                    messagebox.showinfo("模板已生成", f"模板文件：\n{tpath}", parent=top)
+            except Exception as e:
+                messagebox.showerror("模板生成失败", str(e)[:200], parent=top)
+
+        result = []
+
+        def confirm():
+            mapping = {}
+            for fid, _label in fields:
+                col = combo_vars[fid].get()
+                if col and col != '(不使用)':
+                    mapping[fid] = col
+            absent = [f for f in ('name', 'stock', 'sales') if not mapping.get(f)]
+            if absent:
+                messagebox.showwarning(
+                    "缺少关键列",
+                    f"{'、'.join(absent)} 为必填映射，请选择对应列后再导入。",
+                    parent=top)
+                return
+            result.append((mapping, 'region' in mapping))
+            top.destroy()
+
+        btns = tk.Frame(top, bg=self.C_BG)
+        btns.pack(fill="x", padx=16, pady=(12, 14))
+        self._mk_btn(btns, "生成模板", gen_template, kind='ghost',
+                     font=(self.FONT[0], 9)).pack(side="left", padx=4)
+        self._mk_btn(btns, "取消", top.destroy, kind='ghost',
+                     font=(self.FONT[0], 9)).pack(side="right", padx=4)
+        self._mk_btn(btns, "确认导入", confirm, kind='primary',
+                     font=(self.FONT[0], 9, 'bold')).pack(side="right", padx=4)
+        top.grab_set()
+        top.wait_window()
+        return result[0] if result else (None, False)
+
+    def _import_done(self, items, issues, has_region):
+        """主线程收口：导入报告 → 程序端清洗（_sanitize_cell）→ _fill_from_ocr。"""
+        try:
+            if issues:
+                self._import_report_dialog(issues)
+            # 强制复用点②（R7）：导入侧公式注入清洗——name/region/warehouse 过 _sanitize_cell
+            from export_xlsx import _sanitize_cell
+            for p in items:
+                if isinstance(p, dict):
+                    p['name'] = _sanitize_cell(str(p.get('name', '') or ''))
+                    p['region'] = _sanitize_cell(str(p.get('region', '') or ''))
+                    p['warehouse'] = _sanitize_cell(str(p.get('warehouse', '') or ''))
+            if not items:
+                self.status_text.set("导入完成：0 条有效数据（详见导入报告）")
+                return
+            self._fill_from_ocr(items, source='import')
+            if not has_region:
+                self.status_text.set(
+                    f"⚠ 未识别销售区域列，全部商品已归入当前地区「{self.region_var.get()}」")
+        except Exception as e:
+            self._show_error(f"导入数据处理失败: {str(e)[:80]}", popup=True)
+
+    def _import_report_dialog(self, issues):
+        """导入报告：行号/商品/级别/原因（前 200 条 + 计数汇总）。"""
+        top = tk.Toplevel(self.win)
+        top.title("导入报告")
+        top.geometry(self._geo(620, 400))
+        top.configure(bg=self.C_BG)
+        top.transient(self.win)
+        n_err = sum(1 for i in issues if i.get('level') == 'error')
+        n_warn = len(issues) - n_err
+        tk.Label(top, text=f"共 {len(issues)} 条提示：错误 {n_err}，警告 {n_warn}"
+                           + ("（仅显示前 200 条）" if len(issues) > 200 else ""),
+                 font=(self.FONT[0], 9), fg=self.C_TEXT, bg=self.C_BG).pack(
+            anchor='w', padx=12, pady=(10, 4))
+        cols = ('row', 'name', 'level', 'reason')
+        heads = (('row', '行号', 60), ('name', '商品', 200), ('level', '级别', 60),
+                 ('reason', '原因', 240))
+        tree = ttk.Treeview(top, columns=cols, show='headings', height=12)
+        for cid, text, w in heads:
+            tree.heading(cid, text=text)
+            tree.column(cid, width=w, anchor='w' if cid in ('name', 'reason') else 'center')
+        vsb = ttk.Scrollbar(top, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y", padx=(0, 10), pady=(0, 8))
+        tree.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 8))
+        for i in issues[:200]:
+            tree.insert('', 'end', values=(
+                i.get('row', ''), i.get('name', ''), i.get('level', ''),
+                i.get('reason', '')))
+        self._mk_btn(top, "关闭", top.destroy, kind='dark',
+                     font=(self.FONT[0], 9)).pack(pady=(0, 10))
+
     def _on_tree_yscroll(self, first, last):
         self._vsb_first = float(first); self._vsb_last = float(last)
         self._draw_vsb()

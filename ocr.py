@@ -9,6 +9,35 @@ import base64, json, os
 import requests
 from utils import get_api_config, get_base_dir
 
+# v1.4.7 WS-C 用量采集（详见 docs/USAGE_ARCHIVE_SPEC.md）
+# 注意：这两个 import 必须放 try/except 之外，因为 _ocr_api_call_do 每次调用都
+# 会经过它们；任何对 usage_extractor / usage_store 的访问必须包 try/except 保证
+# 失败不影响识别主流程（§6.2 失败安全 + 宪法 §4 失败哲学）。
+try:
+    import usage_extractor as _usage_extractor
+except Exception:  # 极端：模块缺失（理论上不应该）
+    _usage_extractor = None
+
+try:
+    import usage_store as _usage_store
+except Exception:
+    _usage_store = None
+
+
+def _load_usage_pricing() -> dict:
+    """读 usage.pricing 价格表（provider→model→{input/output_per_million, image_per_call}）。
+
+    Config.load 带 mtime 缓存，漏斗内每次读取成本可忽略；任何异常返回 {}——
+    缺价 → compute_cost 按 0 计 → 面板显示 ?（§4 显式不猜，不内置默认价）。
+    """
+    try:
+        from utils import Config as _Cfg
+        _u = _Cfg.load().get('usage')
+        _p = (_u or {}).get('pricing') if isinstance(_u, dict) else None
+        return _p if isinstance(_p, dict) else {}
+    except Exception:
+        return {}
+
 
 # ── 批量紧急停止钩子（v1.4.2）：紧急终止必须"立刻"——光靠调用方 Event 轮询，
 # 要等当前 30~90s 的 OCR 请求跑完才轮到检查点。这里提供模块级取消检查：
@@ -625,6 +654,17 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                         }, timeout=(10, 180))  # v1.4.2 读取超时 30s→180s：VL 处理大图(9列大表)可达 60-120s，
                         #  30s 必然误判失败（客户实测小表3-5行成功、大表必超时）——给足处理时间再谈网络
                     data = resp.json()
+                    # v1.4.7 WS-C：debug 落盘钩子（早于文本提取，捕获完整 raw）
+                    # 受 usage.debug_archive_enabled 控制，默认关；失败吞掉
+                    try:
+                        if _usage_extractor is not None:
+                            _api_type = _usage_extractor.resolve_api_type(
+                                cur_endpoint,
+                                custom_endpoint=provider.get('custom_endpoint', '') if isinstance(provider, dict) else None)
+                            _usage_extractor._debug_dump_response(
+                                active, mdl, cur_endpoint, data, None)
+                    except Exception:
+                        pass
                     if not data.get('output'):
                         raise RuntimeError(f"OCR失败（{mdl}）: {data}")
                     # output[-1] = 最后一条消息（跳过 reasoning）；兼容 content 为
@@ -647,12 +687,51 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                             headers={'Authorization': f'Bearer {cur_key}', 'Content-Type': 'application/json'},
                         json=cc_payload, timeout=(10, 180))  # v1.4.2 读取超时 30s→180s，理由同上（VL 大图处理耗时）
                     data = resp.json()
+                    # v1.4.7 WS-C：debug 落盘钩子（早于文本提取，捕获完整 raw）
+                    try:
+                        if _usage_extractor is not None:
+                            _api_type = _usage_extractor.resolve_api_type(
+                                cur_endpoint,
+                                custom_endpoint=provider.get('custom_endpoint', '') if isinstance(provider, dict) else None)
+                            _usage_extractor._debug_dump_response(
+                                active, mdl, cur_endpoint, data, None)
+                    except Exception:
+                        pass
                     if not data.get('choices'):
                         raise RuntimeError(f"OCR失败（{mdl}）: {data}")
                     # Chat Completions content 可能为 str 或 list[{'type','text'}] 或 None，
                     # 统一兼容解析（v1.4 审查加固）
                     content = _extract_response_text(data, mdl)
-                return content, mdl
+                # v1.4.7 WS-C：成功路径上抽取 usage（6 步降级链 + §3 兜底估算）
+                # 失败吞掉，_usage=None 也不影响 return（调用方按 3 值解构）
+                _usage = None
+                try:
+                    if _usage_extractor is not None:
+                        _api_type = _usage_extractor.resolve_api_type(
+                            cur_endpoint,
+                            custom_endpoint=provider.get('custom_endpoint', '') if isinstance(provider, dict) else None)
+                        _usage = _usage_extractor.extract(data, provider=active, api_type=_api_type)
+                        if _usage is None:
+                            # 抽取失败 → 走 §3 兜底估算（用 max_tok + 提示词正文）
+                            _usage = _usage_extractor.estimate_fallback(
+                                content, prompt, active, max_side=0, max_tok=cur_max_tok)
+                except Exception:
+                    _usage = None
+                # v1.4.7 集成收口（T-C5 单点落账）：extract/兜底之后每请求恰记一行。
+                # 价格缺失按 0（面板显示 ?）；兜底估算行 is_estimate=true（面板 ~ 前缀、
+                # 不计 cost）；落账失败吞掉，绝不影响识别返回。usage=None（extractor 缺失
+                # 等极端）时跳过落账，调用方照常按三值解构。
+                try:
+                    if _usage is not None and _usage_store is not None:
+                        _u_pricing = _load_usage_pricing()
+                        _u_entry = (_u_pricing.get(active) or {}).get(mdl) if isinstance(_u_pricing, dict) else None
+                        _u_cost = _usage_extractor.compute_cost(_usage, _u_entry)
+                        _usage_store.record(active, _api_type, mdl, cur_endpoint, _usage, _u_cost,
+                                            str(_usage.get('source') or '').startswith('fallback'),
+                                            call_site='OCR 识别', batch_id='')
+                except Exception:
+                    pass
+                return content, mdl, _usage
             except Exception as e:
                 # 输出 token 上限超模型能力（弱模型/模型版本限制）：400 或
                 # 'maximum context length'/'max_tokens' 类错误 → 砍半重发一次
@@ -1149,8 +1228,8 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
         # desired 4096 由 _ocr_api_call_do 按模型分档钳制——qwen 系/OCR 系 4096、
         # glm-4v-flash 1024、未知模型 2048，弱模型不会 400。
 
-    content, _ = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model,
-                               prefer_general=prefer_general)
+    content, _, _usage = _ocr_api_call(img_b64, prompt, max_tok=max_tok, forced_model=forced_model,
+                                       prefer_general=prefer_general)
 
     # 解析复用 _parse_ocr_response（v1.4.2 抽取共用：兼容 ```json 包裹/
     # {columns,rows}/纯数组/数组行对齐/key 多数票/不可哈希过滤/调试记录）
@@ -1245,7 +1324,7 @@ def ocr_table_verify(image_path: str, table_bbox: dict = None,
 3. 按图中从上到下顺序逐行输出，一行不漏；某列缺值填 null，不要编造
 4. 只输出 JSON，不要解释"""
     try:
-        content, _ = _ocr_api_call(img_b64, prompt, max_tok=4096, forced_model=forced_model)
+        content, _, _usage = _ocr_api_call(img_b64, prompt, max_tok=4096, forced_model=forced_model)
         return _parse_ocr_response(content)
     except Exception:
         raise
@@ -1450,7 +1529,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
 3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
 4. 只输出 JSON，不要解释"""
         try:
-            content, _ = _ocr_api_call(_b64, _prompt, max_tok=_row_max_tok, forced_model=forced_model)
+            content, _, _usage = _ocr_api_call(_b64, _prompt, max_tok=_row_max_tok, forced_model=forced_model)
         except Exception as e:
             raise RuntimeError(f'行组{_gi + 1}识别失败: {e}')
         _text = content.strip()

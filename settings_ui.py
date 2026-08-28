@@ -318,12 +318,30 @@ class SettingsUIMixin:
             region = self._settings_region_var.get()
             if not region or region.startswith('（'):
                 return
-            if not messagebox.askyesno("确认删除", f"确定删除地区「{region}」及其所有商品时效设置？\n已识别的缓存数据也会一并清除。"):
+            # v1.4.7 WS-A（A5）：升级为三选——删除并清除历史 / 仅删配置保留历史 / 取消
+            _wipe_hist = messagebox.askyesnocancel(
+                "确认删除",
+                f"确定删除地区「{region}」及其所有商品时效设置？\n已识别的缓存数据也会一并清除。\n\n"
+                "【是】删除配置，并同时清除该地区的全部识别历史；\n"
+                "【否】仅删除配置与缓存，保留历史数据（趋势仍可见）；\n"
+                "【取消】放弃删除。")
+            if _wipe_hist is None:
                 return
             if region in self.regions:
                 del self.regions[region]
             if region in self.cache:
                 del self.cache[region]
+            if _wipe_hist is True:
+                try:
+                    import history_db as _hdb
+                    _deleted = _hdb.delete_region(region)
+                    self.status_text.set(
+                        f"地区「{region}」已删除（含历史 {_deleted} 行）"
+                        if _deleted >= 0 else f"地区「{region}」已删除（历史清理失败，见日志）")
+                except Exception:
+                    self.status_text.set(f"地区「{region}」已删除（历史清理失败，见日志）")
+            else:
+                self.status_text.set(f"地区「{region}」已删除（历史数据已保留）")
             self._save_regions()
             new_names = sorted(self.cache.keys()) if self.cache else sorted(self.regions.keys())
             if not new_names:
@@ -335,7 +353,7 @@ class SettingsUIMixin:
             self._lbl(self._settings_list_frame, text="地区已删除",
                      font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=20)
             self._update_tabs()
-            self.status_text.set(f"地区「{region}」已删除")
+            # （状态栏文案已在上方按「是否清除历史」分支设置，此处不再覆盖）
 
         self._mk_btn(sel_frame, "删除地区", delete_region, kind='ghost',
                   font=(self.FONT[0], 8)).pack(side="left", padx=5)
@@ -955,3 +973,5 @@ class SettingsUIMixin:
 
         self._mk_btn(parent, "保存", save_all, kind='primary',
                   font=self.FONT_BOLD, width=18).pack_configure(pady=(16, 18))
+        # v1.4.x 导航重构：「💰 用量明细」入口已迁至导航独立页（stats_ui.StatsPagesMixin
+        # ._build_usage_page，唯一实现）；API 设置页不再内置用量入口（用户明确要求）

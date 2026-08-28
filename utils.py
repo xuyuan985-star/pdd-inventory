@@ -4,7 +4,7 @@ PDD EZ — 公共工具函数
 """
 import os, sys, json, threading
 
-VERSION = "v1.4.6"
+VERSION = "v1.4.7"
 
 
 def version_newer(remote: str, local: str) -> bool:
@@ -105,6 +105,30 @@ def save_secondary_model(name: str):
     cur['secondary_model'] = name
     s['ocr_columns'] = cur
     Config.save(s)
+
+
+def get_usage_cfg() -> dict:
+    """读取用量采集配置（usage 节点，走 Config 模板自愈合并；v1.4.7 WS-C）。
+
+    结构（settings_template.json 自愈补全）：
+      {enabled: true, batch_budget_cny: 0, monthly_budget_cny: 0,
+       pricing: {provider: {model: {input_per_million, output_per_million, image_per_call}}},
+       debug_archive_enabled: false}
+    预算两键本次只落配置不接逻辑（P2 启用）。
+    """
+    s = Config.load()
+    u = s.get('usage')
+    return dict(u) if isinstance(u, dict) else {}
+
+
+def get_history_cfg() -> dict:
+    """读取历史库配置（history 节点，走 Config 模板自愈合并；v1.4.7 WS-A）。
+
+    结构：{retention_days: 180, max_rows: 200000}
+    """
+    s = Config.load()
+    h = s.get('history')
+    return dict(h) if isinstance(h, dict) else {}
 
 
 class Config:

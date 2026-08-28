@@ -43,5 +43,16 @@
   "announcement": {
     "url": "",
     "mirror_url": ""
+  },
+  "usage": {
+    "enabled": true,
+    "batch_budget_cny": 0,
+    "monthly_budget_cny": 0,
+    "pricing": {},
+    "debug_archive_enabled": false
+  },
+  "history": {
+    "retention_days": 180,
+    "max_rows": 200000
   }
 }

@@ -12,6 +12,29 @@ except ImportError:
     cv2 = None
     np = None
 
+# v1.4.7 WS-C 用量采集（详见 docs/USAGE_ARCHIVE_SPEC.md）
+# 任何对 usage_extractor 的访问必须包 try/except 保证失败不影响识别主流程
+try:
+    import usage_extractor as _usage_extractor
+except Exception:
+    _usage_extractor = None
+
+try:
+    import usage_store as _usage_store
+except Exception:
+    _usage_store = None
+
+
+def _load_usage_pricing() -> dict:
+    """读 usage.pricing 价格表（与 ocr._load_usage_pricing 同款；缺价返 {} 显示 ?）。"""
+    try:
+        from utils import Config as _Cfg
+        _u = _Cfg.load().get('usage')
+        _p = (_u or {}).get('pricing') if isinstance(_u, dict) else None
+        return _p if isinstance(_p, dict) else {}
+    except Exception:
+        return {}
+
 
 # ── 批量紧急停止钩子（v1.4.2）：与 ocr.py 同构。光靠调用方 Event 轮询要等
 # 当前定位/状态机请求（采样 2~3 次 × 30s+）跑完，紧急终止不"立刻"。
@@ -202,7 +225,8 @@ def _pick_vision_model():
         f'（如 qwen3.5-omni-flash、glm-4.6v、Doubao-Seed-2.1-pro），或把 OCR 专用模型仅用于文字识别。')
 
 
-def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: int = 30) -> str:
+def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: int = 30,
+                     call_site: str = 'vision') -> str:
     """
     调用配置的视觉 API（doubao responses / glm chat 两种格式），返回模型文本响应。
     失败抛异常（由调用方包装层兜底）。
@@ -210,6 +234,13 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     Qwen OCR 专用模型（qwen*-ocr）是纯文字提取模型，不做定位——若主模型是 OCR 型，
     尝试用副模型（双模型验证配置里的通用视觉模型），两者都不可用则明确报错，
     不静默回退到硬编码模型（额度/权限不可控）。
+
+    v1.4.7 WS-C：返回 (text, mdl, usage) 三元组。
+      - text  - 模型正文
+      - mdl   - 实际发请求的模型名
+      - usage - 6 步降级链抽取结果；None 时调用方应继续走主流程（不报错）。
+        抽取失败走 §3 兜底估算（is_estimate=True）。
+    call_site 仅作审计标签，调用方传入（定位/读总数/读省份/状态机/异常检测/表格定位）。
     """
     active, provider, endpoint, key, mdl, use_responses = _pick_vision_model()
     if not key:
@@ -249,28 +280,76 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
                 'max_output_tokens': max_tokens,
             }, timeout=(5, timeout))
         data = resp.json()
+        # v1.4.7 WS-C：debug 落盘钩子（早于文本提取，捕获完整 raw）
+        try:
+            if _usage_extractor is not None:
+                _api_type = _usage_extractor.resolve_api_type(
+                    endpoint,
+                    custom_endpoint=provider.get('custom_endpoint', '') if isinstance(provider, dict) else None)
+                _usage_extractor._debug_dump_response(active, mdl, endpoint, data, None)
+        except Exception:
+            pass
         if not data.get('output'):
             raise RuntimeError(f'API 返回异常: {data}')
-        return data['output'][-1]['content'][0]['text']
-    # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
-    # 必须显式禁用 thinking；glm-4v-flash 等已实测接受该参数。统一发送保证一致。
-    payload = {
-        'model': mdl,
-        'messages': [{'role': 'user', 'content': [
-            {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
-            {'type': 'text', 'text': prompt}
-        ]}],
-        'temperature': 0.0, 'max_tokens': max_tokens,
-        'thinking': {'type': 'disabled'},
-    }
-    _check_cancel()  # v1.4.2 紧急停止：发请求前检查
-    resp = _req.post(endpoint,
-        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
-        json=payload, timeout=(5, timeout))
-    data = resp.json()
-    if not data.get('choices'):
-        raise RuntimeError(f'API 返回异常: {data}')
-    return data['choices'][0]['message']['content']
+        text = data['output'][-1]['content'][0]['text']
+    else:
+        # Chat Completions 分支：GLM-4.6v 默认开 reasoning 会吃满 max_tokens 导致正文截断，
+        # 必须显式禁用 thinking；glm-4v-flash 等已实测接受该参数。统一发送保证一致。
+        payload = {
+            'model': mdl,
+            'messages': [{'role': 'user', 'content': [
+                {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
+                {'type': 'text', 'text': prompt}
+            ]}],
+            'temperature': 0.0, 'max_tokens': max_tokens,
+            'thinking': {'type': 'disabled'},
+        }
+        _check_cancel()  # v1.4.2 紧急停止：发请求前检查
+        resp = _req.post(endpoint,
+            headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+            json=payload, timeout=(5, timeout))
+        data = resp.json()
+        # v1.4.7 WS-C：debug 落盘钩子（早于文本提取，捕获完整 raw）
+        try:
+            if _usage_extractor is not None:
+                _api_type = _usage_extractor.resolve_api_type(
+                    endpoint,
+                    custom_endpoint=provider.get('custom_endpoint', '') if isinstance(provider, dict) else None)
+                _usage_extractor._debug_dump_response(active, mdl, endpoint, data, None)
+        except Exception:
+            pass
+        if not data.get('choices'):
+            raise RuntimeError(f'API 返回异常: {data}')
+        text = data['choices'][0]['message']['content']
+    # v1.4.7 WS-C：成功路径上抽取 usage（6 步降级链 + §3 兜底估算）
+    # 任何路径异常吞掉，usage=None 也不影响 text 返回（调用方继续走主流程）
+    _usage = None
+    try:
+        if _usage_extractor is not None:
+            _api_type = _usage_extractor.resolve_api_type(
+                endpoint,
+                custom_endpoint=provider.get('custom_endpoint', '') if isinstance(provider, dict) else None)
+            _usage = _usage_extractor.extract(data, provider=active, api_type=_api_type)
+            if _usage is None:
+                # 抽取失败 → §3 兜底估算
+                _usage = _usage_extractor.estimate_fallback(
+                    text, prompt, active, max_side=0, max_tok=max_tokens)
+    except Exception:
+        _usage = None
+    # v1.4.7 集成收口（T-C5 单点落账）：extract/兜底之后每请求恰记一行；
+    # call_site 用调用方传入的审计标签（定位/读总数/读省份/状态机/异常检测/表格定位）；
+    # 价格缺失按 0、估算行 is_estimate=true；落账失败吞掉，绝不影响 text 返回。
+    try:
+        if _usage is not None and _usage_store is not None:
+            _u_pricing = _load_usage_pricing()
+            _u_entry = (_u_pricing.get(active) or {}).get(mdl) if isinstance(_u_pricing, dict) else None
+            _u_cost = _usage_extractor.compute_cost(_usage, _u_entry)
+            _usage_store.record(active, _api_type, mdl, endpoint, _usage, _u_cost,
+                                str(_usage.get('source') or '').startswith('fallback'),
+                                call_site=(call_site or 'vision'), batch_id='')
+    except Exception:
+        pass
+    return text, mdl, _usage
 
 
 def _load_screenshot_b64(screenshot_path: str = None, max_side: int = 1280, quality: int = 75) -> tuple:
@@ -381,7 +460,9 @@ def _locate_elements_once(screenshot_path: str = None) -> dict:
 2. "查询"按钮的中心点
 输出严格JSON: {"dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY},"confidence":0.XX}"""
     # v1.4.5（bug hunt F9）：定位链读取超时对齐 180s（大表/4K 图模型处理可 >30s，30s 必误判）
-    content = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180)
+    # v1.4.7 WS-C：vision 三元组 (text, mdl, usage)，_usage 可弃用但解构必须三值
+    content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180,
+                                              call_site='locate_elements')
     result = _parse_json_obj(content)
     if not result:
         return None
@@ -464,7 +545,9 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
               '"共 128 条" → 128、"总共 5 条" → 5。忽略每页条数下拉框（如"每页10条"）。'
               '只输出数字，找不到输出 0。')
     try:
-        content = _call_vision_api(img_b64, prompt, max_tokens=16, timeout=180)
+        # v1.4.7 WS-C：vision 三元组
+        content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=16, timeout=180,
+                                                  call_site='read_total_count')
         return _parse_total_count(content)
     except VisionCancelled:
         raise  # v1.4.2 紧急停止：取消异常透传
@@ -516,7 +599,9 @@ def ai_read_selected_province(screenshot_path: str = None, region=None) -> str:
                   '当前显示的省份名。只输出省份名（如 "云南" "广东省"），'
                   '如果显示 "全部"/"所有地区" 或无法识别，输出空字符串。')
     try:
-        content = _call_vision_api(img_b64, prompt, max_tokens=32, timeout=15)
+        # v1.4.7 WS-C：vision 三元组
+        content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=32, timeout=15,
+                                                  call_site='read_selected_province')
         content = (content or '').strip().strip('"').strip("'").strip()
         return content or None
     except VisionCancelled:
@@ -549,7 +634,9 @@ def ai_check_page_state(screenshot_path: str = None) -> dict:
               '5. empty：页面空白或加载失败\n'
               '输出严格JSON: {"state": "normal", "hint": "一句话简述"}')
     try:
-        content = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15)
+        # v1.4.7 WS-C：vision 三元组
+        content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15,
+                                                  call_site='check_page_state')
         import json as _json
         text = (content or '').strip()
         if '```' in text:
@@ -588,7 +675,9 @@ def ai_detect_anomaly(screenshot_path: str = None) -> dict:
               '输出严格JSON: {"anomaly": true或false, "type": "验证码"或"弹窗"或null, '
               '"hint": "一句话说明，无异常填null"}')
     try:
-        content = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15)
+        # v1.4.7 WS-C：vision 三元组
+        content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15,
+                                                  call_site='detect_anomaly')
         import json as _json
         text = (content or '').strip()
         if '```' in text:
@@ -688,7 +777,9 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
 6. rows：表格内容行的垂直边界（相对整图比例 top/bottom），按从上到下顺序，含表头行。格式：[{"top": 0.XX, "bottom": 0.YY}, ...]，最多返回 20 行；识别不了填 []
 输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "rows": [{"top": 0.XX, "bottom": 0.YY}], "confidence": 0.XX}"""
     # v1.4.5（bug hunt F9）：表格定位（滚动轮每轮）读取超时对齐 180s
-    content = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180)
+    # v1.4.7 WS-C：vision 三元组
+    content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180,
+                                              call_site='locate_table')
     result = _parse_json_obj(content)
     if not result:
         return None

@@ -29,3 +29,10 @@ config.ini
 .env
 reports/*.json
 *_output.txt
+# v1.4.7 WS-C：用量运行时产物不入仓（SPEC §7.1/§11.2）
+usage_log.jsonl
+usage_log_observed.jsonl
+output/usage_archive/
+# v1.4.7 WS-A：历史库运行时产物不入仓
+history.db
+history.db.corrupt
