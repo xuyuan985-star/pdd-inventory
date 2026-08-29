@@ -23,6 +23,57 @@ try:
 except Exception:
     history_db = None
 
+# ── t9 动效基建（模块级，纯函数 + 总开关） ──
+# ANIMATIONS_ENABLED 总开关：低配机/无障碍偏好/UI 性能问题改 False 全关（无需改业务代码）
+ANIMATIONS_ENABLED = True
+
+
+def _lerp_hex(a, b, t):
+    """t9 基建：hex 颜色线性插值（纯函数，可单测）。t ∈ [0,1]，返回 '#RRGGBB'。
+
+    容错：a/b 不是 #RRGGBB 6 位 hex 时返回 b（降级到终态）。
+    """
+    try:
+        if not (isinstance(a, str) and isinstance(b, str)):
+            return b
+        if len(a) != 7 or len(b) != 7 or a[0] != '#' or b[0] != '#':
+            return b
+        ar, ag, ab = int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16)
+        br, bg, bb = int(b[1:3], 16), int(b[3:5], 16), int(b[5:7], 16)
+        t = max(0.0, min(1.0, float(t)))
+        r = int(ar + (br - ar) * t)
+        g = int(ag + (bg - ag) * t)
+        bl = int(ab + (bb - ab) * t)
+        return f'#{r:02X}{g:02X}{bl:02X}'
+    except Exception:
+        return b
+
+
+def _cancel_after_jobs(win, job_ids):
+    """t9 基建：取消 win.after 句柄列表，吞 TclError（widget 已销毁常见）。"""
+    for jid in (job_ids or []):
+        try:
+            if jid:
+                win.after_cancel(jid)
+        except Exception:
+            pass
+
+
+def _meltdown_animations():
+    """t11 ⑤修：动效熔断——异常时翻 ANIMATIONS_ENABLED=False（模块级），后续所有动效早 return。
+
+    v4f 评审：原 except:pass 是注释谎言（无任何地方写 False）——动效持续异常时会卡死。
+    本函数被任何动效回调的 except 分支调用，once-per-process 翻转，确保主流程零影响。
+    """
+    global ANIMATIONS_ENABLED
+    if ANIMATIONS_ENABLED:
+        ANIMATIONS_ENABLED = False
+        try:
+            from logger import log
+            log.warn('[t11 ⑤] 动效回调连续异常，已熔断——后续动效全部跳过（业务零影响）')
+        except Exception:
+            pass
+
 # ── 抢先设置 DPI 感知，防止 pyautogui 截图后窗口缩放 ──
 if sys.platform == 'win32':
     import ctypes
@@ -200,6 +251,14 @@ class _CanvasBtn:
     def _hover(self, e):
         if self._state == 'disabled':
             return
+        # t9 A：按钮 hover 5 步插值（v4f：每按钮独立 after job 句柄，disabled 态抢先落终态）
+        if ANIMATIONS_ENABLED and self.poly is not None and self.owner is not None and hasattr(self.owner, '_animate_btn_hover'):
+            try:
+                self.owner._animate_btn_hover(self, enter=True)
+                return
+            except Exception:
+                pass
+        # 降级：直接跳终态（兼容 ANIMATIONS_ENABLED=False 或 owner 异常）
         c = self._colors
         hov = c.get('bg_hover')
         if hov and self.poly is not None:
@@ -215,6 +274,14 @@ class _CanvasBtn:
                 pass
 
     def _leave(self, e):
+        # t9 A：leave 同样走 5 步插值回到 bg
+        if ANIMATIONS_ENABLED and self.poly is not None and self.owner is not None and hasattr(self.owner, '_animate_btn_hover'):
+            try:
+                self.owner._animate_btn_hover(self, enter=False)
+                return
+            except Exception:
+                pass
+        # 降级
         self._apply()
 
 
@@ -402,6 +469,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self._theme_name = load_theme_pref()
         self._theme_redraws = []  # 主题重绘注册表（Canvas 装饰/按钮）
         self._theme_spec = {}
+        # t9 动效：按目标 widget 分键的 after job 注册表（取消时先 snap 终态再 cancel）
+        self._anim_jobs = {}
         self._apply_theme(self._theme_name)
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
@@ -965,11 +1034,11 @@ class App(SettingsUIMixin, StatsPagesMixin):
         primary_row = tk.Frame(self.page_home, bg=self.C_BG)
         primary_row.pack(fill="x", padx=15, pady=(8, 4))
         # 实时截图 = 左侧主入口（最常用，作为默认焦点）
-        self.live_btn = self._mk_btn(primary_row, "实时截图", self._live_screenshot, kind='dark',
+        self.live_btn = self._mk_btn(primary_row, "截图", self._live_screenshot, kind='dark',
                                      font=(self.FONT[0], 9, 'bold'),
                                      pack_side="left", padx=12)  # v1.4.5 bug hunt F24：保存引用供批量期间禁用
         # 📥 导入表格 = 右侧并列主入口（从原 text 弱样式提升为 dark，与左侧几何对称）
-        self._mk_btn(primary_row, "📥 导入表格", self._import_table, kind='dark',
+        self._mk_btn(primary_row, "导入", self._import_table, kind='dark',
                      font=(self.FONT[0], 9, 'bold'),
                      pack_side="left", padx=12)  # 与左侧实时截图同 padx——视觉等重
         # 单次识别双模型开关（v1.3：不在乎 token 成本，默认开，识别更准）
@@ -982,12 +1051,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 2) 第二排（次要功能）：刷新计算 + 批量识别——仍在第一屏可见可点，不新增层级
         btn_row = tk.Frame(self.page_home, bg=self.C_BG)
         btn_row.pack(fill="x", padx=15, pady=(0, 6))
-        self._mk_btn(btn_row, "🔄 刷新计算", self._recalc_from_rows, kind='dark',
+        self._mk_btn(btn_row, "刷新", self._recalc_from_rows, kind='dark',
                      font=(self.FONT[0], 9), pack_side="left")
-        self._mk_btn(btn_row, "📋 批量识别", self._batch_scan, kind='dark',
+        self._mk_btn(btn_row, "批量", self._batch_scan, kind='dark',
                      pack_side="left", padx=10)
         # 「截图识别」保留在第二排右侧（针对已有图片文件场景，与实时截图互补）
-        self._mk_btn(btn_row, "截图识别", self._ocr_fill, kind='text', pack_side="right")
+        self._mk_btn(btn_row, "识图", self._ocr_fill, kind='text', pack_side="right")
         
         # ── 当前地区（刷新计算按钮正下方一行，左对齐；识别后更新）──
         region_line = tk.Frame(self.page_home, bg=self.C_BG)
@@ -1000,12 +1069,14 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # t27 实施包 A (④)：导出 Excel 按钮降权——13pt bold 16w×2h 视觉权重
         # 超过数据入口（9pt bold），违反动线。改为与次级按钮一致（9pt bold 常规
         # 尺寸），kind/command 不动。
-        self.export_btn = self._mk_btn(self.page_home, "导出 Excel", self._export,
+        self.export_btn = self._mk_btn(self.page_home, "导出", self._export,
                   kind='primary', font=(self.FONT[0], 9, 'bold'),
                   pack_side=None)
         self.export_btn.pack(pady=(12, 4))
-        tk.Label(self.page_home, textvariable=self.status_text,
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(pady=(0, 4))
+        # t9 动效 C：状态反馈脉冲——保留 Label 引用供 _pulse_status 调用
+        self.status_label = tk.Label(self.page_home, textvariable=self.status_text,
+                 font=(self.FONT[0], 8), fg=self.C_MUTED)
+        self.status_label.pack(pady=(0, 4))
         
         # ── 结果表（纯炭黑卡片，无任何轮廓线）──
         self.result_frame = tk.Frame(self.page_home, bg=self.C_CARD_HDR)
@@ -1195,10 +1266,21 @@ class App(SettingsUIMixin, StatsPagesMixin):
     def _highlight_nav(self, page):
         for btn in self.nav_buttons.values():
             if getattr(btn, '_page', None) == page:
-                # 选中项：深炭黑背景高亮（参考站，不用黄竖线）
+                # 选中项：立即跳变（一点即用优先，不动画）
                 btn.configure(bg=self.C_CARD_HDR, fg="#FFFFFF")
             else:
-                btn.configure(bg=self.C_BG, fg=self.C_TEXT)
+                # t11 ③ + 队长复核修正：先判动画资格——_animate_nav_leave 的动画链
+                # 自保证终态（_do 终步 configure + 异常熔断 + cancel snap 三重兜底），
+                # 若先无条件 configure 再判 _cur==C_CARD_HDR 则永远读到 C_BG、
+                # 渐隐动画永不触发（无害死代码）。非动画位显式 configure 兜底不漏配。
+                try:
+                    _cur = str(btn.cget('bg')).lower()
+                except Exception:
+                    _cur = ''
+                if _cur == str(self.C_CARD_HDR).lower() and ANIMATIONS_ENABLED:
+                    self._animate_nav_leave(btn)
+                else:
+                    btn.configure(bg=self.C_BG, fg=self.C_TEXT)
 
     def _show_page(self, page):
         if self._current_page:
@@ -1723,6 +1805,211 @@ class App(SettingsUIMixin, StatsPagesMixin):
         """注册主题重绘回调（_apply_theme 末尾统一执行）"""
         if fn not in self._theme_redraws:
             self._theme_redraws.append(fn)
+
+    # ── t9 动效 C/D/A/B 实现 + 熔断基建 ──
+
+    def _pulse_status(self, accent_color=None):
+        """t9 C：状态反馈脉冲——status_label fg 两跳（current→accent→current，~300ms）。
+
+        必须用 _register_redraw 兼容主题：脉冲后回到**当前主题 fg**（_tc 实时查）而非构造时快照。
+        全异常吞掉（动效绝不影响主流程）。
+        """
+        if not ANIMATIONS_ENABLED:
+            return
+        try:
+            _lbl = getattr(self, 'status_label', None)
+            if _lbl is None:
+                return
+            try:
+                if not _lbl.winfo_exists():
+                    return
+            except Exception:
+                return
+            # 取消同 label 上挂着的旧 after job（v4f：先 snap 终态再 cancel）
+            _key = ('pulse_status', id(_lbl))
+            _cancel_after_jobs(self.win, self._anim_jobs.get(_key, []))
+            # 终态色 = 当前主题 C_TEXT（实时查，主题切换不偏色）
+            _end = self.tc('C_TEXT', '#1F1F1F')
+            _accent = accent_color or self.tc('C_PRIMARY', '#FFE600')
+            if not (_end.startswith('#') and _accent.startswith('#')):
+                return
+            # 两跳：T=0 步 end→accent；T=150ms 步 accent→end；每步 16ms 插值
+            _steps = 6  # 6 步×16ms ≈ 100ms/跳，合计 ~200ms
+            # t11 ⑧b：起拍时捕获 label 当前 fg，终态回到该值（非硬编码 C_TEXT）——
+            # 原 status_label fg=C_MUTED，脉冲回 C_TEXT 会让状态栏永久变深
+            try:
+                _start_fg = str(_lbl.cget('fg'))
+            except Exception:
+                _start_fg = _end
+            def _do(step, sub):
+                try:
+                    if not _lbl.winfo_exists():
+                        return
+                    if step >= _steps:
+                        # t11 ⑧a：终态实时 self.tc 查主题，不复用启动快照
+                        _cur_end = self.tc('C_TEXT', '#1F1F1F')
+                        _cur_start = _start_fg if _start_fg.startswith('#') else _cur_end
+                        _lbl.configure(fg=_cur_start if sub == 1 else _cur_end)
+                        self._anim_jobs[_key] = []
+                        return
+                    t = step / float(_steps)
+                    # t11 ⑧a：每步实时 self.tc 查主题（200ms 内切主题不残留旧色）
+                    _cur_end = self.tc('C_TEXT', '#1F1F1F')
+                    _cur_accent = self.tc('C_PRIMARY', '#FFE600') if not accent_color else accent_color
+                    if sub == 0:
+                        c = _lerp_hex(_cur_end, _cur_accent, t)
+                    else:
+                        c = _lerp_hex(_cur_accent, _cur_end, t)
+                    _lbl.configure(fg=c)
+                    jid = self.win.after(16, lambda: _do(step + 1, sub))
+                    self._anim_jobs.setdefault(_key, []).append(jid)
+                except Exception:
+                    # t11 ⑤修：真熔断——动效回调异常时翻 ANIMATIONS_ENABLED=False
+                    try:
+                        self._anim_jobs[_key] = []
+                    except Exception:
+                        pass
+                    _meltdown_animations()
+            _do(0, 0)
+            # 第二跳：用 after 延迟 100ms 后启动
+            _jid = self.win.after(100, lambda: _do(0, 1))
+            self._anim_jobs.setdefault(_key, []).append(_jid)
+        except Exception:
+            _meltdown_animations()
+
+    def _set_batch_btn_state(self, busy):
+        """t9 D：批量期间按钮禁用+文案变化补全。
+
+        busy=True：禁用 export_btn/live_btn，文案改"导出中…"/"识别中…"
+        busy=False：恢复 normal 与原文案
+        """
+        try:
+            _btns = [
+                ('export_btn', '导出', getattr(self, 'export_btn', None)),
+                ('live_btn', '实时截图', getattr(self, 'live_btn', None)),
+            ]
+            for _attr, _orig_text, _b in _btns:
+                if _b is None:
+                    continue
+                try:
+                    if not _b.winfo_exists():
+                        continue
+                except Exception:
+                    continue
+                if busy:
+                    # 记录原文案供恢复（v4f：仅首次记录，避免重复 set 覆盖）
+                    if not hasattr(_b, '_orig_text'):
+                        try:
+                            _b._orig_text = _b.cget('text')
+                        except Exception:
+                            _b._orig_text = _orig_text
+                    _b.configure(state='disabled')
+                    _b.configure(text=f'{_orig_text}中…')
+                else:
+                    _b.configure(state='normal')
+                    if hasattr(_b, '_orig_text'):
+                        _b.configure(text=_b._orig_text)
+                        try:
+                            del _b._orig_text
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    def _animate_btn_hover(self, btn, enter):
+        """t9 A：按钮 hover 5 步插值（_mk_btn 统一接入）。
+
+        v4f 修正：每按钮独立 after job 句柄（id(btn) 为键）；disabled 态抢先落终态不动画。
+        """
+        if not ANIMATIONS_ENABLED:
+            return
+        try:
+            if btn is None:
+                return
+            if getattr(btn, '_state', None) == 'disabled':
+                return  # 禁用态抢先落终态不动画
+            canvas = getattr(btn, 'canvas', None) or getattr(btn, '_canvas', None)
+            poly = getattr(btn, 'poly', None)
+            if canvas is None or poly is None:
+                return
+            _colors = btn._colors
+            _end = _colors.get('bg', '#FFE600')
+            _hov = _colors.get('bg_hover', _end)
+            _a, _b = (_end, _hov) if enter else (_hov, _end)
+            if _a == _b:
+                return
+            _key = ('btn_hover', id(btn))
+            # 取消旧 after job（v4f：先 snap 终态再 cancel）
+            _cancel_after_jobs(self.win, self._anim_jobs.get(_key, []))
+            _steps = 5
+            def _do(step):
+                try:
+                    if not canvas.winfo_exists():
+                        return
+                    if getattr(btn, '_state', None) == 'disabled':
+                        # t11 ②修：disabled snap 到禁用色（tc 主题键+fallback 模式，非新 token），
+                        # 避免动画中变禁用的按钮被涂回正常色
+                        _disabled = self.tc('btn.disabled', self.C_SURFACE)
+                        canvas.itemconfigure(poly, fill=_disabled)
+                        self._anim_jobs[_key] = []
+                        return
+                    if step >= _steps:
+                        canvas.itemconfigure(poly, fill=_b)
+                        self._anim_jobs[_key] = []
+                        return
+                    t = step / float(_steps)
+                    c = _lerp_hex(_a, _b, t)
+                    canvas.itemconfigure(poly, fill=c)
+                    jid = self.win.after(16, lambda: _do(step + 1))
+                    self._anim_jobs.setdefault(_key, []).append(jid)
+                except Exception:
+                    # t11 ⑤修：真熔断
+                    _meltdown_animations()
+            _do(0)
+        except Exception:
+            _meltdown_animations()
+
+    def _animate_nav_leave(self, btn):
+        """t9 B：导航选中过渡——选中位立即跳变（一点即用），离开位 6 步 100ms 渐隐回 C_BG。
+
+        调用时机：_highlight_nav 即将把旧高亮按钮改回 C_BG 时。
+        t11 ③修：导航按钮是 tk.Button（无 canvas 属性），不能用 canvas gate；
+        _do 内只用 btn.configure，对 tk.Button 本就可用。_highlight_nav 已先
+        configure(bg=C_BG) 兜底，本函数失败也只是动画效果缺失，不影响最终视觉。
+        """
+        if not ANIMATIONS_ENABLED:
+            return
+        try:
+            if btn is None:
+                return
+            try:
+                if not btn.winfo_exists():
+                    return
+            except Exception:
+                return
+            _bg = self.tc('C_BG', '#FFFFFF')
+            _key = ('nav_leave', id(btn))
+            _cancel_after_jobs(self.win, self._anim_jobs.get(_key, []))
+            _steps = 6
+            def _do(step):
+                try:
+                    if not btn.winfo_exists():
+                        return
+                    if step >= _steps:
+                        btn.configure(bg=_bg, fg=self.tc('C_TEXT', '#1F1F1F'))
+                        self._anim_jobs[_key] = []
+                        return
+                    t = step / float(_steps)
+                    c = _lerp_hex(self.tc('C_CARD_HDR', '#1F1F1F'), _bg, t)
+                    btn.configure(bg=c)
+                    jid = self.win.after(16, lambda: _do(step + 1))
+                    self._anim_jobs.setdefault(_key, []).append(jid)
+                except Exception:
+                    # t11 ⑤修：真熔断
+                    _meltdown_animations()
+            _do(0)
+        except Exception:
+            _meltdown_animations()
 
     def _apply_theme(self, name):
         """应用皮肤：更新类属性 + 递归刷新所有控件颜色 + 重绘注册元素"""
@@ -2507,7 +2794,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             return
         known = sorted(self.regions.keys())
         if not known:
-            messagebox.showinfo("批量识别", "暂无知地区，请先手动「实时截图」识别一次")
+            messagebox.showinfo("批量识别", "暂无知地区，请先手动「截图」识别一次")
             return
         
         # 选择地区对话框
@@ -2603,6 +2890,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
             # 防双批并发互相覆盖取消钩子/物理争抢鼠标键盘；fix-review C10：过滤 None）
             for btn in [b for b in [self.export_btn, getattr(self, 'live_btn', None)] if b]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
+            # t9 D：批量期间按钮文案变化补全（config(text=) 模式同 gui.py:122-124）
+            self.win.after(0, lambda: self._set_batch_btn_state(True))
             self.status_text.set("批量识别中 — 请不要操作")
             def _batch_thread_wrapper():
                 """线程包装：任何异常都写日志 + 提示，避免静默死掉（窗口不恢复）
@@ -2639,6 +2928,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         self.win.after(0, lambda: self.export_btn.configure(state='normal'))
                         self.win.after(0, lambda: (self.live_btn.configure(state='normal')
                                                    if getattr(self, 'live_btn', None) else None))
+                        # t9 D：异常路径恢复按钮文案
+                        self.win.after(0, lambda: self._set_batch_btn_state(False))
                     except Exception:
                         pass  # 主窗口可能已销毁/关闭，UI 恢复失败无妨（程序正在退出）
                     self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：异常路径主动清除，防卡死
@@ -3600,6 +3891,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 self.live_btn.configure(state='normal')  # v1.4.5 bug hunt F24
         except Exception:
             pass
+        # t9 D：恢复按钮文案（与禁用态对称）
+        self._set_batch_btn_state(False)
         self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：UI 真正收尾时清除标志
         self._refresh_cost_label()  # v1.4.7 WS-C：批量收尾主动刷费用 Label
         self.status_text.set("就绪 — 批量识别完成")
@@ -4640,6 +4933,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
             export_dir = _get_default_export_dir()
             path = export_cache_to_xlsx(self.cache, export_dir)
             self.status_text.set(f"已导出 {len(self.cache)} 个地区 → PDD补货记录.xlsx")
+            # t9 C：导出完成状态反馈脉冲
+            self._pulse_status()
             try:
                 os.startfile(export_dir)
             except OSError as e:

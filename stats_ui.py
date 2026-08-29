@@ -283,12 +283,12 @@ class StatsPagesMixin:
         self._lbl(content, text="估算仅供参考：'~' 前缀行为兜底估算（不计费）；'?' 为未配置价格"
                                 "——请在下方价格表填写官方刊例价（元/百万 token，图片价按张）",
                   font=(self.FONT[0], 7), fg=self.C_MUTED, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(0, 4))   # t28 (a-5): padx=14→16
+            anchor='w', padx=16, pady=(0, 8))   # t8 A7：统一垂直节奏 8px
 
         # ── 价格表编辑（双击单元格改值；「保存价格表」写 Config['usage']['pricing']）──
         self._lbl(content, text="价格表（元/百万 token；image_per_call 为每张图价，可留空）",
                   font=(self.FONT[0], 9, 'bold'), fg=self.C_TEXT, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(4, 2))   # t28 (a-5): padx=14→16
+            anchor='w', padx=16, pady=(0, 8))   # t8 A7：统一垂直节奏 8px
         pcols = ('provider', 'model', 'input', 'output', 'image')
         pheads = (('provider', '提供商', 90), ('model', '模型名', 220),
                   ('input', '输入价', 90), ('output', '输出价', 90),
@@ -297,7 +297,7 @@ class StatsPagesMixin:
         for cid, text, w in pheads:
             ptree.heading(cid, text=text)
             ptree.column(cid, width=w, anchor='center')
-        ptree.pack(fill='x', padx=16, pady=(2, 2))   # t28 (a-5): padx=14→16, pady=(2,2)
+        ptree.pack(fill='x', padx=16, pady=(0, 8))   # t8 A7：统一垂直节奏 8px
         _PFIELDS = ('provider', 'model', 'input', 'output', 'image')
         rows_data = {}
         _row_seq = [0]
@@ -499,8 +499,11 @@ class StatsPagesMixin:
                      font=(self.FONT[0], 8)).pack(side="left", padx=3)
         self._mk_btn(pbtns, "保存价格表", save_pricing, kind='primary',
                      font=(self.FONT[0], 8, 'bold')).pack(side="right", padx=3)
-        self._mk_btn(pbtns, "重置本月数据", reset_this_month, kind='ghost',
-                     font=(self.FONT[0], 8)).pack(side="right", padx=3)
+        # t8 实施 A8：重置本月数据——危险操作·用 C_RED_BG 视觉区分（v4f 修正：不新建 _warn_btn，复用 _mk_btn 返回值 config）
+        _reset_btn = self._mk_btn(pbtns, "重置本月数据", reset_this_month, kind='primary',
+                     font=(self.FONT[0], 8))
+        _reset_btn.configure(bg=self.C_RED_BG)
+        _reset_btn.pack(side="right", padx=3)
 
         self._usage_page = page
         self._usage_page_refresh()

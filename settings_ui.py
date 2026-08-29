@@ -35,10 +35,16 @@ class SettingsUIMixin:
         def _mw(e): canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
         canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _mw))
         canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
+        # t8 实施 B1：canvas 提升为 self 属性，供 5 段锚点按钮实时计算 winfo_y
+        self._general_canvas = canvas
+        # t8 实施 B1：5 段段名→锚点 Frame 引用字典（build 时填，click 时实时算 y）
+        self._general_anchors = {}
 
         # ── 导出路径模块（浅灰白卡片容器）──
         _m1 = tk.Frame(content, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         _m1.pack(fill="x", padx=20, pady=8)
+        # t8 B1：本段段名锚点（用于顶部 _anchor_btns 跳锚；取卡片自身即可，winfo_y 即顶）
+        self._general_anchors['导出路径'] = _m1
         self._lbl(_m1, text='导出路径', font=self.FONT_HEADING, bg=self.C_BG,
                  fg=self.C_SECONDARY).pack(pady=(12,2))
         self._lbl(_m1, text="Excel 导出文件的保存位置", font=(self.FONT[0], 8),
@@ -70,16 +76,30 @@ class SettingsUIMixin:
                 messagebox.showwarning("无法打开", f"打开文件夹失败：{e}", parent=self.win)
         self._mk_btn(pf, '打开文件夹', open_export_dir, kind='ghost', font=(self.FONT[0], 8), pack_side='left', padx=5)
         self._mk_btn(_m1, '保存', lambda: self._save_settings(None), kind='primary', font=(self.FONT[0], 9, 'bold'), width=12).pack_configure(pady=(5,12))
-        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
 
         # ── 定位校准（AI 智能定位，v1.3 起唯一模式）──
         # t27 ⑤：原 _build_calibrate_tab 改名为 _build_calibrate_inline
+        # t8 B1：校准段锚点——取该函数内创建并 pack 的 ai_card 作为锚
         self._build_calibrate_inline(content)
-        ttk.Separator(content, orient='horizontal').pack(fill='x', padx=20, pady=5)
+        try:
+            _cal_anchor = None
+            for _c in reversed(content.winfo_children()):
+                if isinstance(_c, tk.Frame):
+                    _info = _c.pack_info()
+                    if _info.get('fill') == 'x' and _c not in self._general_anchors.values():
+                        _cal_anchor = _c
+                        break
+            if _cal_anchor is not None:
+                self._general_anchors['定位校准'] = _cal_anchor
+        except Exception:
+            pass
+        # t8 实施 A1：删两条 ttk.Separator，padding 8 承担段间距
 
         # ── 识别列配置模块（浅灰白卡片容器）──
         _m3 = tk.Frame(content, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         _m3.pack(fill="x", padx=20, pady=8)
+        # t8 B1：识别列配置段名锚点
+        self._general_anchors['识别列配置'] = _m3
         self._lbl(_m3, text='识别列配置', font=self.FONT_HEADING, bg=self.C_BG,
                  fg=self.C_SECONDARY).pack(pady=(12,2))
         self.col_status_var = tk.StringVar(self.win, value='')
@@ -94,7 +114,11 @@ class SettingsUIMixin:
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(pady=(0,10))
 
         # ── 副模型（双模型验证用，🛡 勾选时生效）──
-        sec_row = tk.Frame(content, bg=self.C_BG); sec_row.pack(padx=20, pady=4)   # t28 (b-1): 与卡片左缘对齐
+        # t8 实施 A2：sec_row 裸行包 C_BORDER 卡片，与上方识别列配置同形
+        _sec_card = tk.Frame(content, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
+        _sec_card.pack(fill="x", padx=20, pady=8)
+        self._general_anchors['副模型'] = _sec_card
+        sec_row = tk.Frame(_sec_card, bg=self.C_BG); sec_row.pack(padx=16, pady=10, fill='x')
         self._lbl(sec_row, text="副模型（双模型验证）:", font=(self.FONT[0], 8),
                  fg=self.C_TEXT).pack(side="left")
         from utils import get_secondary_model, save_secondary_model, get_api_config
@@ -135,10 +159,73 @@ class SettingsUIMixin:
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(padx=20, pady=(0, 8))   # t28 (b-1/a-3): 左缘对齐+8px
 
         # ── 授权管理（t12 P2-C）──
+        # t8 B1：授权管理段锚点——取该函数创建的最后一个 pack(fill=x) 子 Frame
         self._build_license_card(content)
+        try:
+            _last_lic = None
+            for _c in reversed(content.winfo_children()):
+                if isinstance(_c, tk.Frame):
+                    _info = _c.pack_info()
+                    if _info.get('fill') == 'x' and _c not in self._general_anchors.values():
+                        _last_lic = _c
+                        break
+            if _last_lic is not None:
+                self._general_anchors['授权管理'] = _last_lic
+        except Exception:
+            pass
 
         # ── 补货策略（t13 P3-A）──
+        # t8 B1：补货策略段锚点——同上取最后一个 fill=x 卡片
         self._build_replenishment_card(content)
+        try:
+            _last_rep = None
+            for _c in reversed(content.winfo_children()):
+                if isinstance(_c, tk.Frame):
+                    _info = _c.pack_info()
+                    if _info.get('fill') == 'x' and _c not in self._general_anchors.values():
+                        _last_rep = _c
+                        break
+            if _last_rep is not None:
+                self._general_anchors['补货策略'] = _last_rep
+        except Exception:
+            pass
+
+        # t8 B1：5 段段名锚点按钮行（页顶·滚动直达）
+        try:
+            _anchor_bar = tk.Frame(self.page_general, bg=self.C_BG)
+            _anchor_bar.pack(side='top', fill='x', padx=16, pady=(8, 4), before=canvas)
+            self._general_anchor_bar = _anchor_bar
+            for _name in self._general_anchors.keys():
+                self._mk_btn(_anchor_bar, _name,
+                             lambda n=_name: self._jump_to_general_anchor(n),
+                             kind='ghost', font=(self.FONT[0], 8)).pack(side='left', padx=2)
+        except Exception:
+            pass
+
+    def _jump_to_general_anchor(self, name):
+        """t8 B1：点击锚点按钮→实时计算目标段在 canvas scrollregion 内的 fraction，
+        调 yview_moveto 跳转。免 resize 重算（v4f 修正）。"""
+        try:
+            _cv = getattr(self, '_general_canvas', None)
+            _anchor = self._general_anchors.get(name)
+            if _cv is None or _anchor is None:
+                return
+            # 实时计算：scrollregion 是 (x, y, w, h)；anchor.y 是相对 content 的 y；
+            # fraction = anchor.y / scrollregion.h
+            _cv.update_idletasks()
+            _sr = _cv.cget('scrollregion')
+            if not _sr:
+                return
+            _x, _y, _w, _h = (float(v) for v in str(_sr).split())
+            if _h <= 0:
+                return
+            _ay = _anchor.winfo_y()
+            _frac = _ay / _h
+            # 留 8px 视觉余量（向上稍微多滚一点，让段名不被锚按钮行遮挡）
+            _frac = max(0.0, _frac - 0.01)
+            _cv.yview_moveto(_frac)
+        except Exception:
+            pass
 
     def _build_replenishment_card(self, parent):
         """t13 P3-A 补货策略卡片：模型单选（经典/加权）+ safety_days + in_transit_qty。
@@ -605,7 +692,8 @@ class SettingsUIMixin:
         canvas_frame = tk.Frame(parent, bg=self.C_BG)
         canvas_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
-        canvas = tk.Canvas(canvas_frame, height=220, highlightthickness=0, bg=self.C_BG)
+        # t8 实施 A6：删 height=220 改 fill+expand 自适应（v4f 修正：禁用 winfo_height//2 方案）
+        canvas = tk.Canvas(canvas_frame, highlightthickness=0, bg=self.C_BG)
         scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
         self._settings_list_frame = tk.Frame(canvas, bg=self.C_BG)
 
@@ -722,6 +810,9 @@ class SettingsUIMixin:
 
         cards_frame = tk.Frame(parent, bg=self.C_BG)
         cards_frame.pack(fill="x", padx=15, pady=10)
+        # t8 实施 A3：4 卡 2×2 网格（列等权）
+        cards_frame.columnconfigure(0, weight=1)
+        cards_frame.columnconfigure(1, weight=1)
 
         def select_theme(name):
             self._apply_theme(name)
@@ -730,7 +821,7 @@ class SettingsUIMixin:
             for child in cards_frame.winfo_children():
                 is_sel = getattr(child, '_skin_name', '') == name
                 ac = THEMES.get(name, {}).get('C_ACCENT', '#3B82F6')
-                child.configure(highlightbackground=ac if is_sel else "#E2E8F0",
+                child.configure(highlightbackground=ac if is_sel else self.C_BORDER,
                                highlightthickness=2 if is_sel else 1)
                 for gc in child.winfo_children():
                     if isinstance(gc, tk.Frame):
@@ -745,10 +836,12 @@ class SettingsUIMixin:
             ac = theme_data['C_ACCENT']
 
             is_sel = name == self._theme_name
+            # t8 实施 A4：#E2E8F0 → self.C_BORDER（零新 token）
             card = tk.Frame(cards_frame, bg="#FFFFFF",
-                           highlightbackground=ac if is_sel else "#E2E8F0",
+                           highlightbackground=ac if is_sel else self.C_BORDER,
                            highlightthickness=2 if is_sel else 1)
-            card.pack(fill="x", padx=4, pady=6)
+            # t8 实施 A3：2×2 网格（行 = i//2, 列 = i%2）
+            card.grid(row=i // 2, column=i % 2, padx=4, pady=6, sticky="nsew")
             card._skin_name = name
             card._skip_theme = True
 
@@ -983,9 +1076,12 @@ class SettingsUIMixin:
                  fg=self.C_TEXT, relief='flat', bd=0, highlightthickness=1,
                  highlightbackground="#EAEAEA").pack(side="left", padx=5)
 
-        acc_frame = tk.Frame(parent, bg=self.C_BG)
-        acc_frame.pack(fill="x", padx=20, pady=6)   # t28 (b-2): 5→6
-        self._lbl(acc_frame, text="登录账号:", font=self.FONT, width=9, anchor="e").pack(side="left")   # t28 (b-2): 10→9
+        # t8 实施 A5：账号+密码合凭据卡（公开信息 URL 在卡外，隐私凭据在卡内）
+        _cred_card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
+        _cred_card.pack(fill="x", padx=20, pady=(6, 6))
+        acc_frame = tk.Frame(_cred_card, bg=self.C_BG)
+        acc_frame.pack(fill="x", padx=10, pady=(10, 4))
+        self._lbl(acc_frame, text="登录账号:", font=self.FONT, width=9, anchor="e").pack(side="left")
         acc_var = tk.StringVar(self.win, value=config.get('account', ''))
         acc_entry = tk.Entry(acc_frame, textvariable=acc_var, font=self.FONT, width=40, fg=self.C_MUTED, bg=self.C_BG)
         acc_entry.pack(side="left", padx=5)
@@ -1008,9 +1104,9 @@ class SettingsUIMixin:
                 entry.configure(fg=self.C_TEXT)
         _ph_entry(acc_entry, '输入手机号', acc_var)
 
-        pwd_frame = tk.Frame(parent, bg=self.C_BG)
-        pwd_frame.pack(fill="x", padx=20, pady=6)   # t28 (b-2): 5→6
-        self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=9, anchor="e").pack(side="left")   # t28 (b-2): 10→9
+        pwd_frame = tk.Frame(_cred_card, bg=self.C_BG)
+        pwd_frame.pack(fill="x", padx=10, pady=(4, 10))
+        self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=9, anchor="e").pack(side="left")
         # v1.4.8 P1-A：默认不保存密码——初始值永远不读已存密码（即便 config 里还有 legacy 值）
         # 仅当用户主动勾选「记住密码」且点保存时才落盘。已存密码提示用户可手动清除。
         pwd_var = tk.StringVar(self.win, value='')  # 永远从空开始，不预填

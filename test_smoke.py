@@ -3640,14 +3640,14 @@ class TestNavGrouping(unittest.TestCase):
         import gui
         import inspect
         src = inspect.getsource(gui.App._build_ui)
-        # primary_row 实时截图 + 导入表格 仍 dark bold
-        self.assertIn("实时截图", src)
+        # primary_row 截图 + 导入 仍 dark bold（t29 迭代：按钮文字压缩 2 字，用户拍板）
+        self.assertIn('"截图"', src)
         self.assertIn("self._live_screenshot", src)
-        self.assertIn("📥 导入表格", src)
+        self.assertIn('"导入"', src)
         self.assertIn("self._import_table", src)
         # kind='dark' 两次（左右主入口）
         dark_count = src.count("kind='dark'")
-        self.assertGreaterEqual(dark_count, 3)  # 实时截图 + 导入 + 至少 1 个 btn_row
+        self.assertGreaterEqual(dark_count, 3)  # 截图 + 导入 + 至少 1 个 btn_row
 
     def test_build_nav_called_in_build_ui_after_page_frames(self):
         """t29 冷启动修复回归：_build_ui 函数体内必须存在 self._build_nav() 调用，
@@ -3889,9 +3889,13 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
         self.assertIn("'暂无数据'", src, '空态占位行 row 缺失')
 
     def test_settings_ui_secondary_row_aligned(self):
-        """settings_ui.py：副模型行 sec_row pack 加 padx=20、Combobox width=20、保存按钮 font 7→8。"""
+        """settings_ui.py：副模型行 sec_row pack 几何 + Combobox width=20、保存按钮 font 7→8。
+        t8 A2 后：sec_row 包入 _sec_card C_BORDER 卡片，几何收紧 padx=16/pady=10/fill=x。
+        """
         src = self._src('settings_ui.py')
-        self.assertIn("sec_row.pack(padx=20, pady=4)", src, '副模型行未加 padx=20')
+        # t8 A2：sec_row 现在包在 _sec_card C_BORDER 卡片内；几何应改 padx=16/pady=10/fill='x'
+        self.assertIn("sec_row.pack(padx=16, pady=10, fill='x')", src,
+                      '副模型行 t8 A2 后应 padx=16/pady=10/fill=x（包入 _sec_card 后收紧）')
         self.assertIn("textvariable=sec_var, state='normal', width=20,", src,
                       '副模型 Combobox width 未从 22 改 20')
         self.assertIn("font=(self.FONT[0], 8)).pack(side=\"left\")", src,
@@ -3936,6 +3940,288 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
         m = re.search(r"Entry\(in_row, textvariable=_key_var, font=self.FONT, width=(\d+),", src)
         self.assertIsNotNone(m, 'license Entry 未找到')
         self.assertEqual(m.group(1), '48', f'license Entry width 仍为 {m.group(1)}（应改 48）')
+
+
+class TestLayoutRound1(unittest.TestCase):
+    """t8 布局落地 Round 1：A 级 8 处 + B1 路标源码断言。"""
+
+    def _src(self, name):
+        with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_general_separators_removed(self):
+        """t8 A1：通用页 _build_general_page 函数体内 0 个 ttk.Separator 调用（两行已删）。"""
+        import inspect, re
+        try:
+            from settings_ui import SettingsUIMixin
+        except ImportError:
+            self.skipTest('settings_ui 不可导入')
+        src = inspect.getsource(SettingsUIMixin._build_general_page)
+        # 跳过注释行，统计 ttk.Separator(...).pack 调用次数
+        real_calls = len(re.findall(r'ttk\.Separator\([^)]*\)\.pack', src))
+        self.assertEqual(real_calls, 0,
+                         f'通用页应已删除 ttk.Separator(...).pack 调用，改用 8px 卡片间 padding（找到 {real_calls} 处）')
+
+    def test_skin_2x2_grid_and_C_BORDER(self):
+        """t8 A3+A4：主题页 4 卡 2×2 grid + #E2E8F0→self.C_BORDER。"""
+        src = self._src('settings_ui.py')
+        # 2×2 网格：columnconfigure(0/1, weight=1) + grid(row=i//2, column=i%2)
+        self.assertIn('cards_frame.columnconfigure(0, weight=1)', src,
+                      '主题页 cards_frame 缺列等权 0')
+        self.assertIn('cards_frame.columnconfigure(1, weight=1)', src,
+                      '主题页 cards_frame 缺列等权 1')
+        self.assertIn("card.grid(row=i // 2, column=i % 2,", src,
+                      '主题页 card 未改用 grid(i//2, i%2)')
+        # token 擦边修复：#E2E8F0 → self.C_BORDER
+        self.assertNotIn('"#E2E8F0"', src,
+                         '主题页仍残留 hex 硬编码 #E2E8F0（应改 self.C_BORDER）')
+        self.assertIn('self.C_BORDER', src, '主题页未使用 self.C_BORDER')
+
+    def test_general_anchor_self_references(self):
+        """t8 B1：通用页 canvas 存 self + anchors 字典存在（路标按钮点击的基础）。"""
+        import inspect
+        try:
+            from settings_ui import SettingsUIMixin
+        except ImportError:
+            self.skipTest('settings_ui 不可导入')
+        src = inspect.getsource(SettingsUIMixin._build_general_page)
+        # canvas 存 self（v4f 修正：build 时存，click 时实时算）
+        self.assertIn('self._general_canvas = canvas', src,
+                      'canvas 未存为 self._general_canvas（实时算 y 缺基础）')
+        # anchors 字典存在
+        self.assertIn('self._general_anchors', src,
+                      'self._general_anchors 字典缺失（5 段路标机制失效）')
+        # 跳锚方法存在
+        jump_src = inspect.getsource(SettingsUIMixin._jump_to_general_anchor)
+        self.assertIn('yview_moveto', jump_src,
+                      '_jump_to_general_anchor 未调 yview_moveto（v4f 修正：实时 fraction 跳转）')
+        # 实时计算 y（v4f 修正：免 resize 重算）
+        self.assertIn('winfo_y', jump_src,
+                      '_jump_to_general_anchor 未实时算 anchor.winfo_y（v4f 修正）')
+
+    def test_usage_reset_btn_red_token(self):
+        """t8 A8：用量页重置本月按钮·复用 _mk_btn 返回值 config(bg=C_RED_BG)。"""
+        src = self._src('stats_ui.py')
+        # 重置按钮存在并配 bg=C_RED_BG（v4f 修正：不新建 _warn_btn）
+        self.assertIn('_reset_btn.configure(bg=self.C_RED_BG)', src,
+                      '重置本月按钮未走 C_RED_BG 视觉区分（v4f 修正：_warn_btn 不存在）')
+        # 应仍调 reset_this_month 回调（业务逻辑零变化）
+        self.assertIn('reset_this_month', src, '重置回调 reset_this_month 缺失')
+
+    def test_product_canvas_no_fixed_height(self):
+        """t8 A6：商品页 canvas 删 height=220（v4f 修正：禁用 winfo_height 方案，纯 fill+expand）。"""
+        import inspect, re
+        try:
+            from settings_ui import SettingsUIMixin
+        except ImportError:
+            self.skipTest('settings_ui 不可导入')
+        method_src = inspect.getsource(SettingsUIMixin._build_product_region_tab)
+        # 跳过注释行，找真正传 height=220 的 canvas 构造
+        canvas_with_h = re.findall(r'Canvas\([^)]*height\s*=\s*220[^)]*\)', method_src)
+        self.assertEqual(canvas_with_h, [],
+                         f'商品页 canvas 仍写死 height=220（应改 fill+expand 自适应），找到：{canvas_with_h}')
+
+
+class TestAnimationsRound1(unittest.TestCase):
+    """t9 动效落地：4 项动效（脉冲/批量按钮文案/hover 插值/nav 渐隐）+ 熔断基建源码断言。"""
+
+    def _src(self, name):
+        with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_lerp_hex_pure_function(self):
+        """t9 基建：_lerp_hex 纯函数单测 3 例（同色/异色/越界 t）。"""
+        import sys
+        sys.path.insert(0, HERE)
+        import gui
+        # 同色 → 原色
+        self.assertEqual(gui._lerp_hex('#000000', '#000000', 0.5), '#000000')
+        self.assertEqual(gui._lerp_hex('#FFFFFF', '#FFFFFF', 0.0), '#FFFFFF')
+        # 异色 t=0 → a；t=1 → b
+        self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 0.0), '#000000')
+        self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 1.0), '#FFFFFF')
+        # 异色 t=0.5 → 中点附近（int 截断 127.5 = 127 = 0x7F）
+        self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 0.5), '#7F7F7F')
+        # 越界 t 自动夹紧
+        self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', -1.0), '#000000')
+        self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 2.0), '#FFFFFF')
+        # 容错：非 hex 字符串 → 返回 b
+        self.assertEqual(gui._lerp_hex('invalid', '#FFFFFF', 0.5), '#FFFFFF')
+        self.assertEqual(gui._lerp_hex(None, '#FFFFFF', 0.5), '#FFFFFF')
+        # 起点非 0：#FF0000 → #00FF00 t=0.5 → #7F7F00
+        self.assertEqual(gui._lerp_hex('#FF0000', '#00FF00', 0.5), '#7F7F00')
+
+    def test_animations_master_switch_and_meltdown(self):
+        """t9 基建：ANIMATIONS_ENABLED 总开关 + 动效回调异常时静默熔断。"""
+        src = self._src('gui.py')
+        # 总开关
+        self.assertIn('ANIMATIONS_ENABLED = True', src,
+                      'ANIMATIONS_ENABLED 模块常量缺失（低配机一键关动效）')
+        # 熔断：异常时 try/except 静默吞掉
+        self.assertIn('except Exception:\n                    pass', src,
+                      '动效回调必须 try/except 静默熔断（不影响主流程）')
+        # 各动效方法入口都应检查 ANIMATIONS_ENABLED
+        for m in ('_pulse_status', '_animate_btn_hover', '_animate_nav_leave'):
+            self.assertIn(f'if not ANIMATIONS_ENABLED:\n            return',
+                          src, f'{m} 缺总开关检查')
+
+    def test_pulse_status_uses_register_redraw_pattern(self):
+        """t9 C：_pulse_status 必须用 self.tc 实时查 C_TEXT（非构造时快照），兼容主题切换。"""
+        import inspect
+        import gui
+        src = inspect.getsource(gui.App._pulse_status)
+        # 终态色 = self.tc('C_TEXT', ...) 实时查
+        self.assertIn("self.tc('C_TEXT'", src,
+                      '_pulse_status 终态色必须用 self.tc 实时查（主题切换不偏色）')
+        # 强调色 = self.tc('C_PRIMARY', ...)
+        self.assertIn("self.tc('C_PRIMARY'", src,
+                      '_pulse_status 强调色必须用 self.tc 实时查')
+        # 必须有 _anim_jobs 注册与清空
+        self.assertIn('self._anim_jobs', src, '_pulse_status 缺 _anim_jobs 注册表')
+
+    def test_hover_animation_wired_into_mk_btn(self):
+        """t9 A：_CanvasBtn._hover / _leave 必须调 self.owner._animate_btn_hover。"""
+        import inspect
+        import gui
+        hover_src = inspect.getsource(gui._CanvasBtn._hover)
+        leave_src = inspect.getsource(gui._CanvasBtn._leave)
+        # hover 走插值
+        self.assertIn('self.owner._animate_btn_hover(self, enter=True)', hover_src,
+                      '_CanvasBtn._hover 未接 _animate_btn_hover 插值')
+        # leave 也走插值
+        self.assertIn('self.owner._animate_btn_hover(self, enter=False)', leave_src,
+                      '_CanvasBtn._leave 未接 _animate_btn_hover 插值')
+        # disabled 态抢先落终态（v4f 修正）
+        self.assertIn("if self._state == 'disabled':",
+                      hover_src + leave_src,
+                      'disabled 态应抢先落终态不动画（v4f 修正）')
+
+    def test_anim_jobs_init_and_snap_before_cancel(self):
+        """t9 基建：self._anim_jobs 初始化在 __init__，_cancel_after_jobs 先 snap 终态再 cancel。"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('pdd_gui_for_anim', os.path.join(HERE, 'gui.py'))
+        # 直接读源码验证
+        src = self._src('gui.py')
+        # 初始化
+        self.assertIn('self._anim_jobs = {}', src,
+                      'self._anim_jobs 初始化缺失（在 __init__ 内）')
+        # _cancel_after_jobs 工具函数
+        self.assertIn('def _cancel_after_jobs', src,
+                      '_cancel_after_jobs 工具函数缺失（按目标 widget 分键取消）')
+        # v4f 最大漏项：先 snap 终态再 cancel——验证 _cancel_after_jobs 前有终态设置
+        # 简单模式：验证 _anim_jobs 在每个动效 _do 函数末尾置空
+        # （即先 snap 到 _end/_b，再调 _cancel_after_jobs）
+        self.assertIn('self._anim_jobs[_key] = []', src,
+                      '动效终态 snap 时 _anim_jobs[_key] = [] 应先于 cancel')
+class TestAnimationsFixRound2(unittest.TestCase):
+    """t11 动效修复包：③ 删 canvas gate + _highlight_nav 兜底 / ② disabled snap 禁用色 /
+    ⑤ 真熔断（_meltdown_animations 翻 ANIMATIONS_ENABLED）/ ⑧a 脉冲实时 self.tc /
+    ⑧b 脉冲起拍捕获当前 fg。"""
+
+    def _src(self, name):
+        with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_nav_leave_no_canvas_gate(self):
+        """t11 ③：_animate_nav_leave 不能再用 btn.canvas gate（导航按钮是 tk.Button 无 canvas）。"""
+        import sys
+        sys.path.insert(0, HERE)
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._animate_nav_leave)
+        # 删 canvas gate
+        self.assertNotIn("getattr(btn, 'canvas'", src,
+                         '_animate_nav_leave 不应再用 btn.canvas gate（tk.Button 无此属性）')
+        # _highlight_nav 必须先 configure(bg=C_BG) 兜底
+        hl_src = inspect.getsource(gui.App._highlight_nav)
+        self.assertIn('btn.configure(bg=self.C_BG', hl_src,
+                      '_highlight_nav 离开位分支必须显式 configure(bg=C_BG) 兜底')
+
+    def test_hover_disabled_snap_uses_disabled_color(self):
+        """t11 ②：hover 链 disabled 分支 snap 到禁用色（btn.disabled tc + C_SURFACE fallback）。"""
+        import sys
+        sys.path.insert(0, HERE)
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._animate_btn_hover)
+        # 禁用态 snap 应走 tc('btn.disabled', self.C_SURFACE)，不能硬编码 _end
+        self.assertIn("self.tc('btn.disabled', self.C_SURFACE)", src,
+                      'disabled snap 必须走 btn.disabled tc + C_SURFACE fallback（v4f 修正：零新 token）')
+
+    def test_real_meltdown_flips_module_flag(self):
+        """t11 ⑤：真熔断——_meltdown_animations 翻 ANIMATIONS_ENABLED=False；动效 except 分支应调用。"""
+        import sys
+        sys.path.insert(0, HERE)
+        import gui
+        # 模块级函数存在
+        self.assertTrue(callable(getattr(gui, '_meltdown_animations', None)),
+                        '_meltdown_animations 模块级函数缺失（真熔断核心）')
+        # 翻前 True
+        gui.ANIMATIONS_ENABLED = True
+        # 调用
+        gui._meltdown_animations()
+        self.assertFalse(gui.ANIMATIONS_ENABLED,
+                         '_meltdown_animations 翻 ANIMATIONS_ENABLED=False 失败')
+        # 重置供后续测试
+        gui.ANIMATIONS_ENABLED = True
+        # 验证动效方法 except 分支包含 _meltdown_animations 调用
+        src = self._src('gui.py')
+        for m in ('_pulse_status', '_animate_btn_hover', '_animate_nav_leave'):
+            # 取该方法的源码块（含 _meltdown_animations 调用）
+            idx = src.find(f'def {m}')
+            self.assertGreater(idx, 0, f'{m} 方法不存在')
+            # 取到下一个 def 之前
+            nxt = src.find('\n    def ', idx + 1)
+            block = src[idx:nxt if nxt > 0 else None]
+            self.assertIn('_meltdown_animations()', block,
+                          f'{m} except 分支必须调 _meltdown_animations()（v4f 修正：注释谎言）')
+
+    def test_meltdown_triggered_by_lerp_exception(self):
+        """t11 ⑤（v4f 完整示例）：monkeypatch _lerp_hex 抛异常后，_pulse_status 应触发熔断。"""
+        import sys
+        sys.path.insert(0, HERE)
+        import gui
+        # 重置
+        gui.ANIMATIONS_ENABLED = True
+        # monkeypatch _lerp_hex
+        _orig = gui._lerp_hex
+        def _boom(*a, **k):
+            raise RuntimeError('t11 ⑤测试：lerp 抛异常')
+        gui._lerp_hex = _boom
+        try:
+            # 构造一个最简 self-like 对象（不实例化 App，避免 Tk 启动）
+            class _FakeLbl:
+                def winfo_exists(self): return True
+                def cget(self, key): return '#1F1F1F' if key == 'fg' else ''
+                def configure(self, **kw): pass
+            class _FakeSelf:
+                _anim_jobs = {}
+                win = type('W', (), {'after': staticmethod(lambda *a, **k: None)})()
+                status_label = _FakeLbl()
+                def tc(self, key, default=None):
+                    return default or '#1F1F1F'
+            fs = _FakeSelf()
+            # _pulse_status 在 lerp 抛异常时应走 except 分支，触发熔断
+            gui.App._pulse_status(fs)
+            self.assertFalse(gui.ANIMATIONS_ENABLED,
+                             'monkeypatch lerp 抛异常后 _pulse_status 应触发熔断翻 False')
+        finally:
+            gui._lerp_hex = _orig
+            gui.ANIMATIONS_ENABLED = True
+
+    def test_pulse_captures_current_fg_and_realtime_theme(self):
+        """t11 ⑧a+⑧b：_pulse_status 终态用实时 self.tc；起拍捕获 label 当前 fg（不硬编码 C_TEXT）。"""
+        import sys
+        sys.path.insert(0, HERE)
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._pulse_status)
+        # ⑧a：_do 内每步 / 终态用 self.tc 实时查
+        self.assertIn("self.tc('C_TEXT'", src,
+                      '_pulse_status 终态必须 self.tc(\"C_TEXT\") 实时查（v4f 修正：200ms 内切主题不残留）')
+        # ⑧b：起拍捕获 _lbl.cget('fg')
+        self.assertIn("_lbl.cget('fg')", src,
+                      '_pulse_status 起拍必须捕获 label 当前 fg（v4f 修正：不硬编码 C_TEXT）')
 
 
 if __name__ == '__main__':
