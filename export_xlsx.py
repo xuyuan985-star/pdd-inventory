@@ -150,7 +150,7 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
                         v = strip_tail_noise(v)  # 仅勾选文本列剥「查看地址/日期时间」词条噪音
                 vals.append(_sanitize_cell(v))
             vals += [p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
-            # t13 P3-A：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
+            # ：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
             vals.append(_sanitize_cell(p.get('model', 'classic')))
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(row=row, column=ci, value=v)

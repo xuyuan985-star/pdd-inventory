@@ -11,9 +11,9 @@ from settings_ui import SettingsUIMixin
 from stats_ui import StatsPagesMixin
 from logger import log
 
-# v1.4.8 P1-A：EULA 文本常量（docs/EULA.md 的代码内嵌版，打包后无需读 docs/）
+# v1.4.8 ：EULA 文本常量（docs/EULA.md 的代码内嵌版，打包后无需读 docs/）
 from eula_text import EULA_VERSION, EULA_TITLE, render_eula_text
-# t24 F2 清理：self._tier 死状态删除后，_auth_get_tier 不再有调用方，一并删除 import
+# F2 清理：self._tier 死状态删除后，_auth_get_tier 不再有调用方，一并删除 import
 # （未来若需要 get_tier 预热，按需重新 import）
 
 # v1.4.7 WS-A：本地历史库（识别数据累积/趋势查询）。
@@ -23,7 +23,7 @@ try:
 except Exception:
     history_db = None
 
-# ── t9 动效基建（模块级，纯函数 + 总开关） ──
+# ── 动效基建（模块级，纯函数 + 总开关） ──
 # ANIMATIONS_ENABLED 总开关：低配机/无障碍偏好/UI 性能问题改 False 全关（无需改业务代码）
 ANIMATIONS_ENABLED = True
 
@@ -31,7 +31,7 @@ ANIMATIONS_ENABLED = True
 def _lerp_hex(a, b, t):
     """t9 基建：hex 颜色线性插值（纯函数，可单测）。t ∈ [0,1]，返回 '#RRGGBB'。
 
-    容错：a/b 不是 #RRGGBB 6 位 hex 时返回 b（降级到终态）。
+    容错：a/b 不是  # RRGGBB 6 位 hex 时返回 b（降级到终态）。
     """
     try:
         if not (isinstance(a, str) and isinstance(b, str)):
@@ -225,12 +225,12 @@ class _CanvasBtn:
     def _click(self, e):
         if self._state != 'disabled' and self._command:
             # 防重入：Canvas 按钮同时绑了 item 级 tag_bind + widget 级 bind，
-            # 一次点击会触发 2~3 次；三层防护：
-            #  1) 250ms 时间戳（常规快速连点）
-            #  2) _executing 执行中标志（模态循环期间事件仍可派发的场景）
-            #  3) 延迟复位 _executing：原生模态对话框（askopenfilename 等）会
-            #     阻塞主线程，第二个排队事件在对话框关闭、_command 返回之后
-            #     才派发——立即复位拦不住，改为 after(300ms) 复位
+            # 一次点击会触发 2~3 次；三层防护
+            # 1) 250ms 时间戳（常规快速连点）
+            # 2) _executing 执行中标志（模态循环期间事件仍可派发的场景）
+            # 3) 延迟复位 _executing：原生模态对话框（askopenfilename 等）会
+            # 阻塞主线程，第二个排队事件在对话框关闭、_command 返回之后
+            # 才派发——立即复位拦不住，改为 after(300ms) 复位
             now = time.time()
             if getattr(self, '_executing', False):
                 return
@@ -251,7 +251,7 @@ class _CanvasBtn:
     def _hover(self, e):
         if self._state == 'disabled':
             return
-        # t9 A：按钮 hover 5 步插值（v4f：每按钮独立 after job 句柄，disabled 态抢先落终态）
+        # A：按钮 hover 5 步插值（每按钮独立 after job 句柄，disabled 态抢先落终态）
         if ANIMATIONS_ENABLED and self.poly is not None and self.owner is not None and hasattr(self.owner, '_animate_btn_hover'):
             try:
                 self.owner._animate_btn_hover(self, enter=True)
@@ -274,7 +274,7 @@ class _CanvasBtn:
                 pass
 
     def _leave(self, e):
-        # t9 A：leave 同样走 5 步插值回到 bg
+        # A：leave 同样走 5 步插值回到 bg
         if ANIMATIONS_ENABLED and self.poly is not None and self.owner is not None and hasattr(self.owner, '_animate_btn_hover'):
             try:
                 self.owner._animate_btn_hover(self, enter=False)
@@ -285,7 +285,7 @@ class _CanvasBtn:
         self._apply()
 
 
-# t14 P3-B：模块级 helper（必须在 class App 之前定义，否则在类内引用失败）
+# ：模块级 helper（必须在 class App 之前定义，否则在类内引用失败）
 def _to_float_safe(v, default=0.0):
     try:
         return float(v)
@@ -304,21 +304,21 @@ def _fmt_yuan(v: float) -> str:
 
 class App(SettingsUIMixin, StatsPagesMixin):
     # Design system — New Minimalism / Flat Design
-    C_PRIMARY = '#111111'      # 近黑（主标题/文字）
-    C_SECONDARY = '#333333'    # 深灰（次级文字）
-    C_ACCENT = '#FFE600'       # 亮柠檬黄（accent / 高亮块）
-    C_BG = '#FFFFFF'           # 纯白背景
-    C_SURFACE = '#F7F7F2'      # 米白浅灰（卡片/底纹）
-    C_TEXT = '#222222'         # 深灰正文（避免死黑）
-    C_MUTED = '#6B6B6B'        # 中灰
-    C_BORDER = '#EAEAEA'       # 浅灰细分割线（容器不画黑框）
+    C_PRIMARY = '#111111'  # 近黑（主标题/文字）
+    C_SECONDARY = '#333333'  # 深灰（次级文字）
+    C_ACCENT = '#FFE600'  # 亮柠檬黄（accent / 高亮块）
+    C_BG = '#FFFFFF'  # 纯白背景
+    C_SURFACE = '#F7F7F2'  # 米白浅灰（卡片/底纹）
+    C_TEXT = '#222222'  # 深灰正文（避免死黑）
+    C_MUTED = '#6B6B6B'  # 中灰
+    C_BORDER = '#EAEAEA'  # 浅灰细分割线（容器不画黑框）
     C_RED = '#DC2626'
-    C_BTN_BLUE = '#1E88E5'     # 主操作按钮（亮蓝实心）
-    C_CARD_HDR = '#1F1F1F'     # 卡片标题栏（深炭灰）
-    C_YELLOW_BG = '#FFE600'    # 亮柠檬黄高亮块（配黑字）
+    C_BTN_BLUE = '#1E88E5'  # 主操作按钮（亮蓝实心）
+    C_CARD_HDR = '#1F1F1F'  # 卡片标题栏（深炭灰）
+    C_YELLOW_BG = '#FFE600'  # 亮柠檬黄高亮块（配黑字）
     C_GREEN_BG = '#E8F5E9'
     C_RED_BG = '#FFEBEE'
-    C_BLUE_LIGHT = '#FFF3B0'   # 浅黄（导航按钮/标签底，机能风）
+    C_BLUE_LIGHT = '#FFF3B0'  # 浅黄（导航按钮/标签底，机能风）
     FONT = ('Microsoft YaHei UI', 9)
     FONT_BOLD = ('Microsoft YaHei UI', 9, 'bold')
     FONT_TITLE = ('Microsoft YaHei UI', 14, 'bold')
@@ -367,7 +367,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             canvas.bind('<Enter>', btn._hover)
             canvas.bind('<Leave>', btn._leave)
         else:
-            # 微小圆角矩形：每角 2 控制点 + smooth → 1/4 圆弧，只弯角不弯边
+            # 微小圆角矩形：每角 2 控制点 + smooth
             r = max(2, int(self.tc('btn.corner', 3)))  # 圆角半径（微小）
             poly = canvas.create_polygon(
                 0, r, r, 0,
@@ -469,13 +469,13 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self._theme_name = load_theme_pref()
         self._theme_redraws = []  # 主题重绘注册表（Canvas 装饰/按钮）
         self._theme_spec = {}
-        # t9 动效：按目标 widget 分键的 after job 注册表（取消时先 snap 终态再 cancel）
+        # 动效：按目标 widget 分键的 after job 注册表（取消时先 snap 终态再 cancel）
         self._anim_jobs = {}
         self._apply_theme(self._theme_name)
         self.rows = []
         self.plans = []  # 初始化，供 _export 防御性检查
         self._filter_warning_only = False  # 结果表"仅显示预警"筛选
-        self._wh_filter = '全部仓库'       # 结果表"仓库筛选"（来自 OCR 仓库信息列）
+        self._wh_filter = '全部仓库'  # 结果表"仓库筛选"（来自 OCR 仓库信息列）
         self._suppress_auto_append = False  # 清空输入时临时禁用自动加行
         self._batch_stop = threading.Event()  # 紧急停止信号
         self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：批量运行中标志（防双批并发）
@@ -488,9 +488,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.cache = {}  # {region: {'plans': [...], 'items': [...]}}
         self.active_region = None
 
-        # v1.4.8 P1-A：首启 EULA 强弹窗（必须在 _build_ui 之前，否则用户先看到主界面再被强行打断更不友好）
+        # v1.4.8 ：首启 EULA 强弹窗（必须在 _build_ui 之前，否则用户先看到主界面再被强行打断更不友好）
         # 拒绝则直接退出，符合"未同意不得使用"；模板自愈已加 eula_accepted_v1 字段。
-        # t16 修复：弹窗必须阻塞（wait_window）才有效；仅当 _show_eula_dialog 返回 True 才继续。
+        # 修复：弹窗必须阻塞（wait_window）才有效；仅当 _show_eula_dialog 返回 True 才继续。
         if not self._check_eula_accepted():
             if not self._show_eula_dialog():
                 # 拒绝路径：销毁主窗口 + 退出进程（行为不变）
@@ -507,10 +507,10 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     pass
                 sys.exit(0)
 
-        # t24 修复包 A (F2)：删除 v1.5.0 P2-A 死代码 self._tier 赋值块
+        # 删除 v1.5.0 死代码 self._tier 赋值块
         # 根因：self._tier 只写不读；_auth_get_tier 调用结果无下游使用。
-        # 实际授权门控路径（_live_screenshot → check_live_quota）每次现读 Config，
-        # 不依赖 self._tier 缓存。t24 修复 BUG-1 后 get_tier 自身带 300s TTL
+        # 实际授权门控路径（_live_screenshot
+        # 不依赖 self._tier 缓存。get_tier 自身带 300s TTL 缓存
         # 已足够覆盖 enforce 热切换场景，无需启动期预热。
         # （_auth_get_tier 的 import 在 L16 同批清理——若未来需要再 import）
 
@@ -658,7 +658,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             dlg.destroy()
 
         def on_reject():
-            # 用户拒绝 → 不写盘 → 关闭弹窗 → wait_window 返回 → 函数返回 False
+            # 用户拒绝
             result["accepted"] = False
             result["saved"] = False
             dlg.grab_release()
@@ -673,7 +673,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         try:
             dlg.update_idletasks()
             dlg.wait_visibility()  # 等到 dlg 在屏幕真正 mapped，grab_set 才不会失败
-            dlg.grab_set()         # 模态：阻塞主窗口输入
+            dlg.grab_set()  # 模态：阻塞主窗口输入
         except Exception:
             # 极端场景下（无 X server / 测试环境）grab 失败也要继续走，不能让弹窗构造本身崩溃
             pass
@@ -709,7 +709,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             txt.configure(state="disabled")
             txt.pack(fill="both", expand=True, padx=5, pady=5)
             # 可选图片（v1.4.5 bug hunt F29：下载移出主线程——urlopen 最长 10s 会冻结事件循环；
-            # 验收回归：此前 `Thread(lambda: after(lambda: _apply_img(_fetch_img())))` 的内层
+            # 此前 `Thread(lambda: after(lambda: _apply_img(_fetch_img())))` 的内层
             # lambda 由主线程执行时仍调 _fetch_img()（urlopen 在主线程）——改为 worker 内取图
             if image_url:
                 def _fetch_img():
@@ -778,7 +778,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             except Exception:
                 pass
 
-        # v0 → v1: 旧格式（mode/builtin_model）→ 新格式（active_provider/providers）
+        # v0
         if ver < 1:
             old_api = s.get('api', {})
             if 'active_provider' not in old_api and ('mode' in old_api or 'builtin_model' in old_api):
@@ -789,12 +789,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
             s['config_version'] = 1
             _write()
 
-        # v1 → v2: 预留（未来数据结构变更在此补充）
+        # v1
         if ver < 2:
             s['config_version'] = 2
             _write()
 
-        # v2 → v3: 校准模块重构 — 相对偏移模式改为 AI 智能定位
+        # v2
         if ver < 3:
             cal = s.get('calibrate')
             # 畸形 calibrate（None/list/str 等）先归一化为空 dict，后续 .get 不再崩
@@ -827,7 +827,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             s['config_version'] = 3
             _write()
 
-        # v3 → v4: 移除绝对坐标模式，统一 AI 智能定位
+        # v3
         # 旧 absolute 数据仅作展示参考，不再作为定位来源（运行时 AI 实时定位覆盖）
         if ver < 4:
             cal = s.get('calibrate')
@@ -986,11 +986,11 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                        pack_side="right", padx=5)
         
         # ── 主容器：左导航 + 右内容（可拖拽分割） ──
-        # t27 实施包 A (①)：导航默认展开——main_paned 初始即 add(nav_frame, before=content_frame)。
+        # 导航默认展开——main_paned 初始即 add(nav_frame, before=content_frame)。
         # 修 P-A1 严重问题（新用户根本看不到 8 项功能）；_toggle_nav 保留提供折叠入口。
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
         self.main_paned.pack(fill="both", expand=True, padx=15, pady=(2, 15))
-        # 左侧导航栏（t29 迭代R3：width 随 dpi_scale 联动——nav 是全 UI 唯一
+        # 左侧导航栏（ width 随 dpi_scale 联动——nav 是全 UI 唯一
         # pack_propagate(False) 冻结像素宽的容器，字号随 tk scaling 缩放而 176px
         # 不缩，200% DPI 下「💰 用量明细」会被裁且导航占窗口比例减半）
         self.nav_frame = tk.Frame(self.main_paned, width=int(176 * self.dpi_scale), bg=self.C_BG)
@@ -999,8 +999,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.nav_buttons = {}
         # 右侧内容
         self.content_frame = tk.Frame(self.main_paned)
-        # t27 ①：默认 add nav_frame（before=content_frame，stretch="never" 固定宽度）
-        # t29 迭代R3：minsize 与 width 同步 DPI 联动（窗口 minsize 已在 L361 联动）
+        # ①：默认 add nav_frame（before=content_frame，stretch="never" 固定宽度）
+        # minsize 与 width 同步 DPI 联动（窗口 minsize 已在 L361 联动）
         self.main_paned.add(self.nav_frame, minsize=int(176 * self.dpi_scale), stretch="never")
         self.main_paned.add(self.content_frame, stretch="always")
         # 页面帧
@@ -1015,11 +1015,11 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.page_usage = tk.Frame(self.content_frame, bg=self.C_BG)
         self._current_page = self.page_home
 
-        # t29 冷启动修复（修 t27 ①默认展开引入的空壳 bug）：导航默认展开后必须立即
+        # 冷启动修复（修 ①默认展开引入的空壳 bug）：导航默认展开后必须立即
         # 构建按钮内容，否则 nav_frame 展开是空壳（用户报告：启动时导航空白，点 ☰
         # 收起再展开按钮才出现）。_build_nav 引用 page_* 帧，必须在 8 个 page Frame
         # 全部创建之后、_current_page 赋值之后调用。
-        # t29 修 v4f盲审-F7 注释失实：_build_ui 预构建后 nav_buttons 恒非空，
+        # 修正注释失实：_build_ui 预构建后 nav_buttons 恒非空，
         # _toggle_nav 的懒构建守卫实际不再触发（仅作历史防御保留）。
         self._build_nav()
 
@@ -1029,8 +1029,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
         
         # ── 全局工具栏（v1.5.0 首页双入口布局 · 识别 / 导入 并列为主）──
         # 1) 第一排（主数据入口）：实时截图 + 📥 导入表格——两者样式一致、左右并列、几何对称
-        #    沿用 dark 二级（保留 primary 给导出 Excel）；padx/pady 加宽、bold 字体
-        #    让"选一个数据来源"的语义视觉上立起来。EULA 已在启动弹窗保证（t7 P1-A）。
+        # 沿用 dark 二级（保留 primary 给导出 Excel）；padx/pady 加宽、bold 字体
+        # 让"选一个数据来源"的语义视觉上立起来。EULA 已在启动弹窗保证。
         primary_row = tk.Frame(self.page_home, bg=self.C_BG)
         primary_row.pack(fill="x", padx=15, pady=(8, 4))
         # 实时截图 = 左侧主入口（最常用，作为默认焦点）
@@ -1066,14 +1066,14 @@ class App(SettingsUIMixin, StatsPagesMixin):
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=(0, 4))
         
         # ── 导出按钮 + 单条合并状态行（导出正下方，不拆分）──
-        # t27 实施包 A (④)：导出 Excel 按钮降权——13pt bold 16w×2h 视觉权重
+        # 导出 Excel 按钮降权——13pt bold 16w×2h 视觉权重
         # 超过数据入口（9pt bold），违反动线。改为与次级按钮一致（9pt bold 常规
         # 尺寸），kind/command 不动。
         self.export_btn = self._mk_btn(self.page_home, "导出", self._export,
                   kind='primary', font=(self.FONT[0], 9, 'bold'),
                   pack_side=None)
         self.export_btn.pack(pady=(12, 4))
-        # t9 动效 C：状态反馈脉冲——保留 Label 引用供 _pulse_status 调用
+        # 动效 C：状态反馈脉冲——保留 Label 引用供 _pulse_status 调用
         self.status_label = tk.Label(self.page_home, textvariable=self.status_text,
                  font=(self.FONT[0], 8), fg=self.C_MUTED)
         self.status_label.pack(pady=(0, 4))
@@ -1161,7 +1161,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self._sort_col = None
         self._sort_reverse = False
         
-        # 可编辑表格：双击前 3 列（商品/总库存/总销量）→ overlay Entry → 回写 rows → 重算
+        # 可编辑表格：双击前 3 列（商品/总库存/总销量）
         self.tree.bind("<Double-1>", self._tree_edit_cell)
         # 右键菜单：右键数据行删除该行；右键空白处新增空白行
         self.tree.bind("<Button-3>", self._tree_context_menu)
@@ -1201,16 +1201,16 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if self.nav_frame.winfo_ismapped():
             self.main_paned.forget(self.nav_frame)
         else:
-            self.main_paned.add(self.nav_frame, before=self.content_frame, minsize=int(176 * self.dpi_scale), stretch="never")  # t29：150→176（v4f P3）再 DPI 联动（迭代R3）
+            self.main_paned.add(self.nav_frame, before=self.content_frame, minsize=int(176 * self.dpi_scale), stretch="never")  # 150
             if not self.nav_buttons:
                 self._build_nav()
 
     def _build_nav(self):
-        # t29 修 v4f盲审-F1：幂等守卫——重复调用会重建按钮并泄漏旧 widget（旧
+        # 修复：幂等守卫——重复调用会重建按钮并泄漏旧 widget（旧
         # command 仍可触发）。当前调用点均有外层守卫，此处兜底防御未来调用点。
         if self.nav_buttons:
             return
-        # t27 实施包 A (②)：8 项分 3 组——【工作区】【数据】【设置】
+        # 8 项分 3 组——【工作区】【数据】【设置】
         # 组标 = self._lbl 8pt C_MUTED（pady=(10,2) 组前/ (0,4) 组后）
         # 组间 1px C_BORDER 分隔 Frame（fill x）
         # nav 按钮 padx=14 pady=7（保留语义化比旧 padx=12 略宽对齐 176px 宽）
@@ -1233,16 +1233,16 @@ class App(SettingsUIMixin, StatsPagesMixin):
         first = True
         for group_name, items in groups:
             if not first:
-                # t27 ②：组间 1px C_BORDER 分隔
+                # ②：组间 1px C_BORDER 分隔
                 _sep = tk.Frame(self.nav_frame, bg=self.C_BORDER, height=1)
                 _sep._skip_theme = True
                 _sep.pack(fill="x", padx=10, pady=6)
-                # t29 迭代R3（mmx-or A3 / gmi ③共识）：_skip_theme 冻结的是 walk，
+                # （冻结的是 walk，
                 # 分隔线底色须挂重绘表跟主题走（与工具栏分隔线 gui.py:857 同模式），
                 # 否则切浅色主题后残留旧主题深色横杠。
                 self._register_redraw(lambda f=_sep: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
             first = False
-            # t27 ②：组标（8pt C_MUTED）
+            # ②：组标（8pt C_MUTED）
             self._lbl(self.nav_frame, text=group_name, font=(self.FONT[0], 8),
                       bg=self.C_BG, fg=self.C_MUTED).pack(anchor='w', padx=14, pady=(10, 2))
             for text, page in items:
@@ -1251,7 +1251,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 _ni = tk.Frame(_nf, bg=self.C_BG, bd=0, highlightthickness=0)
                 _ni._skip_theme = True
                 _ni.pack(side="left", padx=(0, 0), pady=0, fill="x", expand=True)
-                # t27 ②：nav 按钮 padx=14 pady=7
+                # ②：nav 按钮 padx=14 pady=7
                 btn = tk.Button(_ni, text=text, relief="flat",
                                font=(self.FONT[0], 9), anchor="w", padx=14, pady=7,
                                bg=self.C_BG, fg=self.C_TEXT, activebackground=self.C_SURFACE,
@@ -1269,7 +1269,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 # 选中项：立即跳变（一点即用优先，不动画）
                 btn.configure(bg=self.C_CARD_HDR, fg="#FFFFFF")
             else:
-                # t11 ③ + 队长复核修正：先判动画资格——_animate_nav_leave 的动画链
+                # 修正：先判动画资格——_animate_nav_leave 的动画链
                 # 自保证终态（_do 终步 configure + 异常熔断 + cancel snap 三重兜底），
                 # 若先无条件 configure 再判 _cur==C_CARD_HDR 则永远读到 C_BG、
                 # 渐隐动画永不触发（无害死代码）。非动画位显式 configure 兜底不漏配。
@@ -1361,7 +1361,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             # DPI 感知下：geometry 参数与 winfo widget 坐标都是【逻辑单位】，
             # 但 winfo_screenwidth/screenheight 返回【物理】屏尺寸——max_h 按物理
             # 计算会与逻辑 target_h 混比，高 DPI 下窗口展开不足/越界（v1.4 审查修复）。
-            # 统一换算：物理屏高 ÷ dpi_scale → 逻辑屏高，再算 82% 上限。
+            # 统一换算：物理屏高 ÷ dpi_scale
             _ds = getattr(self, 'dpi_scale', 1.0) or 1.0
             _logic_screen_h = screen_h / _ds if _ds else screen_h
             max_h = int(_logic_screen_h * 0.82)
@@ -1508,7 +1508,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         state = {"cancelled": False, "running": False, "ready_install": False,
                  "downloaded_zip": "", "sha_ok": False}
         # v1.4.1：窗口关闭 = 取消进行中的下载（后台线程检查 state["cancelled"] 退出；
-        # 不设的话下载中关窗 → 后续 after 回调操作已销毁控件 → TclError 刷屏）
+        # 不设的话下载中关窗
         def _on_close():
             state["cancelled"] = True
             state["running"] = False
@@ -1552,8 +1552,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 
                 exe_asset = None
                 sha_asset = None
-                # 跨版本策略：本地程序目录有固定名 PDD EZ.exe（v1.4+）→ 增量包；
-                # 否则（旧版 PDD EZ vX.Y.exe）→ 全量包——旧版 _internal 结构可能不同，增量会崩
+                # 跨版本策略：本地程序目录有固定名 PDD EZ.exe（v1.4+）
+                # 否则（旧版 PDD EZ vX.Y.exe）
                 local_main = os.path.join(
                     os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else get_base_dir(),
                     'PDD EZ.exe')
@@ -1638,7 +1638,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 except _CancelledDownload:
                     raise  # 取消透传，不尝试官方兜底
                 except Exception:
-                    # 镜像失败 → 官方直连兜底
+                    # 镜像失败
                     req = _Request(fallback_url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ"})
                     with _urlopen(req, timeout=120) as resp:
                         _download_stream(resp, dest, total, asset_name)
@@ -1657,7 +1657,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     sha_path = dest + ".sha256"
                     try:
                         # v1.4.1 修复：sha 文件与主包同走镜像（国内客户 github 直连
-                        # 不通时 sha 下载失败 → 之前直接拒绝安装，更新永远失败）
+                        # 不通时 sha 下载失败
                         _sha_url = mirror_download_url(sha_asset["browser_download_url"], prefer_mirror=True)
                         _sha_fallback = sha_asset["browser_download_url"]
                         try:
@@ -1806,7 +1806,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if fn not in self._theme_redraws:
             self._theme_redraws.append(fn)
 
-    # ── t9 动效 C/D/A/B 实现 + 熔断基建 ──
+    # ── 动效 C/D/A/B 实现 + 熔断基建 ──
 
     def _pulse_status(self, accent_color=None):
         """t9 C：状态反馈脉冲——status_label fg 两跳（current→accent→current，~300ms）。
@@ -1825,7 +1825,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     return
             except Exception:
                 return
-            # 取消同 label 上挂着的旧 after job（v4f：先 snap 终态再 cancel）
+            # 取消同 label 上挂着的旧 after job（先 snap 终态再 cancel）
             _key = ('pulse_status', id(_lbl))
             _cancel_after_jobs(self.win, self._anim_jobs.get(_key, []))
             # 终态色 = 当前主题 C_TEXT（实时查，主题切换不偏色）
@@ -1833,9 +1833,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
             _accent = accent_color or self.tc('C_PRIMARY', '#FFE600')
             if not (_end.startswith('#') and _accent.startswith('#')):
                 return
-            # 两跳：T=0 步 end→accent；T=150ms 步 accent→end；每步 16ms 插值
+            # 两跳：T=0 步 end
             _steps = 6  # 6 步×16ms ≈ 100ms/跳，合计 ~200ms
-            # t11 ⑧b：起拍时捕获 label 当前 fg，终态回到该值（非硬编码 C_TEXT）——
+            # ⑧b：起拍时捕获 label 当前 fg，终态回到该值（非硬编码 C_TEXT）——
             # 原 status_label fg=C_MUTED，脉冲回 C_TEXT 会让状态栏永久变深
             try:
                 _start_fg = str(_lbl.cget('fg'))
@@ -1846,14 +1846,14 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     if not _lbl.winfo_exists():
                         return
                     if step >= _steps:
-                        # t11 ⑧a：终态实时 self.tc 查主题，不复用启动快照
+                        # ⑧a：终态实时 self.tc 查主题，不复用启动快照
                         _cur_end = self.tc('C_TEXT', '#1F1F1F')
                         _cur_start = _start_fg if _start_fg.startswith('#') else _cur_end
                         _lbl.configure(fg=_cur_start if sub == 1 else _cur_end)
                         self._anim_jobs[_key] = []
                         return
                     t = step / float(_steps)
-                    # t11 ⑧a：每步实时 self.tc 查主题（200ms 内切主题不残留旧色）
+                    # ⑧a：每步实时 self.tc 查主题（200ms 内切主题不残留旧色）
                     _cur_end = self.tc('C_TEXT', '#1F1F1F')
                     _cur_accent = self.tc('C_PRIMARY', '#FFE600') if not accent_color else accent_color
                     if sub == 0:
@@ -1864,7 +1864,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     jid = self.win.after(16, lambda: _do(step + 1, sub))
                     self._anim_jobs.setdefault(_key, []).append(jid)
                 except Exception:
-                    # t11 ⑤修：真熔断——动效回调异常时翻 ANIMATIONS_ENABLED=False
+                    # ⑤修：真熔断——动效回调异常时翻 ANIMATIONS_ENABLED=False
                     try:
                         self._anim_jobs[_key] = []
                     except Exception:
@@ -1897,7 +1897,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 except Exception:
                     continue
                 if busy:
-                    # 记录原文案供恢复（v4f：仅首次记录，避免重复 set 覆盖）
+                    # 记录原文案供恢复（仅首次记录，避免重复 set 覆盖）
                     if not hasattr(_b, '_orig_text'):
                         try:
                             _b._orig_text = _b.cget('text')
@@ -1939,7 +1939,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             if _a == _b:
                 return
             _key = ('btn_hover', id(btn))
-            # 取消旧 after job（v4f：先 snap 终态再 cancel）
+            # 取消旧 after job（先 snap 终态再 cancel）
             _cancel_after_jobs(self.win, self._anim_jobs.get(_key, []))
             _steps = 5
             def _do(step):
@@ -1947,7 +1947,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     if not canvas.winfo_exists():
                         return
                     if getattr(btn, '_state', None) == 'disabled':
-                        # t11 ②修：disabled snap 到禁用色（tc 主题键+fallback 模式，非新 token），
+                        # ②修：disabled snap 到禁用色（tc 主题键+fallback 模式，非新 token），
                         # 避免动画中变禁用的按钮被涂回正常色
                         _disabled = self.tc('btn.disabled', self.C_SURFACE)
                         canvas.itemconfigure(poly, fill=_disabled)
@@ -1963,7 +1963,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     jid = self.win.after(16, lambda: _do(step + 1))
                     self._anim_jobs.setdefault(_key, []).append(jid)
                 except Exception:
-                    # t11 ⑤修：真熔断
+                    # ⑤修：真熔断
                     _meltdown_animations()
             _do(0)
         except Exception:
@@ -2005,7 +2005,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     jid = self.win.after(16, lambda: _do(step + 1))
                     self._anim_jobs.setdefault(_key, []).append(jid)
                 except Exception:
-                    # t11 ⑤修：真熔断
+                    # ⑤修：真熔断
                     _meltdown_animations()
             _do(0)
         except Exception:
@@ -2024,7 +2024,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         except Exception:
             return
         
-        # 记录旧色 → 新色映射（用于 tk 控件递归替换）
+        # 记录旧色
         old_colors = {}
         for k in theme:
             if k.startswith('C_'):
@@ -2116,7 +2116,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         except Exception:
                             pass
                     else:
-                        # 普通 Label：只设背景跟随父级；fg 已由 _walk_color 按旧→新映射处理，
+                        # 普通 Label：只设背景跟随父级；fg 已由 _walk_color 按旧
                         # 不再强制覆盖 C_TEXT，避免标题栏白字被刷黑（白底/深色主题下看不清）
                         try:
                             w.configure(bg=parent_bg)
@@ -2275,7 +2275,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         today = datetime.now()
         region = self.region_var.get()
         plans = []
-        # 读取客户勾选的识别列（未配置/空 → 回退默认商品字段列）
+        # 读取客户勾选的识别列（未配置/空
         try:
             from utils import get_ocr_columns
             _col_cfg = get_ocr_columns()
@@ -2285,7 +2285,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             _sel_cols = []
         if not _sel_cols:
             _sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
-        # mapping 反查：列名 → 业务字段（渲染动态列时把 name/stock/sales 放回对应勾选列）
+        # mapping 反查：列名
         try:
             _sel_cols_map = {v: k for k, v in ((_col_cfg.get('mapping') or {}).items()) if v}
         except Exception:
@@ -2305,7 +2305,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         except Exception:
             _off = 1
 
-        # t13 P3-A：补货模型分发（用户裁定：默认 classic，原公式一行不改）
+        # ：补货模型分发（用户裁定：默认 classic，原公式一行不改）
         try:
             from utils import get_replenishment_cfg
             _rep_cfg = get_replenishment_cfg()
@@ -2338,7 +2338,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             shipping = self._get_shipping(_it_region, name)  # 逐商品查运输时效
 
             if _rep_model == 'weighted':
-                # t13 P3-A：加权模式——走 utils.calc_replenishment_weighted（任何异常回退经典）
+                # ：加权模式——走 utils.calc_replenishment_weighted（任何异常回退经典）
                 try:
                     from utils import calc_replenishment_weighted
                     _w = calc_replenishment_weighted(
@@ -2353,8 +2353,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     daily = _w.get('daily', daily)
                     _model_tag = _w.get('model', 'weighted')
                 except Exception:
-                    # t24 修复包 A (F1)：加权模式异常 → 经典公式兜底。
-                    # 标注 'classic(error)' 与 'classic(no_history)' 区分：
+                    # 加权模式异常
+                    # 标注 'classic(error)' 与 'classic(no_history)' 区分
                     # - no_history：加权查到空结果，主动回退（已知语义）
                     # - error：加权抛异常（DB 损坏/字段缺失/未知），是被动回退
                     _model_tag = 'classic(error)'
@@ -2426,11 +2426,11 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 '_raw': item.get('_raw') or {},
                 '_sel_cols': _sel_cols,
                 '_sel_cols_map': _sel_cols_map,
-                # t13 P3-A / t24 F1：补货模型标注
-                #   classic         = 经典模式（默认）
-                #   weighted        = 加权模式（成功查到历史）
-                #   classic(no_history) = 加权模式主动回退（查到空结果）
-                #   classic(error)  = 加权模式被动回退（异常/DB 损坏）
+                # / F1：补货模型标注
+                # classic = 经典模式（默认）
+                # weighted = 加权模式（成功查到历史）
+                # classic(no_history) = 加权模式主动回退（查到空结果）
+                # classic(error) = 加权模式被动回退（异常/DB 损坏）
                 'model': _model_tag,
                 'model': _model_tag,
             })
@@ -2478,7 +2478,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         except Exception:
             pass
         self.tree.delete(*self.tree.get_children())
-        # iid → rows 索引映射（排序/筛选后编辑仍回写正确行）
+        # iid
         self._row_index_map = {}
         # 仓库筛选选项：从当前 plans 收集去重（每次渲染刷新，地区切换后自动更新）
         try:
@@ -2503,7 +2503,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             if p['color'] == 'red': tags = ('urgent',)
             elif p['color'] == 'yellow': tags = ('warning',)
             # 动态列渲染：display_cols = 勾选列 + 计算列，按列名逐列取值，
-            # 不再硬编码旧固定 7 列（旧版 name/stock/daily/est_sales 顺序与新勾选列对不上 → 串位）
+            # 不再硬编码旧固定 7 列（旧版 name/stock/daily/est_sales 顺序与新勾选列对不上
             _raw = p.get('_raw') or {}
             _map = p.get('_sel_cols_map') or {}
             row_vals = []
@@ -2642,7 +2642,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             for _iid, _iid_idx in _old_map.items():
                 if _iid_idx is None or _iid_idx in _del_set:
                     continue  # 被删行自身的 iid 失效，必须丢弃（否则指向错行）
-                # 平移：原 rows 索引 > 删除位置 → 减 1
+                # 平移：原 rows 索引 > 删除位置
                 _new_idx = _iid_idx - sum(1 for _d in idxs if _d < _iid_idx)
                 if 0 <= _new_idx < len(self.rows):
                     self._row_index_map[_iid] = _new_idx
@@ -2723,7 +2723,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             _row_region = ''
             try:
                 from utils import get_ocr_columns as _goc
-                # v1.4.5（bug hunt F2）：此函数此前未导入 strip_region_suffix → NameError 被裸 except 吞，
+                # v1.4.5（bug hunt F2）：此函数此前未导入 strip_region_suffix
                 # 每行 region 回退当前地区，多省刷新计算全按第一省算时效（违反 DESIGN §3）
                 from ocr import strip_region_suffix
                 _rmap = (_goc().get('mapping') or {})
@@ -2746,11 +2746,10 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     _col = _mapping.get(_field)
                     if _col:
                         _old = str(_raw.get(_col, ''))
-                        # 保留原值单位（'85份' → 用户改 90 → '90份'），
+                        # 保留原值单位（'85份'
                         # v1.4.5（bug hunt F25）：先 strip_tail_noise 再去尾部非数字串——
                         # 否则 '69份 查看地址' 会把'查看地址'当单位回写（_raw 污染）
-                        # 验收回归（fix-review P0）：此处需自导 re——旧补丁用了未定义 _re2
-                        # → NameError → 刷新计算对 OCR 数据整体失效
+                        # （fix-review P0）：此处需自导 re——旧补丁用了未定义 _re2
                         import re as _re2
                         from ocr import strip_tail_noise as _stn2
                         _unit = ''
@@ -2858,7 +2857,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 messagebox.showwarning("未选择", "请至少选择一个地区", parent=dlg)
                 return
 
-            # t14 P3-B：批量前成本预估确认（用户裁定：仅在前置弹窗确认，与 F9/_api_fatal/预算三态无关）
+            # ：批量前成本预估确认（用户裁定：仅在前置弹窗确认，与 F9/_api_fatal/预算三态无关）
             # 估算失败不阻塞批量（静默跳过+log）；取消则干净退出，不置任何熔断标志
             try:
                 if not self._preview_batch_cost(len(selected), dual_verify=dual_var.get()):
@@ -2890,7 +2889,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             # 防双批并发互相覆盖取消钩子/物理争抢鼠标键盘；fix-review C10：过滤 None）
             for btn in [b for b in [self.export_btn, getattr(self, 'live_btn', None)] if b]:
                 self.win.after(0, lambda b=btn: b.configure(state='disabled'))
-            # t9 D：批量期间按钮文案变化补全（config(text=) 模式同 gui.py:122-124）
+            # D：批量期间按钮文案变化补全（config(text=) 模式同 gui.py:122-124）
             self.win.after(0, lambda: self._set_batch_btn_state(True))
             self.status_text.set("批量识别中 — 请不要操作")
             def _batch_thread_wrapper():
@@ -2928,7 +2927,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         self.win.after(0, lambda: self.export_btn.configure(state='normal'))
                         self.win.after(0, lambda: (self.live_btn.configure(state='normal')
                                                    if getattr(self, 'live_btn', None) else None))
-                        # t9 D：异常路径恢复按钮文案
+                        # D：异常路径恢复按钮文案
                         self.win.after(0, lambda: self._set_batch_btn_state(False))
                     except Exception:
                         pass  # 主窗口可能已销毁/关闭，UI 恢复失败无妨（程序正在退出）
@@ -2957,7 +2956,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # v1.4.2 紧急停止：取消异常类型（ocr/vision 请求层抛），用于快速中断滚动/省份循环
         from ocr import BatchCancelled
         from vision import VisionCancelled
-        result_queue = queue.Queue()  # 后台线程 → 主线程数据通道
+        result_queue = queue.Queue()  # 后台线程
         try:
             import pyautogui, pyperclip
             from vision import locate_element
@@ -3034,7 +3033,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             from vision import ai_locate_elements
             from utils import capture_pdd_screenshot
             # 窗口截图定位：锁定商家后台窗口截图（自动前置），坐标加窗口偏移转全屏；
-            # 找不到后台窗口 → fallback 全屏（偏移 0），保持兼容
+            # 找不到后台窗口
             _shot = os.path.join(tempfile.gettempdir(), 'pdd_calib_batch.png')
             _pos = {}
             capture_pdd_screenshot(_shot, _pos)
@@ -3111,7 +3110,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         MAX_SCROLL_ROUNDS = 16
         for i, reg in enumerate(tasks):
             if self._batch_stop.is_set(): dlog("⏹ 停止"); break
-            # v1.4.2 熔断：API 额度耗尽/鉴权失败 → 批量中止（每个省份白试无意义）
+            # v1.4.2 熔断：API 额度耗尽/鉴权失败
             try:
                 from ocr import _api_fatal as _af
                 if _af['flag']:
@@ -3122,12 +3121,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
             label = reg
             dlog(f"── [{label}] ({i+1}/{total}) ──")
             try:
-                # 1. 截图 → 找文本框 → 优先校准坐标
+                # 1. 截图
                 sp = os.path.join(get_base_dir(), 'output', f'_vis_{i}.png')
                 os.makedirs(os.path.dirname(sp), exist_ok=True)
                 ss(sp)
                 # v1.4 状态机（借鉴 granblue）：省份开始前检查页面状态
-                # login → 会话过期，中止整个批量；captcha/modal/empty → 跳过该省份
+                # login
                 from vision import ai_check_page_state as _check_state
                 _st = _check_state(sp)
                 if _st and _st.get('state') != 'normal':
@@ -3150,7 +3149,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     pos = locate_element(sp, 'region_dropdown', threshold=0.80)
                     if pos:
                         tm_x, tm_y = pos[0], pos[1]
-                        # 模板匹配坐标是窗口截图坐标（宽≤2560），还原到全屏：
+                        # 模板匹配坐标是窗口截图坐标（宽≤2560），还原到全屏
                         # ×(窗口原始宽/截图宽) + 窗口偏移；偏移量按全屏宽度比例
                         # （v1.4 全量审查修复：4K/带鱼屏下旧逻辑直接当全屏用整体偏左）
                         try:
@@ -3171,7 +3170,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         dx += int(90 * sw / 1920)
                         dlog(f"1.模板匹配({dx},{dy})")
                     else:
-                        # v1.3 起完全依赖 AI 定位/模板匹配，无预设坐标兜底：
+                        # v1.3 起完全依赖 AI 定位/模板匹配，无预设坐标兜底
                         # 宁可显式失败让用户处理，也不猜测位置乱点
                         dlog(f"1.✗ 未定位到地区下拉框（AI校准+模板匹配均失败），跳过 {reg}")
                         continue
@@ -3204,7 +3203,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 # 3.5 省份切换验证：粘贴+回车后确认筛选栏省份已切换为目标省份。
                 # 页面省份没变 = 切换失败（下拉框没选上/粘贴失败）。旧版第5步只做像素
                 # 变化检测，省份没变也照走，等于摆设——这里直接读回筛选栏值比对，
-                # 不一致则重新走一遍「定位下拉框 → 清空 → 粘贴省份 → 回车」。
+                # 不一致则重新走一遍「定位下拉框
                 from ocr import strip_region_suffix as _strip_region
                 from vision import ai_read_selected_province as _read_province
                 province_ok = False
@@ -3215,8 +3214,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     _vshot = os.path.join(get_base_dir(), 'output', f'_wait_{i}_prov.png')
                     ss(_vshot)
                     # v1.4 bugfix：省份下拉框是页面顶部小控件，整页截图压缩后小字
-                    # 糊成一团，模型读不出 → 粘贴成功也误报「无法识别」。按下拉框
-                    # 坐标裁剪区域（全屏坐标 → 窗口截图坐标，含 4K/带鱼屏 scale
+                    # 糊成一团，模型读不出
+                    # 坐标裁剪区域（全屏坐标
                     # 还原），特写放大后识别，识别率大幅提升。
                     # 坐标来源：用「本次实际点击粘贴的位置」（dx/dy 或重试的
                     # _dx2/_dy2）——粘贴成功说明该位置就是省份下拉框；模板匹配
@@ -3224,9 +3223,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     # 不能直接当裁剪中心。
                     _bx = _by = None
                     if _dx2 is not None:
-                        _bx, _by = _dx2, _dy2          # 重试：AI 重定位点击坐标（全屏）
+                        _bx, _by = _dx2, _dy2  # 重试：AI 重定位点击坐标（全屏）
                     elif dx is not None:
-                        _bx, _by = dx, dy              # 首次：本次点击粘贴位置（全屏）
+                        _bx, _by = dx, dy  # 首次：本次点击粘贴位置（全屏）
                     _region = None
                     if _bx is not None and _by is not None:
                         _wl = win_pos.get('left', 0) or 0
@@ -3248,7 +3247,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         dlog(f"3.✓ 省份已切换为「{_sel}」")
                         break
                     # 粘贴+回车后页面可能异步刷新（筛选栏值延迟更新）：读到值但
-                    # 不匹配 → 等 0.8s 重截重读一次再判失败，避免误报触发重选
+                    # 不匹配
                     if _sel:
                         time.sleep(0.8)
                         ss(_vshot)
@@ -3267,7 +3266,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         dlog(f"3.✋ 检测到{_at}：{_ah}，需人工处理后重试（程序已暂停该省份）")
                         province_ok = False
                         break
-                    # 连续两次显示值相同且未变化 → 重选机制无效，别浪费第 3 次
+                    # 连续两次显示值相同且未变化
                     if _sel and _sel == _last_sel:
                         _same_twice = True
                         dlog("3.⚠ 显示值连续两次相同，重选无效，提前放弃")
@@ -3280,7 +3279,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     except Exception:
                         pass
                     # 重新走一遍 AI 定位：后台页面可能变化（如突发横条弹窗）导致初始定位坐标偏移，
-                    # 点击落在弹窗/错位上 → 粘贴没进下拉框 → 省份没变。不能用旧坐标重试。
+                    # 点击落在弹窗/错位上
                     import tempfile as _tf
                     from vision import ai_locate_elements as _relocate
                     _re_shot = os.path.join(_tf.gettempdir(), 'pdd_relocate_prov.png')
@@ -3304,7 +3303,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         dlog("3.✗ 重新AI定位失败，跳过")
                         break
                     try:
-                        # 正常操作：点下拉框（点开自动清空）→ 粘贴 → 回车
+                        # 正常操作：点下拉框（点开自动清空）
                         pyautogui.click(_dx2, _dy2); time.sleep(0.3)
                         pyautogui.click(_dx2, _dy2); time.sleep(0.2)
                         pyperclip.copy(full)
@@ -3332,7 +3331,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 _w1 = os.path.join(get_base_dir(), 'output', f'_wait_{i}_1.png')
                 _changed = False
                 try:
-                    for _rc in range(2):  # 点偏兜底：10 秒无变化 → 重定位 query 重点一次
+                    for _rc in range(2):  # 点偏兜底：10 秒无变化
                         ss(_w0)
                         _changed = False
                         for _t in range(10):
@@ -3350,8 +3349,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                 pass
                         if _changed:
                             break
-                        # 页面没变化 = 查询可能没点中（坐标偏移/弹窗遮挡）：
-                        # 重定位 query 按钮 → 重点 → 再等一轮（v1.4 修复：
+                        # 页面没变化 = 查询可能没点中（坐标偏移/弹窗遮挡）
+                        # 重定位 query 按钮
                         # 客户反馈 AI 定位后点查询偏左；点偏后果是识别到旧省份数据）
                         if _rc == 0:
                             dlog("5.⚠ 查询后页面未变化，重定位查询按钮重试")
@@ -3390,15 +3389,15 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         try: os.remove(_p)
                         except Exception: pass
 
-                # 6. 截图 → AI 定位表格（bbox + has_more）→ OCR → 滚动循环
+                # 6. 截图
                 table_bbox = None
                 scroll_round = 0
-                _total_hint = None        # 页面统计总条数（首轮 AI 定位顺带读取，结束后对比识别量）
-                seen_sku = {}            # 已见 sku_id → name（权威去重：滚动重识别/名字波动/ID错位都拦）
-                seen_name_no_sku = set()    # 无 ID 商品登记过的 name
-                seen_name_with_id = set()   # 有 ID 商品登记过的 name
-                _fps = []               # 滚动内容指纹（每轮 stock 集合，滚动到底后稳定）
-                round_items = []        # 该组合全部轮次的识别结果
+                _total_hint = None  # 页面统计总条数（首轮 AI 定位顺带读取，结束后对比识别量）
+                seen_sku = {}  # 已见 sku_id
+                seen_name_no_sku = set()  # 无 ID 商品登记过的 name
+                seen_name_with_id = set()  # 有 ID 商品登记过的 name
+                _fps = []  # 滚动内容指纹（每轮 stock 集合，滚动到底后稳定）
+                round_items = []  # 该组合全部轮次的识别结果
                 _retried_no_new = False  # 防误停：本轮已重试过无新增（v1.4.2 滚动可靠性）
                 _round_fail = 0  # v1.4.2：滚动轮连续无数据计数（防死滚）
                 while scroll_round < MAX_SCROLL_ROUNDS:
@@ -3443,7 +3442,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     dlog(f"6.{'首屏' if scroll_round == 0 else f'滚动{scroll_round}'}OCR识别中({'双模型' if dual_verify else '单模型'})...")
                     items = None
                     # v1.4.2 滚动轮降级：整表大图每轮识别 30s+，失败重试 3 次会卡 90s+——
-                    # 滚动轮（scroll_round>0）失败上限 2 次（网络抖动常见，1 次太激进：
+                    # 滚动轮（scroll_round>0）失败上限 2 次（网络抖动常见，1 次太激进
                     # 客户实测 2 次全失败就停，页面9个只识别5个）；首轮 3 次
                     _rep = 2 if scroll_round > 0 else 3
                     _was_net_err = False
@@ -3451,16 +3450,16 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         try:
                             # v1.4.2 方案A（阿洋拍板）：批量识别改走「整表无 bbox」——
                             # 与实时截图同路径（模型自己数行）。三路径实测证明：AI 行边界
-                            # 在大表上数错（9 商品数出 20 边界→行切分切碎→乱数据/幻觉），
+                            # 在大表上数错（9 商品数出 20 边界
                             # 整表无 bbox 反而 9 行全对且 ID 保留。滚动判断仍用
                             # ai_locate_table 的 has_more/bbox（下方滚动段），识别不依赖。
                             items = self._ocr_generic_to_items(sp2, table_bbox=None,
                                                               dual_verify=dual_verify,
                                                               row_bboxes=None)
-                            # v1.4.2 幻觉行交叉校验：识别数 > 页面总数 → 模型编造了
+                            # v1.4.2 幻觉行交叉校验：识别数 > 页面总数
                             # 不存在的商品行（省1 3商品识别5个的根因）。二次识别后
                             # 取两轮 name 交集——真商品两轮都出现（稳定），幻觉行
-                            # 随机生成两轮不同 → 被剔除。⚠ 匹配用模糊（编辑距离≤2+前4字
+                            # 随机生成两轮不同
                             # 相同）：整表 verify 与首轮 name 可能有 OCR 波动，
                             # 严格相等会误删真实行（find-bugs 审查发现）
                             # v1.4.2 总数可信度校准：AI 定位读右下角"共N条"偶发偏小/漏读
@@ -3501,9 +3500,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                         if len(items) < _before:
                                             dlog(f"6.✓ 幻觉行过滤: {_before} → {len(items)} 个")
                                     else:
-                                        # v1.4.2 全删保护（客户实测 5→0）：verify 与首轮 name 全不匹配
+                                        # v1.4.2 全删保护（客户实测 5
                                         # （verify返回空/OCR波动/总数误读）时，全删=真实数据全丢 +
-                                        # items空 → 无效重试死循环。保底保留首轮全量，宁可多不可无。
+                                        # items空
                                         dlog(f"6.⚠ 交叉校验全不匹配（verify {len(_vr)}行 vs 首轮{_before}行），"
                                              f"疑似总数误读/OCR波动——保底保留首轮 {_before} 行")
                             except Exception:
@@ -3526,7 +3525,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                             except Exception:
                                 pass
                             _es = str(ex).lower()
-                            # v1.4.2 错误分诊（客户实测大表必超时，并非网络抖动）：
+                            # v1.4.2 错误分诊（客户实测大表必超时，并非网络抖动）
                             # - 读超时（ReadTimeout/read timed out）= 模型处理大图太慢，需等待而非重试
                             # - 连接失败（connection/pool/socket）= 网络不通
                             # - 限流（429）= 降速重试
@@ -3563,13 +3562,13 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         else:
                             dlog("6.⏳ 本轮网络异常（不计入无数据），下轮继续尝试")
                     # 内容指纹：本轮识别商品的仓库总库存值集合（模型可能乱编名字/ID，
-                    # 但总库存列相对稳定；滚动到底后集合不再变化 → 提前结束，防无限空转）
+                    # 但总库存列相对稳定；滚动到底后集合不再变化
                     _fp = tuple(sorted(str(it.get('stock', '')) for it in (items or []) if it.get('stock') is not None))
                     _fps.append(_fp)
-                    # 滚动决策：
-                    # - 首轮：AI has_more=True → 滚；AI 定位失败(未知)且本轮有商品 → 滚一次确认；AI 明确 False → 不滚
-                    # - 后续轮：本轮有新商品 → 继续滚；连续无新增 → 结束（保险）
-                    # v1.4.2 官方总数权威硬停：累计识别量 >= 右下角"共有N条" → 识别齐全，
+                    # 滚动决策
+                    # - 首轮：AI has_more=True
+                    # - 后续轮：本轮有新商品
+                    # v1.4.2 官方总数权威硬停：累计识别量 >= 右下角"共有N条"
                     # 立即结束滚动（不再靠"无新增/重试撞"来判定结没结束——客户要求直接用
                     # 官方实际数据对比确认）。N 来自右下角分页栏特写，权威可信。
                     try:
@@ -3587,7 +3586,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     else:
                         should_scroll = new_in_round > 0
                         # v1.4.2 右下角总数权威：滚动停止前对比累计识别量 vs 页面总数
-                        # （右下角"共有N条"分页统计，后端渲染权威）——累计 < 总数 → 疑似
+                        # （右下角"共有N条"分页统计，后端渲染权威）——累计 < 总数
                         # 还有商品没滚出来（滚动轮漏识别），即使本轮无新增也继续滚补抓
                         _under_target = False
                         try:
@@ -3598,7 +3597,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                             _under_target = False
                         if not should_scroll:
                             # v1.4.2 防误停：滚动轮无新增但 AI 未确认到底（has_more
-                            # 未知或 True）→ 单次 OCR 质量波动可能漏识别新商品，直接
+                            # 未知或 True）
                             # 停会漏数据（客户反馈滚动机制"无法正常调用"即此类）。
                             # 给一次重试：重新截图+识别本轮，仍无新增才停止。
                             if ai_has_more is not False and not _retried_no_new:
@@ -3617,11 +3616,11 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                 break
                         elif _under_target:
                             dlog(f"6.↻ 累计{len(round_items)}个 < 总数{int(_total_hint)}，继续滚动")
-                        # 连续3轮页面内容无变化 → 已到底，结束（doubao 等模型每轮"新增"可能永远>0）
+                        # 连续3轮页面内容无变化
                         if len(_fps) >= 3 and _fps[-1] == _fps[-2] == _fps[-3]:
                             dlog("6.⏹ 连续3轮页面内容无变化，结束滚动")
                             break
-                        # 滚动轮每轮重新定位（v1.4.2）→ has_more 是新一轮准确判断
+                        # 滚动轮每轮重新定位（v1.4.2）
                         if ai_has_more is False and scroll_round > 0:
                             dlog("6.✓ AI确认已到底，结束滚动")
                             break
@@ -3660,10 +3659,10 @@ class App(SettingsUIMixin, StatsPagesMixin):
                             # 方案：多位置尝试 + 滚动前后像素验证，失败明确提示。
                             pass
                         # 滚动：v1.4.2 大修——①先激活浏览器前台（根治 scroll 被别的
-                        # 顶层窗口吃掉 →"跑其他页面"）；②落点全部 clamp 进浏览器窗口
+                        # 顶层窗口吃掉
                         # 内、避开 HUD 右上 topmost 区与任务栏(y<sh-90)；③滚动前后只对比
                         # 窗口中部横带（排除 HUD/页码/加载动画的假阳）；④鼠标通道全部
-                        # 失败 → 降级键盘 pagedown，仍失败明确提示不盲滚。
+                        # 失败
                         def _activate_browser():
                             """把商家后台浏览器窗口激活到前台；失败返回 False"""
                             try:
@@ -3743,7 +3742,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                     _im = PILImage.open(_sp3)
                                     _w3, _h3 = _im.size
                                     # 中部 8%~62% 高度横带：滚动表格必经区域，
-                                    # HUD(右上)/页码(右下)/加载动画被排除 → 验证更贴近真实滚动
+                                    # HUD(右上)/页码(右下)/加载动画被排除
                                     return _im.convert('L').crop((0, int(_h3 * 0.08), _w3, int(_h3 * 0.62))).resize((240, 80))
                                 except Exception:
                                     return None
@@ -3755,7 +3754,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                 _s0 = _snap_region('a')
                                 try:
                                     pyautogui.moveTo(_px2, _py2); time.sleep(0.25)
-                                    # v1.4.2 力度：-4(无效)→-40→-200→-300（客户实测：PDD 单页 10 项，
+                                    # v1.4.2 力度：-4(无效)
                                     # 需一次滚过整屏高度；当前总力度 600 = -300×2，仍不够继续加）
                                     pyautogui.scroll(-300); time.sleep(0.15)
                                     pyautogui.scroll(-300)
@@ -3769,7 +3768,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                                         _scrolled = True
                                         dlog(f"6.↘ 滚动生效（变化{_df}px @位置{_n + 1}）")
                                         break
-                            # 键盘降级通道：鼠标通道全失败 → pagedown（发给前台浏览器）
+                            # 键盘降级通道：鼠标通道全失败
                             if not _scrolled and not self._batch_stop.is_set():
                                 _s0 = _snap_region('a')
                                 try:
@@ -3891,7 +3890,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 self.live_btn.configure(state='normal')  # v1.4.5 bug hunt F24
         except Exception:
             pass
-        # t9 D：恢复按钮文案（与禁用态对称）
+        # D：恢复按钮文案（与禁用态对称）
         self._set_batch_btn_state(False)
         self._batch_running = False  # v1.4.6 bug hunt F24 重入守卫：UI 真正收尾时清除标志
         self._refresh_cost_label()  # v1.4.7 WS-C：批量收尾主动刷费用 Label
@@ -3986,7 +3985,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 return True
             return bool(ok)
         except Exception:
-            # 估算逻辑失败 → 静默放行（用户裁定：绝不阻塞批量）
+            # 估算逻辑失败
             return True
 
 
@@ -3998,7 +3997,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         except Exception:
             pass
 
-        # t12 P2-C：免费版每日 50 次实时截图识别门控（enforce=false 时跳过）
+        # ：免费版每日 50 次实时截图识别门控（enforce=false 时跳过）
         # 用户裁定：表格导入/手动输入永不限制；批量识别/双模型/Excel 导出也不在门控范围
         try:
             from utils import Config
@@ -4034,7 +4033,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 截图线程只负责截图+OCR，不参与窗口恢复——不依赖子线程 after，
         # 也不管截图是否卡住，窗口 2 秒必弹回来。
         # 注意：截图函数 win.activate() 会把浏览器拉到前台，deiconify 后 PDD EZ
-        # 可能被浏览器盖住（看着像没恢复）→ 恢复时短暂置顶确保可见。
+        # 可能被浏览器盖住（看着像没恢复）
         def _auto_restore():
             try:
                 if self.win.state() == 'iconic':
@@ -4174,7 +4173,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         rows = result.get('rows') or []
         items = parse_items_generic(rows, cfg.get('mapping') or {})
         # v1.4.2 手机流程【7】容错机制：主识别出现无 ID / 低置信列 / 数字可疑
-        # （年份/日期串串位，如行切分把"商品创建时间 2026-08-04"抄进 stock）的行 →
+        # （年份/日期串串位，如行切分把"商品创建时间 2026-08-04"抄进 stock）的行
         # 自动二次推理择优（强化 prompt 专注 ID 与数字完整性，按 name 匹配补全）。
         # 只在质量信号触发时调用，常规路径零额外成本；失败保留首轮结果。
         try:
@@ -4368,7 +4367,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             _sess = _us.session_total()
             _mon = _us.get_month_cost()  # 内存缓存：跨月时一次性全量重算
             lbl.config(text=f"本次 ¥{_sess:.2f}｜本月 ¥{_mon:.2f}")
-            # P3-R1-L2：写盘连续失败达阈值 → 状态栏一次性提示（不打扰、不重复）
+            # P3-R1-L2：写盘连续失败达阈值
             try:
                 _fs = _us.get_write_failure_state()
                 if _fs and _fs.get('should_alert'):
@@ -4848,7 +4847,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         
         def _commit(*_a):
             # 防重入：destroy 可能触发二次 <FocusOut>，第二次 entry 已销毁，
-            # entry.get() 会抛 TclError（destroy 在 try 内、get 在 try 外）→ 加提交标志
+            # entry.get() 会抛 TclError（destroy 在 try 内、get 在 try 外）
             if getattr(entry, '_committed', False):
                 return
             entry._committed = True
@@ -4933,7 +4932,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             export_dir = _get_default_export_dir()
             path = export_cache_to_xlsx(self.cache, export_dir)
             self.status_text.set(f"已导出 {len(self.cache)} 个地区 → PDD补货记录.xlsx")
-            # t9 C：导出完成状态反馈脉冲
+            # C：导出完成状态反馈脉冲
             self._pulse_status()
             try:
                 os.startfile(export_dir)

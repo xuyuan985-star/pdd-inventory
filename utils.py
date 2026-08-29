@@ -7,7 +7,7 @@ import os, re, sys, json, threading
 VERSION = "v1.5.1"
 
 
-# ── v1.4.8 P1-C：日志/调试脱敏（logger.py / ocr.py 共用）─────────
+# ── v1.4.8 ：日志/调试脱敏（logger.py / ocr.py 共用）─────────
 # 替换值为 ***，保留键名/前缀以便排查调用栈。
 # 不引入第三方依赖；纯 stdlib re。
 _SENSITIVE_KEYS = (
@@ -167,7 +167,7 @@ def get_history_cfg() -> dict:
 
 
 # ============================================================
-# t13 P3-A 补货模型框架
+# 补货模型框架
 # 用户裁定：经典模式（现行公式）原样保留为默认模式，一行公式逻辑都不许改；
 # 加权模式作为额外可选模型，回退时标注「经典(无历史)」
 # ============================================================
@@ -502,7 +502,7 @@ class Config:
         tpl = Config._load_template()
         if tpl and not _parse_fail:
             merged = Config._merge(tpl, data)
-            # v1.4.8 P1-C：DPAPI 凭据加密迁移（首启静默）。
+            # v1.4.8 ：DPAPI 凭据加密迁移（首启静默）。
             # 仅迁移【原始用户数据】里的明文敏感字段，不动模板默认（模板里都是空串）。
             # 已加密的（dpapi:v1: 前缀）跳过；meta.dpi_v=1 标记防重复迁移。
             try:
@@ -522,7 +522,7 @@ class Config:
         Config._load_cache['data'] = data
         return _copy.deepcopy(data)
 
-    # ── v1.4.8 P1-C：DPAPI 凭据加密迁移（docs/SOLUTION_tech_t6.md §①）──
+    # ── v1.4.8 ：DPAPI 凭据加密迁移（docs/SOLUTION_tech_ .md §①）──
     @staticmethod
     def _migrate_secrets(data: dict) -> bool:
         """首启检到 api.providers.*.api_key 或 backend.password 为非空明文→静默加密覆写。
@@ -645,9 +645,9 @@ class Config:
         Config.save(data)
 
 
-# ── v1.4.8 P1-C-fix：运行时凭据解密（t18）───────────────────────
+# ── v1.4.8 -fix：运行时凭据解密───────────────────────
 # ocr.py / vision.py 在每次 API 调用前从 provider dict 拿 api_key；
-# t9 之后 settings.json 里存的是 dpapi:v1: 密文，裸拿 = 401 全军覆没。
+# 之后 settings.json 里存的是 dpapi:v1: 密文，裸拿 = 401 全军覆没。
 # 这里提供一个运行时入口：明文直通 + 密文解密 + 失败降级 + 进程内 memo
 # （同一进程反复调用的热点路径，避免每次都走 CryptUnprotectData）。
 _decrypt_memo = {}
@@ -770,7 +770,7 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
     win_left = win_top = 0
     try:
         import pygetwindow as gw
-        # 窗口选择（v1.4 全量审查修复）：
+        # 窗口选择（v1.4 全量审查修复）
         # 1) 优先标题含「拼多多/pinduoduo」的窗口（商家后台标签激活时窗口标题带站点名）
         # 2) 没有 → 所有浏览器窗口中选「当前激活」的那个（用户刚在看的就是 PDD 页面）
         # 3) 再没有 → 第一个浏览器窗口（多窗口时可能有偏差，但比截错窗口好）
@@ -782,7 +782,7 @@ def capture_pdd_screenshot(output_path: str, out_window_pos: dict = None) -> boo
                     continue
                 if '拼多多' in title or 'pinduoduo' in title.lower():
                     return wins[0]  # 精确站点名优先
-                for w in wins:      # 浏览器窗口：优先当前激活的
+                for w in wins:  # 浏览器窗口：优先当前激活的
                     try:
                         if w.isActive:
                             return w

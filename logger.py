@@ -32,11 +32,11 @@ def _get_sanitizer():
 class _ColoredFormatter(logging.Formatter):
     """控制台彩色 Formatter：INFO 绿 / WARNING 黄 / ERROR 红 / CRITICAL 红粗"""
     COLORS = {
-        'DEBUG': '\033[90m',     # 灰
-        'INFO': '\033[92m',      # 绿
-        'WARNING': '\033[93m',   # 黄
-        'ERROR': '\033[91m',     # 红
-        'CRITICAL': '\033[91;1m' # 红粗
+        'DEBUG': '\033[90m',  # 灰
+        'INFO': '\033[92m',  # 绿
+        'WARNING': '\033[93m',  # 黄
+        'ERROR': '\033[91m',  # 红
+        'CRITICAL': '\033[91;1m'  # 红粗
     }
     RESET = '\033[0m'
 

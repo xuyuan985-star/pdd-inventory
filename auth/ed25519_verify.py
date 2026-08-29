@@ -33,7 +33,7 @@ def _modp_inv(x: int) -> int:
 
 # ============================================================
 # Affine point operations (x, y) on Ed25519
-# Curve: -x² + y² = 1 + d*x²*y²  (mod p)
+# Curve: -x² + y² = 1 + d*x²*y² (mod p)
 # ============================================================
 def _point_add(P, Q):
     """仿射点加法 P + Q（Ed25519 twisted Edwards a=-1 形式：-x² + y² = 1 + d·x²·y²）。

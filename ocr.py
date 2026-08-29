@@ -40,7 +40,7 @@ def _load_usage_pricing() -> dict:
 
 
 # ── 批量紧急停止钩子（v1.4.2）：紧急终止必须"立刻"——光靠调用方 Event 轮询，
-# 要等当前 30~90s 的 OCR 请求跑完才轮到检查点。这里提供模块级取消检查：
+# 要等当前 30~90s 的 OCR 请求跑完才轮到检查点。这里提供模块级取消检查
 # gui 批量线程注入 set_cancel_check(stop.is_set)，API 请求前/重试间立即中断，
 # 抛出 BatchCancelled 让批量线程马上收尾，不再等超时。──
 _CANCEL_CHECK = None
@@ -495,7 +495,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
 
     key = provider.get('api_key', '') or os.environ.get(
         {'doubao':'ARK_API_KEY','qwen':'DASHSCOPE_API_KEY','glm':'ZHIPU_API_KEY'}.get(active, ''), '')
-    # v1.4.8 P1-C-fix（t18）：settings.json 里 api_key 已是 dpapi:v1: 密文，
+    # v1.4.8 -fix：settings.json 里 api_key 已是 dpapi:v1: 密文，
     # 裸发给厂商必 401。运行时解密（明文直通 / 密文 → 明文 / 失败 → ""）
     try:
         from utils import decrypt_secret
@@ -564,7 +564,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
     if not isinstance(providers_global, dict):
         providers_global = {}
 
-    # forced_model 可能属于其他 provider（如主模型 glm、副模型 qwen3.5-ocr）：
+    # forced_model 可能属于其他 provider（如主模型 glm、副模型 qwen3.5-ocr）
     # 按模型名前缀推断所属 provider，切换到它的 endpoint/key——否则副模型请求
     # 会发到主 provider 的 endpoint 报"模型不存在"（v1.4 修复，实测 glm 主+qwen-ocr 副报 1211）
     if forced_model:
@@ -584,7 +584,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 endpoint = _alt.get('endpoint', '')
                 key = _alt.get('api_key', '') or os.environ.get(
                     {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
-                # v1.4.8 P1-C-fix（t18）：强制模型走副 provider 时同样需要解密 key
+                # v1.4.8 -fix：强制模型走副 provider 时同样需要解密 key
                 try:
                     from utils import decrypt_secret
                     key = decrypt_secret(key)
@@ -641,7 +641,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
         if is_glm and (_is_official_ali or _is_official_ark):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers_global.get('glm', {}).get('api_key', '') if isinstance(providers_global, dict) else ''
-            # v1.4.8 P1-C-fix（t18）：fallback 到智谱端点时同样需解密
+            # v1.4.8 -fix：fallback 到智谱端点时同样需解密
             if cur_key:
                 try:
                     from utils import decrypt_secret
@@ -672,7 +672,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                             'max_output_tokens': cur_max_tok,
                             'stream': False
                         }, timeout=(10, 180))  # v1.4.2 读取超时 30s→180s：VL 处理大图(9列大表)可达 60-120s，
-                        #  30s 必然误判失败（客户实测小表3-5行成功、大表必超时）——给足处理时间再谈网络
+                        # 30s 必然误判失败（客户实测小表3-5行成功、大表必超时）——给足处理时间再谈网络
                     data = resp.json()
                     # v1.4.7 WS-C：debug 落盘钩子（早于文本提取，捕获完整 raw）
                     # 受 usage.debug_archive_enabled 控制，默认关；失败吞掉
@@ -897,7 +897,7 @@ def strip_tail_noise(value) -> str:
             changed = True
     _out = _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
     if not _out and str(value).strip():
-        # v1.4.5（bug hunt F4）整值保护（验收回归 N1/C7 收窄）：仅当原值呈"日期/数字形态"
+        # v1.4.5（bug hunt F4）整值保护（N1/C7 收窄）：仅当原值呈"日期/数字形态"
         # 才保留原文（防 '2024-05-04' 这类真实数据被清空）；纯词条噪音（'查看地址'/
         # '更新记录'）仍剥空，避免噪音文本入库/导出
         _orig = str(value).strip()
@@ -1052,7 +1052,7 @@ def _split_name_id(value: str) -> tuple:
     """
     拆分商品信息列的值 → (商品名, sku_id)。
     后台格式：'示例商品A500g/袋 ID:12345678901' → ('示例商品A500g/袋', '12345678901')
-    支持 ID:xxx / 商品ID:xxx / id=xxx / #xxx 等常见格式；无 ID 时返回 (原值, '')。
+    支持 ID:xxx / 商品ID:xxx / id=xxx /  # xxx 等常见格式；无 ID 时返回 (原值, '')。
     """
     global _SKU_ID_RE
     if _SKU_ID_RE is None:
@@ -1170,7 +1170,7 @@ def _write_ocr_debug(cols, rows, note=''):
                 _hist = [_hist]
         except Exception:
             _hist = []
-        # v1.4.8 P1-C：note 字段可能含 API 报错文本（带 Authorization/Bearer/api_key），
+        # v1.4.8 ：note 字段可能含 API 报错文本（带 Authorization/Bearer/api_key），
         # 落盘前脱敏（仅字符串字段；columns/rows 是表格数据，不会含凭据）
         try:
             from utils import _sanitize_for_log
@@ -1390,7 +1390,7 @@ def merge_verify_items(items: list, verify_items: list) -> list:
                 for _f in ('stock', 'sales'):
                     a = str(it.get(_f) or '')
                     b = str(v.get(_f) or '')
-                    # v1.4.5（bug hunt F8 + 验收回归 N2/C8）：仅真空缺（''）才用副模型补全——
+                    # v1.4.5（bug hunt F8 + N2/C8）：仅真空缺（''）才用副模型补全——
                     # 真实库存/销量为 0 是合法业务值，不得被副模型误读值覆盖
                     if a == '' and b and b != '0':
                         it[_f] = v[_f]
@@ -1480,8 +1480,8 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     # 行边界完整性校验：bbox 底部比最后一行底多出 >2.5 行高 → 行边界疑似
     # 漏了底部行（AI 数行不全），行切分必然丢行 → 抛错回退整表识别
     # （整表模型自己数行，与实时截图同路径；v1.4 修复。
-    #  ⚠ 阈值 1.5→2.5 行：AI 的 bbox 常比表格实际范围画大 1~2 行，
-    #  过小阈值会把正常表格误判漏行，导致行切分机制失效）
+    # ⚠ 阈值 1.5→2.5 行：AI 的 bbox 常比表格实际范围画大 1~2 行，
+    # 过小阈值会把正常表格误判漏行，导致行切分机制失效）
     try:
         _avg_h = (_rows[-1][1] - _rows[0][0]) / max(1, len(_rows))
         # 行边界异常（重叠/零高）时 _avg_h≈0，任何差值都会误触发——跳过校验
@@ -1496,7 +1496,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     # 分组：避免"孤行组"——最后一组只剩 1 行时（5 行拆 4+1），单行图
     # 无表头参照、图太矮，模型输出列不全（v1.4 修复：山东第4行数据不全）。
     # 拆组规则：前组剩余必须 ≥2 行；前组只有 2 行时直接并入孤行（3 行组，
-    # 容忍超组大小 1 行——超量 token 由"截断拆半重试"兜底；v1.4 审查加固：
+    # 容忍超组大小 1 行——超量 token 由"截断拆半重试"兜底；v1.4 审查加固
     # 组 2 场景下旧逻辑会拆出 [1,2] 首行孤组）
     _groups = []
     _i = 0
@@ -1642,7 +1642,7 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
         return parse_items_generic(result.get('rows') or [], mapping)
     # v1.4.2：副模型是 OCR 专用模型（qwen*-ocr）时直接跳过双模型表格验证——
     # OCR 专用模型输出的是「文字块列表」（{"行号","标题","rotate_rect","text"}），
-    # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测：
+    # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测
     # 换了 VL 主模型后副模型 qwen3.5-ocr 每轮都报'无法解析 JSON'然后降级）。
     if secondary_model and _is_qwen_ocr(secondary_model):
         _ocr_dlog(f"副模型({secondary_model})为OCR专用模型，不参与表格JSON交叉验证——本次按单模型(主)识别")

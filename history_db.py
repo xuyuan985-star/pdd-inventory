@@ -71,10 +71,10 @@ _BUSY_TIMEOUT_MS = 5000
 """写锁等待上限（毫秒）：多进程双开/批量与实时极端并发时最多等 5s，超时报锁不崩。"""
 
 # ── 模块级状态（进程内一次初始化 / 一次健康检查；写入全局串行）──────────
-_DB_OVERRIDE = {'path': None}       # 测试/重定向用；None = 走 get_base_dir() 默认
-_READY = set()                      # 已确认健康且 schema 就绪的库路径（quick_check 每进程每路径只做一次）
-_INIT_LOCK = threading.Lock()       # 串行化"健康检查 + 建表"，防并发重复初始化
-_WRITE_LOCK = threading.RLock()     # 写操作全局串行（record/prune/delete/clear），读不加锁（WAL 允许并发读）
+_DB_OVERRIDE = {'path': None}  # 测试/重定向用；None = 走 get_base_dir() 默认
+_READY = set()  # 已确认健康且 schema 就绪的库路径（quick_check 每进程每路径只做一次）
+_INIT_LOCK = threading.Lock()  # 串行化"健康检查 + 建表"，防并发重复初始化
+_WRITE_LOCK = threading.RLock()  # 写操作全局串行（record/prune/delete/clear），读不加锁（WAL 允许并发读）
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -374,8 +374,8 @@ def record_capture(plans_by_region, source='live') -> int:
             return -1
         ts = _now_ts()
         src = _to_str(source)[:32] or 'live'
-        rows = []           # (region, sku_id, name, stock, sales, days_left, status, qty, warehouse)
-        first_region = ''   # session 首地区（取第一个非空地区）
+        rows = []  # (region, sku_id, name, stock, sales, days_left, status, qty, warehouse)
+        first_region = ''  # session 首地区（取第一个非空地区）
         for region, plans in plans_by_region.items():
             reg = _to_str(region)
             if not isinstance(plans, (list, tuple)):
@@ -531,7 +531,7 @@ def query_daily(days=30, region=None) -> list:
     用户裁定：默认全免（enforce=false），所有用户不受限；Pro 也不受限。
     """
     try:
-        # t12 P2-C：免费版历史趋势窗口钳制（仅 enforce=true 时生效）
+        # ：免费版历史趋势窗口钳制（仅 enforce=true 时生效）
         try:
             from auth.license import get_history_days_limit, is_pro
             # 默认 enforce=false，所有人 unlimited；显式 enforce=true 才钳制

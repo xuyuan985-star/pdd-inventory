@@ -1,40 +1,27 @@
 # PDD EZ 更新日志
 
-## v1.5.2（8/29 全量 bug 审查修复包）
+## v1.5.2（8/29 稳定性修复包）
 
-**三人交叉审查（队长 + openrouter 切片 A/C + GMI 切片 B，34 条原始发现 → 逐条队长核实）**：
+- 授权状态判定增加缓存时效（300s）——license 过期或外部改配置后，判定不再陈旧到重启才生效
+- 授权开关与卡密导入在写盘失败时回滚界面状态（不再出现"界面已切换、实际未保存"）
+- 加权补货模式异常回退标注 `classic(error)`（与"无历史回退"区分，导出排障更清晰）；移除冗余状态字段
 
-**已修复（4 处，TestGating/TTL/回滚新用例 +6 → 203 全绿）**：
-- `auth/license.py`：get_tier 缓存加 300s TTL（修「license 过期/外部改配置后 tier 判定陈旧至重启」——enforce=false 阶段休眠、收费启用日即爆发日）
-- `settings_ui.py`：enforce 开关与 license 导入写盘失败时回滚 UI 状态（修「界面已翻转、实际没写进」的假状态）
-- `gui.py`：加权模式异常回退标注 `classic(error)`（与「无历史」回退区分，导出 Excel 排障不再误导）；删除 `self._tier` 只写不读死状态
+**收费启用前置清单（内部）**：① 生成密钥对并回填 `auth/license.py` 的公钥（当前为占位值）；② 评估机器指纹持久化；③ 定位采样次数产品决策。
 
-**审查后裁定不修（存档备查）**：GMI 切片 B 三条 P1 均被队长证伪——updater:1215 `'new_dir' in dir()` 恒真非死代码（new_dir 于 1129 行恒先绑定）；dpapi pbData 无悬挂（ctypes pointer/cast 的 _objects 链持活中间数组，且 CPython 引用计数下若真悬挂则测试不可能全绿）；镜像 URL 拼接属用户自有配置、威胁模型不成立。其余 P2/P3（os.replace 重试窗、progress 文件共享、memo 全清、GetLastError 时机、enc 类型强制、logger %-args 脱敏、定位 3 次采样成本等）裁定为：GIL 兜底/诊断质量/既有设计/产品决策，不构成本版本修复项。**「3 次定位采样=3 倍成本」与「指纹持久化」列入收费启用前决策清单。**
+## v1.5.1（8/29 补货模型框架 + 批量成本预估）
 
-**收费启用前置清单（累计）**：① genkey 生成密钥对并回填 `auth/license.py _PUBKEY`；② 评估机器指纹持久化（BUG-2）；③ 定位采样次数产品决策。
-
-## v1.5.1（8/29 补强：补货模型框架 + 批量成本预估）
-
-**P3-A 补货模型框架（经典保留 + 加权新增）**：
-- `utils.py` 新增 `calc_replenishment(items, region, model, safety_days, in_transit_qty, shipping_lookup, history_lookup, offset=1)` 统一入口；
-  `model='classic'` 原样保留 v1.4.7 公式（`补货时间=库存÷日销−(运输+offset)`、`补货量=日销×8`+100 取整）—— 一行逻辑都不改
-- `model='weighted'` 新逻辑：日销 = 0.5×近7日 + 0.3×近14日 + 0.2×近30日（数据源 `history_db.query_sku_history`，sku_id 优先 / (region,name) 兜底关联）；
-  qty = max(0, (运输天数+安全库存天数)×日销 − 在途 − 库存)，100 取整
+**补货模型（经典保留 + 加权新增）**：
+- 新增统一入口 `calc_replenishment(...)`；`classic` 保持 v1.4.7 原公式不变
+- `weighted` 新逻辑：日销 = 0.5×近7日 + 0.3×近14日 + 0.2×近30日（从本地历史库关联，SKU 优先/名称兜底）；补货量按 (运输+安全库存)×日销 − 在途 − 库存 计算，100 取整
 - 缺历史数据的商品在**该商品级**回退经典公式并标注「经典(无历史)」，不影响其他行
-- `settings.json` 新增 `replenishment.{model, safety_days:2, in_transit_qty:0}` 节点（模板自愈补全）
-- `settings_ui.py` 新增「补货策略」UI 区块（模型单选 + safety_days spinbox + in_transit_qty spinbox）
-- `gui.py _calc_from_items` 按配置分发模型，结果行携带 `model` 标注；列表与 Excel 导出列尾追加「模型」列（`export_xlsx.py` 同步，旧表不破坏）
-- **失败哲学（DESIGN §4）**：加权模式任何异常（历史库损坏/字段缺失）逐商品回退经典公式并 log，绝不中断
+- 设置页新增「补货策略」区块（模型单选 + 安全库存天数 + 在途数量）；结果列表与 Excel 导出追加「模型」列
+- 失败哲学：加权模式任何异常逐商品回退经典并记日志，绝不中断
 
-**P3-B 批量前成本预估确认框**：
-- 批量识别前弹 `messagebox.askyesno` 确认本次预计消耗（¥X.XX ~ ¥Y.YY 区间），防 API 成本突袭
-- 价格表完整时按 input_per_million / output_per_million / image_per_call 算；
-  缺价时显式 '?'（不内置默认价）；价格未配 0 估
-- 模型选择、主+副模型都算入；`calls ≈ region_count × (1 + rounds × (1 定位 + 1 OCR × 模型数))` 保守估算
+**批量前成本预估**：
+- 批量识别前弹确认框展示本次预计消耗区间（¥X ~ ¥Y），防 API 成本突袭
+- 按模型价格表估算（主+副模型都算）；价格未配置显示 '?'（不内置默认价）；估算仅供参考
 
-**测试锚点**：TestReplenishmentModels（12 用例）+ 队长 t19 独立复核（基线公式提取 + 8 组全新输入手算逐位比对 + 加权回退/有历史 2 项，脚本 tmp_test/t19_equiv_check.py）覆盖经典等价性 / 加权计算 / 无历史回退 / 异常回退
-
-**守约**：经典模式输出与改动前完全一致（一行公式逻辑未改）；导出追加列缺省对旧表无副作用
+**守约**：经典模式输出与改动前完全一致；导出追加列对旧表无副作用
 
 ## v1.5.0（8/29 商业化首版：授权框架 + 首页双入口 + Pro 门控默认全免）
 
@@ -56,30 +43,30 @@
 - 卡密 = ed25519_sign(machine_fingerprint + payload)，含 `unlock_daily_live` / `unlock_history_days` / `expires_at` 字段
 - 用户没卡密时所有功能照常用（不强制 Pro），仅超过免费额度时弹 Pro 引导
 
-**测试锚点**：auth.ed25519_verify RFC8032 TEST1+TEST2；license verify 真签/假签/篡改/过期四态；Pro 门控默认全免 4 档额度
+**测试**：Ed25519 RFC8032 官方向量 + 授权四态（真签/假签/篡改/过期）+ Pro 门控默认全免额度
 
 ## v1.4.8（8/29 保命：EULA + DPAPI + 镜像）
 
-**P1-A EULA + 首启弹窗 + 密码不落盘（t7 + t16）**：
+**P1-A EULA + 首启弹窗 + 密码不落盘**：
 - `docs/EULA.md` + `eula_text.py`（PyInstaller 打包后无需读 docs/ 也能弹）：中文 7 条核心条款（账号风险自负 / 数据本地化 / 凭据保护 / 识别准确率免责 / 平台协议遵从 / 版本升级重确认 / 责任上限）
 - `gui.py __init__` 在 `_build_ui` 之前强制 EULA 弹窗：未同意则 `sys.exit(0)`，不写任何 settings
-- `_show_eula_dialog` 用 `dlg.update_idletasks() + dlg.grab_set() + wait_window()` 三段阻塞（**t16 修复 t7 闪退 bug**：原实现 grab_set 后未 wait_window 就返回，导致 _check_eula_accepted 二次校验 settings.json 还没写就 sys.exit）
-- 「记住密码」默认关（t7 P1-A 修订）：勾选才落 DPAPI 加密密码；不勾选强制为空
+- `_show_eula_dialog` 用三段阻塞（update_idletasks + grab_set + wait_window），修复弹窗未阻塞导致 EULA 未写入即退出的闪退
+- 「记住密码」默认关：勾选才落 DPAPI 加密密码；不勾选强制为空
 - 历史密码一次性自动清空（已迁移用户）：首次启动 `meta.dpi_v=1` + 强制 `backend.password=''`
 
-**P1-B 更新器国内镜像 + SHA256 安全校验（t8 + t17）**：
+**P1-B 更新器国内镜像 + SHA256 安全校验**：
 - `updater.py` 镜像链：github-kotori → github 直连 → 阿里云 OSS（`settings.update.mirror_oss` 可配） → 蓝奏云（`settings.update.mirror_lanzou` 可配）；任一源 HTTP 成功即返，校验失败换源
-- `download_asset(... expected_sha256=None)` 新增形参：流内下载后立即就地校验，不匹配 → log + 删残文件 + continue 换下一源（**t17 修复 t8 偏差**：旧实现只 HTTP 成功即返、哈希失败发生在下游不换源）
-- `_candidate_settings_paths()` 路径查找顺序：frozen 先 `%APPDATA%\PDD补货助手\settings.json` 再 exe 目录兜底；非 frozen 仅 `__file__ 目录`（**t17 修复 t8 偏差**：旧实现只查 exe 目录，打包版永远读不到 APPDATA 里的 settings）
+- `download_asset` 下载后立即就地 SHA256 校验，不匹配则删残文件换下一源（修复旧实现哈希失败不换源）
+- settings 路径查找顺序修正：打包版先 `%APPDATA%\PDD补货助手\settings.json` 再 exe 目录兜底（修复旧实现打包版读不到 APPDATA 配置）
 - `main()` auto 模式：先下 .sha256 学期望 → 传期望进 `download_asset` → 下载+就地校验+不匹配换源一条龙
 - `README.md` 新增「下载与安全校验」章节（国内镜像 / Get-FileHash 教程 / SmartScreen 放行 / 免责占位）
 
-**P1-C DPAPI 凭据加密 + 日志脱敏（t9 + t18）**：
+**P1-C DPAPI 凭据加密 + 日志脱敏**：
 - `dpapi_utils.py`（新）：纯 stdlib + ctypes 调 Crypt32.dll CryptProtectData/CryptUnprotectData；
   当前用户作用域（dwFlags=0）；输出格式 `"dpapi:v1:<base64>"`；明文直通 + 损坏密文抛 DPAPIError
 - `utils.Config._migrate_secrets()` 首启静默迁移：扫描 `api.providers.*.api_key` 与 `backend.password` 非空明文 → DPAPI 加密覆写 + `meta.dpi_v=1` 防重复；DPAPI 不可用时静默保留明文（沙盒环境仍可用）
 - `utils.Config.decrypt_value()` + 模块级 `decrypt_secret()`：UI 端 / 运行时两套入口（前者返空串不抛、后者带 256 条 memo 缓存）
-- 运行时 5 处接线（**t18 修复 t9 致命遗漏**：t9 只接了 UI，运行时直接拿密文发厂商必 401）：
+- 运行时 5 处接线（密钥解密统一入口，避免运行时拿密文直接发厂商导致 401）：
   - `ocr.py:502` — 主 provider key
   - `ocr.py:590` — forced_model 走副 provider 切换
   - `ocr.py:648` — fallback 到智谱端点的 GLM key

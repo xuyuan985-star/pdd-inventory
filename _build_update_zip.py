@@ -14,11 +14,11 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 # 大写 key（Pillow/PyYAML）会导致匹配失败漏打包（v1.4 审查修复）
 PIP_TO_INTERNAL = {
     'opencv-python':        ['cv2'],
-    'numpy':                ['numpy', 'numpy.libs'],          # + numpy-*.dist-info 通配
+    'numpy':                ['numpy', 'numpy.libs'],  # + numpy-*.dist-info 通配
     'pillow':               ['PIL'],
     'pywin32':              ['win32', 'pywin32_system32'],
     'lxml':                 ['lxml'],
-    'cryptography':         ['cryptography'],                 # + cryptography-*.dist-info
+    'cryptography':         ['cryptography'],  # + cryptography-*.dist-info
     'certifi':              ['certifi'],
     'pyyaml':               ['yaml'],
     'charset-normalizer':   ['charset_normalizer'],
@@ -265,7 +265,7 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
         # 资源文件（仅当变更时）— settings.json 是用户本机配置，绝不进包
         if resources_changed:
-            # v1.4.5（bug hunt F17 验收回归 C6）：检测已加但仍需写包——模板/文档资源与 icon/regions
+            # v1.4.5（bug hunt F17 C6）：检测已加但仍需写包——模板/文档资源与 icon/regions
             # 同一循环进包（settings_template.json/使用说明.txt 在 onedir 根，非 _internal）
             # v1.4.6（bug hunt L21/R4）：visited 去重——同资源若 onedir 与 _internal 双存在，arcname
             # 重复会写两条 zipfile 重复条目（提取时先写后写覆盖，Warning）。只写第一次命中。
