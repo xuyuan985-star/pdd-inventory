@@ -921,15 +921,18 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 修 P-A1 严重问题（新用户根本看不到 8 项功能）；_toggle_nav 保留提供折叠入口。
         self.main_paned = tk.PanedWindow(self.win, orient="horizontal", sashwidth=3, bg=self.C_BORDER)
         self.main_paned.pack(fill="both", expand=True, padx=15, pady=(2, 15))
-        # 左侧导航栏
-        self.nav_frame = tk.Frame(self.main_paned, width=176, bg=self.C_BG)
+        # 左侧导航栏（t29 迭代R3：width 随 dpi_scale 联动——nav 是全 UI 唯一
+        # pack_propagate(False) 冻结像素宽的容器，字号随 tk scaling 缩放而 176px
+        # 不缩，200% DPI 下「💰 用量明细」会被裁且导航占窗口比例减半）
+        self.nav_frame = tk.Frame(self.main_paned, width=int(176 * self.dpi_scale), bg=self.C_BG)
         self.nav_frame._skip_theme = True  # 导航栏保持 C_SURFACE 区分色，主题切换不覆盖
         self.nav_frame.pack_propagate(False)
         self.nav_buttons = {}
         # 右侧内容
         self.content_frame = tk.Frame(self.main_paned)
-        # t27 ①：默认 add nav_frame（before=content_frame，stretch="never" 固定宽度 176）
-        self.main_paned.add(self.nav_frame, minsize=176, stretch="never")
+        # t27 ①：默认 add nav_frame（before=content_frame，stretch="never" 固定宽度）
+        # t29 迭代R3：minsize 与 width 同步 DPI 联动（窗口 minsize 已在 L361 联动）
+        self.main_paned.add(self.nav_frame, minsize=int(176 * self.dpi_scale), stretch="never")
         self.main_paned.add(self.content_frame, stretch="always")
         # 页面帧
         self.page_home = tk.Frame(self.content_frame, bg=self.C_BG)
@@ -942,7 +945,15 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.page_history = tk.Frame(self.content_frame, bg=self.C_BG)
         self.page_usage = tk.Frame(self.content_frame, bg=self.C_BG)
         self._current_page = self.page_home
-        
+
+        # t29 冷启动修复（修 t27 ①默认展开引入的空壳 bug）：导航默认展开后必须立即
+        # 构建按钮内容，否则 nav_frame 展开是空壳（用户报告：启动时导航空白，点 ☰
+        # 收起再展开按钮才出现）。_build_nav 引用 page_* 帧，必须在 8 个 page Frame
+        # 全部创建之后、_current_page 赋值之后调用。
+        # t29 修 v4f盲审-F7 注释失实：_build_ui 预构建后 nav_buttons 恒非空，
+        # _toggle_nav 的懒构建守卫实际不再触发（仅作历史防御保留）。
+        self._build_nav()
+
         # 初始 3 行数据对象（识别结果表承载显示/编辑，rows 仅存数据）
         for _ in range(3):
             self._add_row()
@@ -1119,11 +1130,15 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if self.nav_frame.winfo_ismapped():
             self.main_paned.forget(self.nav_frame)
         else:
-            self.main_paned.add(self.nav_frame, before=self.content_frame, minsize=150, stretch="never")
+            self.main_paned.add(self.nav_frame, before=self.content_frame, minsize=int(176 * self.dpi_scale), stretch="never")  # t29：150→176（v4f P3）再 DPI 联动（迭代R3）
             if not self.nav_buttons:
                 self._build_nav()
 
     def _build_nav(self):
+        # t29 修 v4f盲审-F1：幂等守卫——重复调用会重建按钮并泄漏旧 widget（旧
+        # command 仍可触发）。当前调用点均有外层守卫，此处兜底防御未来调用点。
+        if self.nav_buttons:
+            return
         # t27 实施包 A (②)：8 项分 3 组——【工作区】【数据】【设置】
         # 组标 = self._lbl 8pt C_MUTED（pady=(10,2) 组前/ (0,4) 组后）
         # 组间 1px C_BORDER 分隔 Frame（fill x）
@@ -1151,6 +1166,10 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 _sep = tk.Frame(self.nav_frame, bg=self.C_BORDER, height=1)
                 _sep._skip_theme = True
                 _sep.pack(fill="x", padx=10, pady=6)
+                # t29 迭代R3（mmx-or A3 / gmi ③共识）：_skip_theme 冻结的是 walk，
+                # 分隔线底色须挂重绘表跟主题走（与工具栏分隔线 gui.py:857 同模式），
+                # 否则切浅色主题后残留旧主题深色横杠。
+                self._register_redraw(lambda f=_sep: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
             first = False
             # t27 ②：组标（8pt C_MUTED）
             self._lbl(self.nav_frame, text=group_name, font=(self.FONT[0], 8),

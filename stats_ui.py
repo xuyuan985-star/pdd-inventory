@@ -101,6 +101,10 @@ class StatsPagesMixin:
             if not sel:
                 return
             vals = tree.item(sel[0], 'values')
+            # t29 修 v4f-F13：空态占位行（日期列为 '--'）不响应双击，
+            # 否则会打开"暂无数据 · --"的空明细窗困扰用户
+            if not vals or vals[0] == '--':
+                return
             if len(vals) >= 2 and vals[1]:
                 self._history_day_detail(self.win, vals[1], vals[0])
 

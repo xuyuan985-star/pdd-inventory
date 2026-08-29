@@ -542,7 +542,7 @@ class SettingsUIMixin:
 
     def _build_product_region_tab(self, parent, dlg=None):
         """商品运输时效设置：选地区 → 显示商品列表 → 逐商品调运输天数"""
-        self._lbl(parent, text="商品运输时效设置", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="商品运输时效设置", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # t29 迭代R3：页标题边距统一 16/(14,2)
         self._lbl(parent, text="不同商品发往不同地区，运输时间可能不同", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         # 地区选择
@@ -717,7 +717,7 @@ class SettingsUIMixin:
 
     def _build_skin_tab(self, parent):
         """主题选择：四套主题 2×2 网格，点击预览卡即切换"""
-        self._lbl(parent, text="选择界面主题", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="选择界面主题", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # t29 迭代R3：页标题边距统一 16/(14,2)
         self._lbl(parent, text="点击卡片即时切换，自动保存偏好", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         cards_frame = tk.Frame(parent, bg=self.C_BG)
@@ -777,7 +777,7 @@ class SettingsUIMixin:
         import json, time as _time
         from datetime import datetime
 
-        self._lbl(parent, text="定位校准", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="定位校准", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # t29 迭代R3：页标题边距统一 16/(14,2)
 
         from utils import Config as _Cfg3
         s = _Cfg3.load()  # 安全回退
@@ -970,7 +970,7 @@ class SettingsUIMixin:
 
     def _build_backend_tab(self, parent, dlg=None):
         """配置拼多多商家后台链接和登录凭据"""
-        self._lbl(parent, text="商家后台快捷入口", font=self.FONT_HEADING).pack(pady=(15,2))
+        self._lbl(parent, text="商家后台快捷入口", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # t29 迭代R3：页标题边距统一 16/(14,2)
         self._lbl(parent, text="设置后可通过主页「🏪 商家后台」按钮一键打开", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         config = self._get_backend_config()
@@ -1093,10 +1093,10 @@ class SettingsUIMixin:
 
         # t27 实施包 A (③)：page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
         self._lbl(parent, text="API 提供商管理", font=self.FONT_HEADING, bg=self.C_BG, fg=self.C_TEXT).pack(
-            padx=20, pady=(14, 2))   # t28 (b-3): 左缘对齐卡片
+            padx=16, pady=(14, 2))   # t29 迭代R3：页标题边距统一 16/(14,2)（原 b-3 的 20 归一）
         self._lbl(parent, text="每个提供商独立配置 Key 和模型名，数据仅保存在本机",
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
-            padx=20, pady=(0, 4))   # t28 (b-3): 左缘对齐
+            padx=16, pady=(0, 4))
 
         # 活跃提供商选择（机能单选：选中圆点填充亮黄）
         active_frame = tk.Frame(parent, bg=self.C_BG)

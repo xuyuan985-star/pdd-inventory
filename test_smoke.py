@@ -3518,8 +3518,8 @@ class TestNavGrouping(unittest.TestCase):
         self.assertGreater(nav_add_pos, 0)
         self.assertGreater(content_add_pos, 0)
         self.assertLess(nav_add_pos, content_add_pos)
-        # 宽度统一 176
-        self.assertIn('width=176', src)
+        # 宽度统一 176（t29 迭代R3：字面量已 DPI 化为 int(176 * self.dpi_scale)）
+        self.assertIn('width=int(176 * self.dpi_scale)', src)
         # _toggle_nav 仍保留（提供折叠入口给熟练用户）
         self.assertTrue(hasattr(gui.App, '_toggle_nav'))
 
@@ -3531,6 +3531,8 @@ class TestNavGrouping(unittest.TestCase):
         import gui
         import inspect
         src = inspect.getsource(gui.App._build_nav)
+        # t29 修 v4f-P3：剥离行内注释后断言——防止断言被注释文本（如文档性提及）满足
+        src = '\n'.join(line.split('#', 1)[0] for line in src.splitlines())
         # 必须有 groups 列表 + 3 个组名
         self.assertIn('工作区', src)
         self.assertIn('数据', src)
@@ -3646,6 +3648,86 @@ class TestNavGrouping(unittest.TestCase):
         # kind='dark' 两次（左右主入口）
         dark_count = src.count("kind='dark'")
         self.assertGreaterEqual(dark_count, 3)  # 实时截图 + 导入 + 至少 1 个 btn_row
+
+    def test_build_nav_called_in_build_ui_after_page_frames(self):
+        """t29 冷启动修复回归：_build_ui 函数体内必须存在 self._build_nav() 调用，
+        且该调用必须位于 8 个 page_* 帧创建之后（_build_nav 引用 page_home 等帧，
+        若先调用会 AttributeError）。修 t27 默认展开后冷启动导航空壳 bug。
+        """
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._build_ui)
+        # 必须存在 self._build_nav() 调用
+        self.assertIn('self._build_nav()', src,
+                      '_build_ui 内缺少 self._build_nav() 调用（冷启动导航空壳 bug 未修复）')
+        # _build_nav 调用位置必须晚于所有 8 个 page_* 帧的创建（_build_nav 引用 page_* 帧）
+        build_nav_pos = src.find('self._build_nav()')
+        self.assertGreater(build_nav_pos, 0)
+        # 8 个 page_* 帧创建：page_home / page_general / page_products / page_theme /
+        # page_backend / page_api / page_history / page_usage
+        page_positions = []
+        for name in ('page_home', 'page_general', 'page_products', 'page_theme',
+                     'page_backend', 'page_api', 'page_history', 'page_usage'):
+            pos = src.find(f'self.{name} = tk.Frame(self.content_frame')
+            self.assertGreater(pos, 0, f'_build_ui 内未找到 self.{name} 帧创建')
+            page_positions.append(pos)
+        max_page_pos = max(page_positions)
+        # t29 修 v4f-F9：必须用 max（晚于【最后一个】帧创建）而非 min——
+        # 原断言只要求晚于最早的 page_home，_build_nav 挪到 8 帧中间也绿但启动必 AttributeError
+        self.assertGreater(build_nav_pos, max_page_pos,
+                          'self._build_nav() 必须晚于所有 8 个 page_* 帧创建（否则 AttributeError）')
+
+    def test_toggle_nav_lazy_build_guard_preserved(self):
+        """t29 冷启动修复回归：_toggle_nav 里的懒构建守卫必须保留——
+        `if not self.nav_buttons: self._build_nav()` 防止折叠再展开时重复构建。
+        冷启动修复只是新增 _build_ui 内的预构建，_toggle_nav 守卫不能丢。
+        """
+        import gui
+        import inspect
+        src = inspect.getsource(gui.App._toggle_nav)
+        # 懒构建守卫必须存在
+        self.assertIn('if not self.nav_buttons', src,
+                      '_toggle_nav 懒构建守卫丢失（折叠再展开会重复创建按钮）')
+        self.assertIn('self._build_nav()', src,
+                      '_toggle_nav 内缺少 self._build_nav() 调用')
+
+    def test_nav_width_dpi_scaled(self):
+        """t29 迭代R3：nav 宽度三处（frame width / _build_ui minsize / _toggle_nav
+        minsize）必须随 dpi_scale 联动，不得残留裸 176 像素字面量。
+        背景：nav 是全 UI 唯一 pack_propagate(False) 冻结像素宽的容器，字号随
+        tk scaling 缩放而 176px 不缩，200% DPI 下「💰 用量明细」会被裁。
+        """
+        import gui
+        import inspect
+        ui_src = inspect.getsource(gui.App._build_ui)
+        toggle_src = inspect.getsource(gui.App._toggle_nav)
+        self.assertIn('width=int(176 * self.dpi_scale)', ui_src,
+                      'nav_frame width 未 DPI 联动')
+        self.assertIn('minsize=int(176 * self.dpi_scale)', ui_src,
+                      '_build_ui 的 pane minsize 未 DPI 联动')
+        self.assertIn('minsize=int(176 * self.dpi_scale)', toggle_src,
+                      '_toggle_nav 的 pane minsize 未 DPI 联动')
+        self.assertNotIn('minsize=176', ui_src + toggle_src,
+                         '残留裸 176 minsize 字面量（DPI 下会裁导航项）')
+
+    def test_page_title_margins_unified(self):
+        """t29 迭代R3：页标题边距统一 padx=16, pady=(14, 2)——settings_ui 5 页
+        （商品/主题/校准/后台/API）+ stats_ui 2 页（历史/用量，已是基准值）；
+        不得残留旧 pady=(15,2) 或 API 页 padx=20。
+        """
+        import settings_ui
+        import stats_ui
+        import inspect
+        s = inspect.getsource(settings_ui)
+        self.assertNotIn('.pack(pady=(15,2))', s,
+                         'settings_ui 页标题残留旧 pady=(15,2)')
+        self.assertIn('font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))', s,
+                      'settings_ui 页标题未统一 16/(14,2)')
+        self.assertIn('padx=16, pady=(14, 2))   # t29 迭代R3', s,
+                      'API 页标题边距未归一到 16/(14,2)')
+        st = inspect.getsource(stats_ui)
+        self.assertGreaterEqual(st.count('padx=16, pady=(14, 2)'), 2,
+                                'stats_ui 页标题 16/(14,2) 基准缺失')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3773,12 +3855,13 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
         """
         import re
         src = self._src('stats_ui.py')
-        # 匹配所有 padx=14 出现位置
-        hits = [(i, src[max(0, i-30):i+50]) for i in range(len(src)) if src[i:i+8] == 'padx=14']
+        # 匹配所有 padx=14 出现位置（t29 修 v4f-F8：切片长度必须等于目标串长度 7，
+        # 原 i:i+8 恒 False 导致断言空洞——永远绿，防回归承诺落空）
+        hits = [(i, src[max(0, i-30):i+50]) for i in range(len(src)) if src[i:i+7] == 'padx=14']
         # 过滤掉被 t28 注释括起来的（注释里写"padx=14→16"是文档化变更）
         real_residue = []
         for pos, ctx in hits:
-            # 检查是否在 t28 注释范围内（前 80 字符含 "# t28"）
+            # 出现点若位于同行 '# t28' 尾随注释之内（前缀已含 '# t28'）则属文档化变更
             line_start = src.rfind('\n', 0, pos) + 1
             line_prefix = src[line_start:pos]
             if '# t28' not in line_prefix:
