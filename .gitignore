@@ -36,3 +36,24 @@ output/usage_archive/
 # v1.4.7 WS-A：历史库运行时产物不入仓
 history.db
 history.db.corrupt
+# v1.5.7 副本同步：分支测试文件与开发脚本不入仓（保留本地，仓库根目录只留 test_smoke.py）
+count_tests.py
+test_algorithm.py
+test_algorithm_ui.py
+test_async_queue.py
+test_backup_store.py
+test_batch_ocr.py
+test_exception_guard.py
+test_forecast.py
+test_forecast_gui.py
+test_home_actions.py
+test_home_layout.py
+test_import_memory.py
+test_layout_logic.py
+test_ocr_confidence.py
+test_r1_baseline.py
+test_r1_enhanced.py
+test_review_flow.py
+test_store_db.py
+test_store_ui_logic.py
+test_workflow_memory.py
