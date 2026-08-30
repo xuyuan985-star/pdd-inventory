@@ -78,9 +78,11 @@ def _sanitize_cell(v):
 
 
 
-def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
+def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = None) -> str:
     """
     GUI 路径：按地区分组的 cache → 追加 Sheet 到 PDD补货记录.xlsx
+    t6：新增可选 store_name（当前店铺名）→ 表头在「地区」旁追加「店铺」列。
+    只影响本次新建 Sheet：已有 Sheet（含旧格式的）绝不改写，旧表完全兼容。
     返回文件路径。
     """
     import openpyxl
@@ -112,7 +114,11 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
             break
     if not sel_cols:
         sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
-    headers = ['地区', '仓库'] + list(sel_cols) + ['可售卖天数', '状态', '补货量', '模型']
+    # 「店铺」列固定紧跟「地区」（store_name 未提供时留空，列结构保持稳定）
+    # 「预警」列紧跟「模型」（滞销⚠/超卖🔥/超卖⚠/低置信⚠，' / '分隔；旧数据无字段默认空）
+    # R2 预测：「预测日销」紧跟「可售卖天数」（与 GUI 结果表列序一致； forecast_next_period，
+    # 旧缓存 plans 无 forecast 字段 → 空单元格，便于 Excel 数值处理）
+    headers = ['地区', '店铺', '仓库'] + list(sel_cols) + ['可售卖天数', '预测日销', '状态', '补货量', '模型', '预警']
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = styles['header_font']
@@ -127,7 +133,8 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
             continue
         for p in plans:
             raw = p.get('_raw') or {}
-            vals = [_sanitize_cell(region), _sanitize_cell(p.get('warehouse', ''))]
+            vals = [_sanitize_cell(region), _sanitize_cell(store_name or ''),
+                    _sanitize_cell(p.get('warehouse', ''))]
             from ocr import strip_tail_noise  # 去「查看地址/查看」词条噪音（OCR 识别不稳定，导出层统一清）
             # 名称列用解析后的干净 name（与 GUI 一致，不含 ID:xxx）；其余勾选列用原文
             _name_col = None
@@ -149,9 +156,20 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
                     if isinstance(v, str):
                         v = strip_tail_noise(v)  # 仅勾选文本列剥「查看地址/日期时间」词条噪音
                 vals.append(_sanitize_cell(v))
-            vals += [p.get('ratio', p.get('days_left', '')), _sanitize_cell(p['status']), p['qty']]
+            vals += [p.get('ratio', p.get('days_left', ''))]
+            # R2 预测：预测日销列；
+            # 缺字段/无历史 → 空单元格（§4：空即"无预测"，不编 0 误导补货量计算）
+            _fc = p.get('forecast')
+            try:
+                _fc = round(float(_fc), 2) if _fc is not None else ''
+            except (TypeError, ValueError):
+                _fc = ''
+            vals.append(_fc)
+            vals += [_sanitize_cell(p['status']), p['qty']]
             # ：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
             vals.append(_sanitize_cell(p.get('model', 'classic')))
+            # 预警列（高级模式预警标签：滞销⚠/超卖🔥/超卖⚠/低置信⚠；旧数据无此字段默认空字符串）
+            vals.append(_sanitize_cell(p.get('warning', '') or ''))
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(row=row, column=ci, value=v)
                 c.font = styles['cell_font']
@@ -161,7 +179,9 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None) -> str:
                     c.fill = styles['fills'][p['color']]
             row += 1
 
-    widths = [10, 12] + [20 if '名称' in c or '商品' in c else 12 for c in sel_cols] + [10, 12, 10]
+    # 列宽同步加「店铺」列（地区10 / 店铺14 / 仓库12）； 在「模型」后追加「预警」(16)
+    # R2 预测：「预测日销」10（「可售卖天数」后第二位）
+    widths = [10, 14, 12] + [20 if '名称' in c or '商品' in c else 12 for c in sel_cols] + [10, 10, 12, 10, 10, 16]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 

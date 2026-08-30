@@ -5,6 +5,7 @@ PDD 后台截图 OCR 识别
 """
 
 import base64, json, os
+import re
 
 import requests
 from utils import get_api_config, get_base_dir
@@ -756,7 +757,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 # 输出 token 上限超模型能力（弱模型/模型版本限制）：400 或
                 # 'maximum context length'/'max_tokens' 类错误 → 砍半重发一次
                 _es = str(e).lower()
-                # v1.4.2 降档条件收紧（find-bugs ③）：只对明确的输出 token 超限错误
+                # v1.4.2 降档条件收紧（find-bugs ）：只对明确的输出 token 超限错误
                 # 砍半重发——裸 '400' 可能是"模型不存在/其他参数错误"，不该混成降档
                 if ((('token' in _es and ('max' in _es or 'limit' in _es or 'exceed' in _es or 'length' in _es)
                       and '400' in _es)
@@ -1734,3 +1735,397 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
                 # 不自动取大/小值：差异可能是漏识别（取大对）也可能是多识别
                 # （真 110 被识别成 1109，取大错），无法区分 → 保持主模型值，标 ⚠ 让用户复核
     return primary
+
+
+# ============================================================
+# OCR 置信度引擎 + 容错文案（v1.4.8 P2-OCR 任务 ）
+# ============================================================
+# 设计目标（参考 docs/DESIGN.md §1 全列识别 + §4 失败哲学）
+# - 不改 ocr_dual_verify_generic 本身（现有 _low_confidence / _name_unmatched /
+# _dual_degraded 标记是上一轮设计成果，本任务在产出侧叠加元数据，不破坏契约）。
+# - 全部纯函数、失败安全；任何异常路径不阻塞主识别流程（§4）。
+# - 复用了项目已有依赖：opencv-python + numpy + PIL（requirements.txt 已锁）。
+# - 不依赖 utils.py / history_db.py / async_queue.py（铁律 ）。
+# 提供的 API（全部在 OCR 批处理后置阶段调用，GUI 复核弹窗 直接消费 confidence 字段）
+# - detect_blur(image_path) -> (bool, float) 模糊检测
+# - audit_numeric_fields(items) -> List[Tuple] 数字字段异常审计
+# - build_confidence_meta(items, blur_info=None) 注入每条 item 的 confidence 元数据
+# - USER_MSG_* 常量 中文可读容错文案（供 弹窗/日志共用）
+# ------------------------------------------------------------
+
+# ---- 阈值常量（测试可调，避免散落魔法数） ----
+BLUR_VAR_THRESHOLD = 100
+"""Laplacian 方差低于此值视为截图模糊（实拍 PDD 后台常见 50~300，
+清晰截图 500+；阈值 100 是经验值，留 BLUR_VAR_THRESHOLD 常量便于测试调参）。"""
+
+NUMERIC_ABSURD_MAX = 999999
+"""单条商品 stock/sales 超过此值视为"量级怪异"（常规 PDD 后台单品 5 位数内），
+更大的数极可能是 OCR 多识别粘连（真 110→识别 1109）或串列。"""
+
+# ---- 中文可读容错文案（供 弹窗 / 日志统一消费；铁律 只在 ocr.py/table_import.py
+# 改文案，行为不动） ----
+# 命名风格沿用项目已有的全大写下划线 + 短前缀（OCR_/BATCH_/ICON_ 等），便于 IDE 跳转；
+# 全部为常量字符串，无副作用、无 i18n 钩子（v1.4 阶段先固化中文）。
+USER_MSG_BLUR = '截图模糊，建议重新截图后重试'
+"""detect_blur 命中：图片整体 Laplacian 方差 < 阈值，整张图识别可信度低。"""
+
+USER_MSG_NUMERIC_ANOMALY = '数字识别可能存在偏差，建议人工核对'
+"""audit_numeric_fields 命中任一异常：原文字符残留 / 销量>0 库存=0 / 量级怪异 / 解析值与原文矛盾。"""
+
+USER_MSG_DUAL_DEGRADED = '双模型校验未生效，本次仅单模型识别，建议人工复核'
+"""双模型路径上副模型失败回退主模型（_dual_degraded=True）；现有 _ocr_dlog 已有同义日志，
+这里给 GUI 弹窗一份独立文案（避免开发者错误地把 dlog 当作用户文案）。"""
+
+USER_MSG_NAME_UNMATCHED = '主副模型商品名未能配对，建议核对商品名是否完整'
+"""双模型配对失败：主副商品 name 无法 SKU/name/编辑距离≤2 三路对上（_name_unmatched=True）。"""
+
+USER_MSG_LOW_CONFIDENCE = '该条商品识别可信度较低，建议人工核对'
+"""汇总兜底：双模型 stock/sales 差异>30% 或上述任一弱信号命中（_low_confidence=True）。"""
+
+USER_MSG_API_KEY_MISSING = 'API Key 未设置 — 请在「API 管理」页面配置对应厂商的 Key'
+"""_ocr_api_call / _ocr_api_call_do 在 key 为空时抛 RuntimeError 的统一文案。"""
+
+USER_MSG_API_TIMEOUT = '识别超时，请检查网络后重试'
+"""requests 30/180s 超时归一文案。"""
+
+USER_MSG_JSON_PARSE_FAIL = '模型返回内容无法识别，可能网络截断或模型输出异常，建议重新截图后重试'
+"""JSON 解析失败的归一文案（含 _recover_partial_json 也救不回的极端情况）。"""
+
+USER_MSG_NO_MODEL_AVAILABLE = '未配置可用的识别模型，请到「API 管理」页面配置'
+"""_ocr_api_call_do 末尾 raise RuntimeError 时的文案。"""
+
+USER_MSG_FATAL_QUOTA = '接口额度或鉴权异常，请检查账户余额或 API Key 是否正确'
+"""_is_fatal_api_err 命中（额度耗尽/401/403）时的归一文案。"""
+
+USER_MSG_CSV_ENCODING = '无法识别 CSV 编码，请用记事本另存为 UTF-8 后重试'
+"""table_import._read_csv 编码探测全失败时的归一文案。"""
+
+USER_MSG_XLSX_CORRUPT = 'XLSX 文件已损坏或格式不识别，请重新导出后重试'
+"""table_import._read_xlsx openpyxl 抛异常归一文案。"""
+
+USER_MSG_IMPORT_TOO_LARGE = '数据行数超过上限（单文件最多 10000 行），请拆分后重试'
+"""MAX_IMPORT_ROWS 越界归一文案。"""
+
+USER_MSG_LEGACY_XLS = '暂不支持 .xls 老格式，请用 Excel/WPS 打开后另存为 .xlsx 后重试'
+"""LEGACY_EXT 显式拒绝归一文案。"""
+
+USER_MSG_MAPPING_MISSING = '导入文件列映射不完整，缺关键字段，请确认文件含"商品名称/库存/销量"列，或在映射预览对话框调整后重试'
+"""guess_mapping 缺 name|stock|sales 归一文案。"""
+
+
+def detect_blur(image_path) -> tuple:
+    """OpenCV Laplacian 方差检测截图是否模糊。
+
+    失败安全：图像读不到 / cv2 不可用 / 任何异常 → (False, 0.0)，
+    保证主流程不因模糊检测失败而中断（§4 失败哲学）。
+    """
+    try:
+        import cv2  # 项目依赖（requirements.txt 已锁 opencv-python）
+        import numpy as np
+    except Exception:
+        return (False, 0.0)
+    try:
+        img = cv2.imread(str(image_path) if image_path else '')
+        if img is None:
+            return (False, 0.0)
+        v = float(cv2.Laplacian(img, cv2.CV_64F).var())
+        return (v < BLUR_VAR_THRESHOLD, v)
+    except Exception:
+        return (False, 0.0)
+
+
+def audit_numeric_fields(items) -> list:
+    """逐条审计数字字段合理性，产出异常清单。
+
+    检查项（每条独立产出一条记录）：
+      1. stock/sales 单元格原文含解析后残留非数字字符
+         （如"128份查看"被 _parse_num_text 截到 128，残留"份查看"是合理尾巴；
+         但若原文全是数字却被解析成 0 或异常值则更可疑——本检查只标记明显非数字尾巴之外的奇怪字符）。
+      2. 销售>0 但库存=0（疑似库存漏识）。
+      3. 量级怪异：stock 或 sales > NUMERIC_ABSURD_MAX（999999）。
+      4. 解析值与原文数字不一致（原文清晰含数字但解析值落到 0）。
+
+    Args:
+        items: parse_items_generic 后的列表，每条至少含 stock(int)/sales(int)/
+            region/warehouse/name 等字段；原文 raw 通过 _raw 字典透传。
+
+    Returns:
+        异常列表，每条 = (index:int, field:str, reason:str, raw:str, parsed:int)。
+        无异常 → []。
+    """
+    issues = []
+    if not items:
+        return issues
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        # 取 raw 原文（parse_items_generic 把原始列塞进 _raw）
+        _raw = it.get('_raw') or {}
+        if not isinstance(_raw, dict):
+            _raw = {}
+        # 字段审计：原文字符串残留 / 解析值合理性
+        for field in ('stock', 'sales'):
+            parsed = it.get(field, 0)
+            try:
+                parsed = int(parsed) if parsed is not None else 0
+            except Exception:
+                parsed = 0
+            raw_text = _raw.get(field, '')
+            if raw_text is None:
+                raw_text = ''
+            raw_str = str(raw_text)
+
+            # 1) 原文含解析后残留的奇怪字符：原文有数字，但解析后原文中剩余的"非数字 + 非空格 + 非常见单位"字符。
+            # 例：'85件' 解析 85（件 是常见单位 → 不报）；'85x' 解析 85（x 奇怪 → 报）
+            if raw_str.strip() and any(ch.isdigit() for ch in raw_str):
+                # 提取原文中的数字部分
+                # R2 问题 修复：re 提到模块顶部（line 7），
+                # 避免循环内每次 import re；与 P3-R2-L2 「避免每次调用 re 导入」一致。
+                _m = re.search(r'-?\d+(?:\.\d+)?', raw_str)
+                if _m:
+                    _head = raw_str[:_m.start()]
+                    _tail = raw_str[_m.end():]
+                    _noise = ''.join(
+                        ch for ch in (_head + _tail)
+                        if not (ch.isdigit() or ch.isspace() or ch in ',.，、%')
+                    )
+                    # 常见单位/词条不算噪音
+                    _common = {'份', '个', '件', '箱', '袋', '盒', '瓶', '包', '件',
+                               '约', '近', '共', '余', '剩', '约', 'k', 'w', 'K', 'W',
+                               '千', '万', '亿', '+', '.', '查看', '共', '总'}
+                    _noise = ''.join(ch for ch in _noise if ch not in _common)
+                    if _noise.strip():
+                        issues.append((i, field, '原文字符残留噪音',
+                                       raw_str[:60], parsed))
+
+            # 2) 销售>0 但库存=0
+            if field == 'stock' and parsed == 0:
+                try:
+                    _sales = int(it.get('sales', 0) or 0)
+                except Exception:
+                    _sales = 0
+                if _sales > 0:
+                    issues.append((i, 'stock', '销量>0 但库存=0（疑似漏识）',
+                                   raw_str[:60], parsed))
+
+            # 3) 量级怪异
+            if parsed > NUMERIC_ABSURD_MAX:
+                issues.append((i, field, f'数值超过 {NUMERIC_ABSURD_MAX}（疑似串列/多识别）',
+                               raw_str[:60], parsed))
+            if parsed < 0:
+                issues.append((i, field, '数值为负',
+                               raw_str[:60], parsed))
+
+            # 4) 解析值与原文矛盾：原文清晰有非零数字，但解析后=0
+            if parsed == 0 and raw_str.strip():
+                # R2 问题 修复：同上，re 提到模块顶部。
+                _nz = re.search(r'-?\d+(?:\.\d+)?', raw_str)
+                if _nz and re.sub(r'^0+(?=\d)', '', _nz.group()).lstrip('.').lstrip('0'):
+                    # 原文有非零数字却被解析为 0
+                    if _nz.group() not in ('0', '0.0', '0.00', '0.000'):
+                        issues.append((i, field, '原文字段含数字但解析为 0',
+                                       raw_str[:60], parsed))
+    return issues
+
+
+def _level_for_reasons(reasons, *, has_low_signal: bool = False, has_medium_signal: bool = False) -> str:
+    """根据 reasons + 信号位决定 confidence.level。
+
+    优先级：low > medium > high。
+    设计说明：reason 文案面向用户（中文），用文本子串匹配会让文案耦合到 level
+    判定逻辑（任何文案微调都可能误降/升级）。这里在 build_confidence_meta 内
+    按维度显式打信号位，level 决策只看信号位；reasons 仅作人类可读展示。
+    """
+    if not reasons:
+        return 'high'
+    if has_low_signal:
+        return 'low'
+    if has_medium_signal:
+        return 'medium'
+    # 兜底：reasons 非空但无任何已知信号 → medium（保守：任何 reason 至少要复核）
+    return 'medium'
+
+
+def build_confidence_meta(items, blur_info=None) -> list:
+    """给每条 item 附加 confidence 元数据（in-place 改 items，返回同一引用便于链式）。
+
+    Args:
+        items: parse_items_generic 输出。
+        blur_info: 可选，(is_blur: bool, var: float)；None 时跳过模糊维度。
+            模糊会作用于**所有**条目（整张图都模糊 → 整批低置信）。
+
+    Returns:
+        同一 items 引用（in-place 写 confidence 字段 + 清掉 _low_confidence 等
+        内部标记的"传播"——保留原标记便于 t8 复核时按维度分组；不主动删标记）。
+
+    confidence 字段结构：
+        {
+            'level': 'high' | 'medium' | 'low',
+            'reasons': [str, ...]  # 每条人类可读原因
+        }
+    """
+    if not items:
+        return items if items is not None else []
+    items = list(items) if not isinstance(items, list) else items
+    # 1) 数字审计异常 → 按 (index, field) 索引
+    _numeric_issues = audit_numeric_fields(items)
+    _by_idx = {}
+    for (idx, field, reason, raw, parsed) in _numeric_issues:
+        _by_idx.setdefault(idx, []).append(('numeric_anomaly', f'数字异常({field}):{reason}'))
+
+    # 2) 模糊维度（整图级，所有条目共享）
+    _blur_low = False
+    _blur_reason = ''
+    if blur_info is not None:
+        try:
+            _is_blur, _var = blur_info
+        except Exception:
+            _is_blur, _var = False, 0.0
+        if _is_blur:
+            _blur_low = True
+            # R2 问题 修复：原文混入 Laplacian 方差浮点数
+            # 与阈值（技术变量），对终端用户不友好。改为用户文案 + 技术
+            # 变量写到 dlog 供排障（已由 detect_blur 自带 _ocr_dlog 输出）。
+            _blur_reason = '图片模糊（清晰度过低），建议重新截图'
+
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        reasons = []
+        has_low = False
+        has_medium = False
+        # a) 双模型标记
+        if it.get('_low_confidence'):
+            reasons.append('双模型差异>30%或name配对异常')
+            has_low = True
+        if it.get('_name_unmatched'):
+            reasons.append(USER_MSG_NAME_UNMATCHED)
+            has_low = True
+        if it.get('_dual_degraded'):
+            reasons.append(USER_MSG_DUAL_DEGRADED)
+            has_low = True
+        # b) 数字审计
+        for _sig, _txt in _by_idx.get(i, []):
+            reasons.append(_txt)
+            if _sig == 'numeric_anomaly':
+                has_low = True
+        # c) 模糊（共享，整图级）
+        if _blur_low:
+            reasons.append(_blur_reason)
+            has_low = True
+        # d) _missing_id 单独走 medium
+        if it.get('_missing_id') and not has_low:
+            reasons.append('缺少商品ID（依赖 name 模糊匹配，可能误并）')
+            has_medium = True
+        level = _level_for_reasons(reasons, has_low_signal=has_low, has_medium_signal=has_medium)
+        it['confidence'] = {'level': level, 'reasons': reasons}
+    return items
+
+
+# ============================================================
+# R1 流程效率 — 批量图片识别引擎
+# ============================================================
+# 设计目标：把批量图片喂给识别器，**复用现有 ocr_table / ocr_dual_verify_generic**，
+# 单张失败记录 errors 不中断整批；纯 stdlib 逻辑、可单测（接受 callable 识别器参数
+# 便于测试注入）。
+# 契约
+# batch_ocr_images(image_paths, mapping=None, recognizer=None, **kwargs)
+# -> (results, errors)
+# - image_paths: 可迭代（list/tuple）；逐张处理。
+# - mapping: 可选 {field: 列名} 映射；传给识别器（识别器用 parse_items_generic 时
+# 才生效）。None → 调用方配置（默认走 get_ocr_columns()['mapping']）。
+# - recognizer: 可选 callable(image_path, mapping, **kwargs) -> list[dict]。
+# 默认 ocr_dual_verify_generic（与单图识别主路径一致——保留双模型
+# 校验/低置信标记，便于 复用同套复核元数据）。
+# 测试可注入 stub/mock 函数，避免触发真实 API。
+# - **kwargs: 透传给 recognizer（如 forced_model / secondary_model / table_bbox 等）。
+# - results: list[{path: str, items: list[dict], mapping: dict}, ...]，
+# 顺序与 image_paths 一致（成功项；失败项不入 results）。
+# - errors: list[tuple[path, reason_str]]，失败项追加在末尾（保持可追溯顺序）。
+# reason 为截断到 200 字的异常文本（不抛原异常对象，便于序列化）。
+# 失败语义
+# - 单张异常 → 立即捕获、记录 (path, reason)、继续下一张；不打断整批。
+# - 可恢复错误（识别返回空 rows）与不可恢复错误（图片打不开/识别函数异常）行为一致
+# 都收集进 errors；成功路径（含空结果）入 results。
+# - BatchCancelled（F9）→ 立即中断，把当前进度与已收集 errors 一起返回（不抛），
+# 保留调用方对该信号的尊重——批量线程调 set_cancel_check() 后调用本函数，
+# 任意一张识别前 _check_cancel() 抛 BatchCancelled，会被吞掉、记录为 (path, '取消')。
+# 纯函数
+# - 不依赖全局状态（除 _check_cancel()）；不写文件、不调 UI；同输入同结果。
+# ============================================================
+
+
+def batch_ocr_images(image_paths, mapping=None, recognizer=None, **kwargs):
+    """批量图片识别（纯逻辑、可单测）。
+
+    Args:
+        image_paths: list/tuple[str]，图片路径列表。
+        mapping: 可选 {field: 列名}；None 走默认。
+        recognizer: 可选 callable(image_path, mapping, **kwargs) -> list[dict]；
+                    默认 ocr_dual_verify_generic。
+        **kwargs: 透传给 recognizer。
+
+    Returns:
+        (results, errors)：见模块头契约。
+
+    Raises:
+        无。BatchCancelled 转 errors，不抛（与单图一致——批量线程是取消信号响应方）。
+    """
+    # recognizer 默认值：默认绑一次（闭包），避免每张都重新查全局
+    if recognizer is None:
+        _default_recognizer = ocr_dual_verify_generic
+    else:
+        _default_recognizer = recognizer
+
+    # mapping 默认值：兜底取当前 mapping（延迟到调用时解析——避免 import 循环
+    # 与启动期查 cfg 的副作用；识别器内部本身也会兜底查 get_ocr_columns()）。
+    _default_mapping = mapping  # None 占位，调用时再判断
+
+    results = []
+    errors = []
+    # 兼容 generator / iterator（不止 list/tuple）——展开一次防重复消费
+    paths = list(image_paths) if image_paths is not None else []
+
+    for path in paths:
+        # 1) 紧急停止：取消已触发 → 中断当前张、转 errors，保留已处理结果
+        try:
+            _check_cancel()
+        except BatchCancelled as _e:
+            errors.append((str(path) if path is not None else '', f'取消：{str(_e)[:80]}'))
+            break
+
+        # 2) 路径合法性：空 / 非字符串 视作失败（不抛，记录 errors）
+        if not path or not isinstance(path, str):
+            errors.append((str(path) if path is not None else '', '路径为空或非字符串'))
+            continue
+
+        # 3) 单张识别（任意异常吞掉、转 errors，继续下一张）
+        try:
+            _use_mapping = _default_mapping
+            if _use_mapping is None:
+                try:
+                    from utils import get_ocr_columns as _goc
+                    _use_mapping = (_goc() or {}).get('mapping') or {}
+                except Exception:
+                    _use_mapping = {}
+            items = _default_recognizer(path, _use_mapping, **kwargs) or []
+            # 兜底：识别器返回值非 list → 包成空（不静默吞异常，避免调用方误以为 OK）
+            if not isinstance(items, list):
+                items = []
+        except BatchCancelled as _e:
+            errors.append((path, f'取消：{str(_e)[:80]}'))
+            break
+        except Exception as _e:
+            _reason = f'{type(_e).__name__}: {str(_e)[:160]}'
+            errors.append((path, _reason))
+            continue
+
+        # 4) 成功（即便 items 为空也算成功——识别函数正常返回）→ 入 results
+        results.append({
+            'path': path,
+            'items': items,
+            'mapping': _use_mapping if isinstance(_use_mapping, dict) else {},
+        })
+
+    return results, errors
+

@@ -339,7 +339,7 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
 
 if __name__ == '__main__':
-    # v1.4.5（bug hunt F18-②）：git 不可用时明确报错退出——此前静默按"首次发布"打
+    # v1.4.5（bug hunt F18- ）：git 不可用时明确报错退出——此前静默按"首次发布"打
     # 全量包且文件仍叫 _update.zip，会误导发布（增量基准丢失）
     if _run(['git', 'rev-parse', '--is-inside-work-tree']) != 'true':
         print('错误: 当前目录不是 git 仓库（或 git 不可用）。增量包依赖 git tag/diff 基准，'
@@ -371,7 +371,7 @@ if __name__ == '__main__':
     print(f'[增量打包] 源: {onedir}')
     print(f'[增量打包] 输出: {output}')
     build_update_zip(onedir, output, force='--force' in sys.argv)
-    # v1.4.5（bug hunt F18-①）：构建后自动写 .sha256——之前只靠人工/发布时补传，漏传
+    # v1.4.5（bug hunt F18- ）：构建后自动写 .sha256——之前只靠人工/发布时补传，漏传
     # 即触发更新器 fail-open（跳过校验安装）
     import hashlib
     _h = hashlib.sha256(open(output, 'rb').read()).hexdigest()

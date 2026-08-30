@@ -9,7 +9,7 @@ PDD EZ — 公告推送模块（借鉴 March7thAssistant app/tools/announcement.
   "announcement": {
     "title": "更新提示",
     "content": "欢迎使用 v1.4.1...",
-    "image": {"type": "normal", "url": "https://..."}  # 可选
+    "image": {"type": "normal", "url": "https://..."}   # 可选
   }
 }
 """

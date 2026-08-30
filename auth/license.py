@@ -43,7 +43,7 @@ UNLIMITED = 999999  # Pro 实际不限，用大整数表示
 
 # 缓存：避免每次 get_tier() 都跑一遍 verify
 # 缓存值改为 (tier, ts) 二元组；TTL=300s 后强制重验，
-# 修复授权缓存陈旧（enforce 热切换/外部改 settings.json 后不重启不生效）。
+# 修复 问题（enforce 热切换/外部改 settings.json 后缓存陈旧至重启）。
 # 注意：缓存值仍可被 reset_cache() 显式清空（外部主动写盘路径调用）
 _CACHE_TTL_SECONDS = 300
 _CACHE: dict[str, tuple] = {}

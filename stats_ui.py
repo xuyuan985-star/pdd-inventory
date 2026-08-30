@@ -30,9 +30,88 @@ try:
 except Exception:
     history_db = None
 
+# 多店铺隔离：店铺筛选数据源（store_registry）与选项组装（store_ui_logic）。
+# 守护式导入：缺失时店铺筛选降级为「全部店铺」（=旧行为），历史功能不受影响。
+try:
+    import store_registry
+except Exception:
+    store_registry = None
+try:
+    import store_ui_logic
+except Exception:
+    store_ui_logic = None
+
 
 class StatsPagesMixin:
     """混入 App 类：历史趋势 / 用量明细 两个导航数据页的构建与刷新。"""
+
+    # ─────────────── R1 布局优化：纯逻辑助手（无 Tk 依赖，便于单测） ───────────────
+
+    @staticmethod
+    def history_filter_segments():
+        """历史页筛选条的三段元数据：用于统一栏宽/对齐（与 _build_history_page 一一对应）。
+
+        每段返回 (label_text, combo_width, default_value)。
+        - 'store'：店铺（含'全部店铺'），宽 12（双字符名够用，重命名长名会被截短显示）；
+        - 'region'：地区（含'全部'），宽 14；
+        - 'days'：天数 30/90/180，宽 6。
+        """
+        return (
+            ('店铺', 12, '全部店铺'),
+            ('地区', 14, '全部'),
+            ('天数', 6, '90'),
+        )
+
+    @staticmethod
+    def history_summary_text(rows_count, days, has_fail, fail_msg=''):
+        """历史页汇总标签文案决策（与 _history_page_refresh 行为一致；可单测）。
+
+        - has_fail → ⚠ 摘要前缀；
+        - rows_count > 0 → 「共 N 条按日汇总（双击行看当日明细）」；
+        - rows_count == 0 → 空态引导「暂无历史数据 — 识别或导入后会在此处出现」；
+        - 无 days 入参按 90 兜底。
+        """
+        d = int(days) if days else 90
+        if has_fail:
+            snippet = (fail_msg or '')[:60]
+            return f"⚠ 按日汇总查询失败：{snippet}"
+        if rows_count and rows_count > 0:
+            return f"共 {rows_count} 条按日汇总（近 {d} 天，双击行看当日明细）"
+        return "暂无历史数据 — 识别或导入后会在此处出现"
+
+    @staticmethod
+    def history_empty_placeholder_row():
+        """空态占位行（与 _history_page_refresh 一致）：('day', '--'), ('region', '暂无数据'), ...。"""
+        return ('--', '暂无数据', '--', '--', '--')
+
+    def _history_page_enter(self):
+        """进入历史页：先与主页当前店铺联动一次，再刷新数据。
+
+        旧路径每次刷新都保持 _hist_store_var 原值——用户切到店铺 B 后进历史页，
+        筛选仍停在进入前的店铺（含默认'全部店铺'），历史趋势与当前操作店铺脱节。
+        只在「进入页面」这一个时机同步；页内手动改店铺/地区/天数后的刷新
+        （_history_page_refresh 直调）不会被本方法覆盖。
+        """
+        try:
+            store_var = getattr(self, '_hist_store_var', None)
+            if store_var is not None and store_registry is not None \
+                    and store_ui_logic is not None:
+                _sid = getattr(self, '_store_id', None) or 'default'
+                try:
+                    _sname = store_registry.get_store_name(_sid)
+                except Exception:
+                    _sname = ''
+                if _sname:
+                    try:
+                        _labels, _name2id = store_ui_logic.store_choices(
+                            store_registry.get_stores(), all_label='全部店铺')
+                    except Exception:
+                        _labels, _name2id = [], {}
+                    if _sname in _name2id:
+                        store_var.set(_sname)  # 联动到当前店铺；名称消失回落'全部店铺'
+        except Exception:
+            pass  # 联动失败不挡进页（宪法 §4：显式失败在 _history_page_refresh 有提示）
+        self._history_page_refresh()
 
     # ═══════════════════════ 📈 历史趋势页 ═══════════════════════
 
@@ -43,6 +122,10 @@ class StatsPagesMixin:
         双击行看该地区当日明细（_history_day_detail），明细行双击看单商品库存
         折线（_history_sku_chart）；「清空全部历史」二次确认；首次启用一次性
         提示。页面每次切入由 _show_page → _history_page_refresh 刷新数据。
+
+        R1 布局优化：筛选条改用 grid 列对齐（标签右贴/Combo 左对齐 + 列宽
+        固定），避免 side='left' 在长名 / 多 store 时的串位；空态文案与占位
+        行统一走 history_summary_text / history_empty_placeholder_row 纯函数。
         """
         if history_db is None:
             self._lbl(page, text="history_db 模块缺失（增量更新不完整），历史趋势停用。",
@@ -56,28 +139,51 @@ class StatsPagesMixin:
                   fg=self.C_TEXT).pack(anchor='w', padx=16, pady=(14, 2))
         self._lbl(page, text="识别数据按日汇总（仅保存在本机 history.db，不上传）",
                   font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(0, 8))  # : (0,6)
+            anchor='w', padx=16, pady=(0, 8))  # : (0,6)→(0,8)
 
-        # ── 筛选行：地区下拉（含'全部'）+ 天数 30/90/180 + 汇总提示 ──
+        # ── 筛选行：店铺下拉+ 地区下拉（含'全部'）+ 天数 30/90/180 + 汇总提示 ──
+        # R1：3 个筛选段用独立 Frame（side='left'，内部 label+Combo 同节奏），
+        # 段间固定 padx；summary 留右侧贴边。Combo 列宽走 history_filter_segments()
+        # 单一来源，避免硬编码漂移。
         bar = tk.Frame(page, bg=self.C_BG)
-        bar.pack(fill="x", padx=16, pady=(0, 6))  # : (0,4)
-        self._lbl(bar, text="地区:", font=(self.FONT[0], 9), fg=self.C_MUTED,
-                  bg=self.C_BG).pack(side="left")
+        bar.pack(fill="x", padx=16, pady=(0, 6))  # : (0,4)→(0,6)
+        # 第一段：店铺
+        store_seg = tk.Frame(bar, bg=self.C_BG)
+        store_seg.pack(side='left')
+        self._lbl(store_seg, text="店铺:", font=(self.FONT[0], 9), fg=self.C_MUTED,
+                  bg=self.C_BG).pack(side='left')
+        # 店铺筛选（'全部店铺' = 不过滤，与旧行为一致）；地区清单随店铺联动重建
+        self._hist_store_var = tk.StringVar(page, value='全部店铺')
+        self._hist_store_combo = ttk.Combobox(store_seg, textvariable=self._hist_store_var,
+                                              values=['全部店铺'],
+                                              width=self.history_filter_segments()[0][1],
+                                              state="readonly", font=(self.FONT[0], 9))
+        self._hist_store_combo.pack(side='left', padx=(4, 0))
+        # 第二段：地区（段间 padx=12）
+        reg_seg = tk.Frame(bar, bg=self.C_BG)
+        reg_seg.pack(side='left', padx=(12, 0))
+        self._lbl(reg_seg, text="地区:", font=(self.FONT[0], 9), fg=self.C_MUTED,
+                  bg=self.C_BG).pack(side='left')
         self._hist_reg_var = tk.StringVar(page, value='全部')
-        self._hist_reg_combo = ttk.Combobox(bar, textvariable=self._hist_reg_var,
-                                            values=['全部'], width=12,
+        self._hist_reg_combo = ttk.Combobox(reg_seg, textvariable=self._hist_reg_var,
+                                            values=['全部'],
+                                            width=self.history_filter_segments()[1][1],
                                             state="readonly", font=(self.FONT[0], 9))
-        self._hist_reg_combo.pack(side="left", padx=6)
-        self._lbl(bar, text="天数:", font=(self.FONT[0], 9), fg=self.C_MUTED,
-                  bg=self.C_BG).pack(side="left", padx=(10, 0))
+        self._hist_reg_combo.pack(side='left', padx=(4, 0))
+        # 第三段：天数（段间 padx=12）
+        days_seg = tk.Frame(bar, bg=self.C_BG)
+        days_seg.pack(side='left', padx=(12, 0))
+        self._lbl(days_seg, text="天数:", font=(self.FONT[0], 9), fg=self.C_MUTED,
+                  bg=self.C_BG).pack(side='left')
         self._hist_days_var = tk.StringVar(page, value='90')
-        days_combo = ttk.Combobox(bar, textvariable=self._hist_days_var,
-                                  values=['30', '90', '180'], width=6,  # : 5
-                                  state="readonly", font=(self.FONT[0], 9))
-        days_combo.pack(side="left", padx=6)
+        days_combo = ttk.Combobox(days_seg, textvariable=self._hist_days_var,
+                                  values=['30', '90', '180'], width=6, state="readonly",
+                                  font=(self.FONT[0], 9))
+        days_combo.pack(side='left', padx=(4, 0))
+        # Summary 留右侧（段间 padx=12，与筛选段同节奏）
         self._hist_summary_label = self._lbl(bar, text="", font=(self.FONT[0], 8),
                                              fg=self.C_MUTED, bg=self.C_BG)
-        self._hist_summary_label.pack(side="left", padx=12)
+        self._hist_summary_label.pack(side='left', padx=(12, 0))
 
         # ── 按日汇总 Treeview（列与弹窗版一致）──
         cols = ('day', 'region', 'items', 'alerts', 'stock')
@@ -88,7 +194,7 @@ class StatsPagesMixin:
             tree.heading(cid, text=text)
             tree.column(cid, width=w, anchor='center')
         tree_wrap = tk.Frame(page, bg=self.C_BG)
-        tree_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))  # : (0,4)
+        tree_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))  # : (0,4)→(0,8)
         vsb = ttk.Scrollbar(tree_wrap, orient='vertical', command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
@@ -106,7 +212,16 @@ class StatsPagesMixin:
             if not vals or vals[0] == '--':
                 return
             if len(vals) >= 2 and vals[1]:
-                self._history_day_detail(self.win, vals[1], vals[0])
+                # 明细跟随当前店铺筛选（'全部店铺' → store=None 查全部店铺）
+                _store_id = None
+                try:
+                    _n2i = getattr(self, '_hist_store_name2id', None) or {}
+                    _sv = getattr(self, '_hist_store_var', None)
+                    if _sv is not None and _n2i:
+                        _store_id = _n2i.get(_sv.get())
+                except Exception:
+                    _store_id = None
+                self._history_day_detail(self.win, vals[1], vals[0], store=_store_id)
 
         tree.bind('<Double-1>', on_open)
 
@@ -126,7 +241,7 @@ class StatsPagesMixin:
             self._history_page_refresh()
 
         btns = tk.Frame(page, bg=self.C_BG)
-        btns.pack(fill="x", padx=16, pady=(4, 14))  # : (2,12)
+        btns.pack(fill="x", padx=16, pady=(4, 14))  # : (2,12)→(4,14)
         self._mk_btn(btns, "🗑 清空全部历史", clear_all_hist, kind='ghost',
                      font=(self.FONT[0], 9)).pack(side="right", padx=4)
         self._lbl(btns, text="双击行看当日明细；明细行双击看单商品库存趋势折线",
@@ -135,6 +250,7 @@ class StatsPagesMixin:
 
         # 筛选变化即刷新（trace 防重入见 _history_page_refresh）
         self._hist_reg_var.trace('w', lambda *_: self._history_page_refresh())
+        self._hist_store_var.trace('w', lambda *_: self._history_page_refresh())  # 切店铺联动重建地区清单
         days_combo.bind('<<ComboboxSelected>>', lambda _e: self._history_page_refresh())
         self._history_page_refresh()
 
@@ -163,8 +279,28 @@ class StatsPagesMixin:
             return  # 地区清单 set() 会再触发 trace，防重入
         self._hist_busy = True
         try:
+            # 店铺筛选（store 下拉重建，选择消失回落'全部店铺'）。
+            # 缺 _hist_store_var（旧测试替身/降级包）时 store_id=None = 全部店铺 = 旧行为。
+            store_id = None
+            store_var = getattr(self, '_hist_store_var', None)
+            if store_var is not None and store_registry is not None and store_ui_logic is not None:
+                try:
+                    _labels, _name2id = store_ui_logic.store_choices(
+                        store_registry.get_stores(), all_label='全部店铺')
+                except Exception:
+                    _labels, _name2id = ['全部店铺'], {'全部店铺': None}
+                cur_store = store_var.get()
+                if cur_store not in _name2id:
+                    cur_store = '全部店铺'
+                combo = getattr(self, '_hist_store_combo', None)
+                if combo is not None:
+                    combo['values'] = _labels
+                if store_var.get() != cur_store:
+                    store_var.set(cur_store)
+                store_id = _name2id.get(cur_store)
+                self._hist_store_name2id = _name2id
             try:
-                regions = ['全部'] + list(history_db.query_regions())
+                regions = ['全部'] + list(history_db.query_regions(store=store_id))
             except Exception:
                 regions = ['全部']
             cur = self._hist_reg_var.get()
@@ -176,7 +312,7 @@ class StatsPagesMixin:
             try:
                 reg = None if cur == '全部' else cur
                 rows = history_db.query_daily(days=int(self._hist_days_var.get() or 90),
-                                              region=reg)
+                                              region=reg, store=store_id)
                 fail = None
             except Exception as e:
                 rows = []
@@ -187,18 +323,40 @@ class StatsPagesMixin:
                             values=(r.get('day', ''), r.get('region', ''),
                                     r.get('items', 0), r.get('alerts', 0),
                                     r.get('stock_total', 0)))
-            if fail is not None:
-                self._hist_summary_label.config(text=f"⚠ 按日汇总查询失败：{fail[:60]}")
-            else:
-                if rows:
-                    self._hist_summary_label.config(
-                        text=f"共 {len(rows)} 条按日汇总（双击行看当日明细）")
+            # R1：摘要文案与占位行统一走纯函数 history_summary_text /
+            # history_empty_placeholder_row；与单测共享一份决策表。
+            # getattr 兜底：旧测试替身 / 极端 stub 可能未注入静态方法，回退内联决策。
+            try:
+                days_v = int(self._hist_days_var.get() or 90)
+            except (TypeError, ValueError):
+                days_v = 90
+            _sum_fn = getattr(self, 'history_summary_text', None)
+            _pl_fn = getattr(self, 'history_empty_placeholder_row', None)
+            if _sum_fn is None:
+                # 兜底：旧行为（行内决策，与 test_smoke 旧契约一致）
+                if fail is not None:
+                    summary_text = f"⚠ 按日汇总查询失败：{(fail or '')[:60]}"
+                elif rows:
+                    summary_text = f"共 {len(rows)} 条按日汇总（双击行看当日明细）"
                 else:
-                    # ：空态补丁——rows=[] 时插占位提示行 + 首次使用引导语
-                    self._hist_summary_label.config(
-                        text="暂无历史数据 — 识别或导入后会在此处出现")
-                    tree.insert('', 'end',
-                                values=('--', '暂无数据', '--', '--', '--'))
+                    summary_text = "暂无历史数据 — 识别或导入后会在此处出现"
+                placeholder = ('--', '暂无数据', '--', '--', '--')
+            else:
+                if fail is not None:
+                    summary_text = _sum_fn(0, days_v, True, fail)
+                else:
+                    summary_text = _sum_fn(len(rows), days_v, False)
+                placeholder = _pl_fn() if _pl_fn is not None else (
+                    '--', '暂无数据', '--', '--', '--')
+            self._hist_summary_label.config(text=summary_text)
+            if not rows and fail is None:
+                tree.insert('', 'end', values=placeholder)
+            # R1：flush 一次 idletasks 让 Combo.values 重建 / Treeview 重绘在同一帧，
+            # 避免「Combo 先空 → 数据行后到」的闪跳（用户切店铺/地区时观感更稳）。
+            try:
+                page.update_idletasks()
+            except Exception:
+                pass
         finally:
             self._hist_busy = False
 
@@ -240,13 +398,13 @@ class StatsPagesMixin:
         # ── 4 档聚合大字（统一走 usage_panel_summary；标签引用留给刷新）──
         self._usage_stat_labels = {}
         topbar = tk.Frame(content, bg=self.C_BG)
-        topbar.pack(fill="x", padx=16, pady=(8, 8))  # (a-5/c-2), pady=(6,6)
+        topbar.pack(fill="x", padx=16, pady=(8, 8))
         for key, label in (('today', '今日'), ('week', '本周'), ('month', '本月'), ('all', '总计')):
             cell = tk.Frame(topbar, bg=self.C_BG, highlightthickness=1,
                             highlightbackground="#EAEAEA")
-            cell.pack(side="left", expand=True, fill="x", padx=6)  # : 4
+            cell.pack(side="left", expand=True, fill="x", padx=6)  # : 4→6 视觉呼吸
             self._lbl(cell, text=label, font=(self.FONT[0], 8), fg=self.C_MUTED,
-                      bg=self.C_BG).pack(pady=(8, 0))  # : (6,0)
+                      bg=self.C_BG).pack(pady=(8, 0))  # : (6,0)→(8,0)
             cost_lbl = self._lbl(cell, text="¥0.00", font=(self.FONT[0], 13, 'bold'),
                                  fg=self.C_TEXT, bg=self.C_BG)
             cost_lbl.pack()
@@ -344,7 +502,7 @@ class StatsPagesMixin:
                 return
             x, y, w, h = bbox
             # v1.4.7 P3-R2-L1 + P3-R2-M1：防御性销毁已存在的编辑 Entry。
-            # 极快速双击 cell A
+            # 极快速双击 cell A→B 时，old Entry 的 FocusOut 回调与新 Double-1
             # 在同一事件循环窗口里抢资源，直接 e.destroy() 会与新 Entry.place/
             # focus_set 撞车出现 TclError 抖动。修复：destroy 全部走 after_idle
             # 延迟到当前事件链结束，且 _commit/_cancel 入口做 _edit_entry 引用

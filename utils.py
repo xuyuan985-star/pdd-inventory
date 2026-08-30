@@ -4,7 +4,7 @@ PDD EZ — 公共工具函数
 """
 import os, re, sys, json, threading
 
-VERSION = "v1.5.1"
+VERSION = "v1.5.7"
 
 
 # ── v1.4.8 ：日志/调试脱敏（logger.py / ocr.py 共用）─────────
@@ -173,17 +173,118 @@ def get_history_cfg() -> dict:
 # ============================================================
 MODEL_CLASSIC = 'classic'
 MODEL_WEIGHTED = 'weighted'
+MODEL_ADVANCED = 'advanced'
 DEFAULT_REPLENISHMENT_CFG = {
     'model': MODEL_CLASSIC,
     'safety_days': 2,
     'in_transit_qty': 0,
+    'advanced': {
+        # 缺省整体静默关闭各因子——任何字段缺失都视为未启用。
+        'promo': {'dates': [], 'boost': 1.5, 'lead_days': 3, 'enabled': False},
+        'slow': {'threshold_per_day': 1.0, 'stock_ratio': 5.0, 'enabled': False},
+        'season': {'enabled': False},
+        'oversell': {'high_ratio': 0.5, 'enabled': False},
+    },
 }
 
 
+def _default_advanced_cfg() -> dict:
+    """深拷贝默认 advanced 子配置（避免调用方对 DEFAULT 内嵌 dict 原地污染）。"""
+    return {
+        'promo': {'dates': [], 'boost': 1.5, 'lead_days': 3, 'enabled': False},
+        'slow': {'threshold_per_day': 1.0, 'stock_ratio': 5.0, 'enabled': False},
+        'season': {'enabled': False},
+        'oversell': {'high_ratio': 0.5, 'enabled': False},
+    }
+
+
+def _merge_advanced_cfg(raw) -> dict:
+    """合并用户 advanced 配置：全部 .get 兜底，缺字段回退默认；不抛异常。
+
+    用户可只填其中一个子节点（promo/slow/season/oversell），缺字段 = 该因子关闭。
+    """
+    out = _default_advanced_cfg()
+    if not isinstance(raw, dict):
+        return out
+    # promo
+    try:
+        p = raw.get('promo')
+        if isinstance(p, dict):
+            ds = p.get('dates')
+            if isinstance(ds, (list, tuple)):
+                # 仅保留合法 YYYY-MM-DD 字符串（fromisoformat 严格解析；坏日期/类型一律丢）
+                from datetime import datetime as _pdt
+                cleaned = []
+                for d in ds:
+                    s = str(d or '').strip()
+                    if not s:
+                        continue
+                    try:
+                        # 严格解析：必须能生成有效 date
+                        _pdt.strptime(s[:10], '%Y-%m-%d')
+                        cleaned.append(s[:10])
+                    except Exception:
+                        continue
+                out['promo']['dates'] = cleaned
+            try:
+                out['promo']['boost'] = float(p.get('boost', out['promo']['boost']) or 0)
+            except Exception:
+                pass
+            try:
+                ld = int(p.get('lead_days', out['promo']['lead_days']) or 0)
+                out['promo']['lead_days'] = max(0, ld)
+            except Exception:
+                pass
+            if 'enabled' in p:
+                out['promo']['enabled'] = bool(p.get('enabled'))
+            elif out['promo']['dates']:
+                # 有 dates 列表即视为启用（即使没显式 enabled=True）
+                out['promo']['enabled'] = True
+    except Exception:
+        pass
+    # slow
+    try:
+        s = raw.get('slow')
+        if isinstance(s, dict):
+            try:
+                out['slow']['threshold_per_day'] = float(s.get('threshold_per_day', out['slow']['threshold_per_day']) or 0)
+            except Exception:
+                pass
+            try:
+                out['slow']['stock_ratio'] = float(s.get('stock_ratio', out['slow']['stock_ratio']) or 0)
+            except Exception:
+                pass
+            if 'enabled' in s:
+                out['slow']['enabled'] = bool(s.get('enabled'))
+    except Exception:
+        pass
+    # season（只关心 enabled 开关）
+    try:
+        s2 = raw.get('season')
+        if isinstance(s2, dict) and 'enabled' in s2:
+            out['season']['enabled'] = bool(s2.get('enabled'))
+    except Exception:
+        pass
+    # oversell
+    try:
+        o = raw.get('oversell')
+        if isinstance(o, dict):
+            try:
+                out['oversell']['high_ratio'] = float(o.get('high_ratio', out['oversell']['high_ratio']) or 0)
+            except Exception:
+                pass
+            if 'enabled' in o:
+                out['oversell']['enabled'] = bool(o.get('enabled'))
+    except Exception:
+        pass
+    return out
+
+
 def get_replenishment_cfg() -> dict:
-    """读取补货策略配置。结构：{model:'classic'|'weighted', safety_days:int, in_transit_qty:int}。
+    """读取补货策略配置。结构：{model:'classic'|'weighted'|'advanced', safety_days:int, in_transit_qty:int, advanced: {...}}。
 
     缺字段时回退默认（用户裁定：default=classic，永不破坏现有行为）。
+    advanced 子配置全部 .get 兜底，缺省时整体静默关闭各因子；不会写盘。
     """
     try:
         s = Config.load()
@@ -192,7 +293,7 @@ def get_replenishment_cfg() -> dict:
             return dict(DEFAULT_REPLENISHMENT_CFG)
         out = dict(DEFAULT_REPLENISHMENT_CFG)
         m = str(r.get('model') or '').strip().lower()
-        if m in (MODEL_CLASSIC, MODEL_WEIGHTED):
+        if m in (MODEL_CLASSIC, MODEL_WEIGHTED, MODEL_ADVANCED):
             out['model'] = m
         try:
             out['safety_days'] = max(0, int(r.get('safety_days', DEFAULT_REPLENISHMENT_CFG['safety_days'])))
@@ -202,6 +303,7 @@ def get_replenishment_cfg() -> dict:
             out['in_transit_qty'] = max(0, int(r.get('in_transit_qty', DEFAULT_REPLENISHMENT_CFG['in_transit_qty'])))
         except Exception:
             out['in_transit_qty'] = DEFAULT_REPLENISHMENT_CFG['in_transit_qty']
+        out['advanced'] = _merge_advanced_cfg(r.get('advanced'))
         return out
     except Exception:
         return dict(DEFAULT_REPLENISHMENT_CFG)
@@ -365,15 +467,338 @@ def calc_replenishment_weighted(item: dict, region: str, shipping: int,
     }
 
 
+def _season_factor(history_rows: list) -> float:
+    """季节系数：基于 history 近 12 周周销量 vs 近 4 周均值的比。
+
+    实现：把 history_rows 按周聚合（按 ISO 周），取最后 12 周；ratio = mean(最近4周) / mean(最近12周)。
+    - 无历史 / 解析异常 / 12 周均值 ≤ 0 → 1.0（关闭季节因子）
+    - ratio 钳制到 [0.5, 2.0] 防止极端历史数据把预测拉飞
+    失败永远返 1.0，不抛。
+    """
+    if not history_rows or not isinstance(history_rows, list):
+        return 1.0
+    try:
+        from datetime import datetime as _dt
+        # (week_start: date, sales_sum) 聚合
+        weeks = {}
+        for r in history_rows:
+            if not isinstance(r, dict):
+                continue
+            try:
+                sv = float(r.get('sales') or 0)
+            except Exception:
+                sv = 0.0
+            ts = str(r.get('captured_at') or '')
+            if not ts:
+                continue
+            try:
+                d = _dt.fromisoformat(ts[:10]).date()
+            except Exception:
+                continue
+            # ISO 周对齐：周一为周首
+            ws = d.toordinal() - d.weekday()  # Monday ordinal
+            weeks[ws] = weeks.get(ws, 0.0) + sv
+        if not weeks:
+            return 1.0
+        # 取排序后的周销量序列
+        sorted_weeks = sorted(weeks.items())  # [(ordinal, sum), ...]
+        last12 = [v for _, v in sorted_weeks[-12:]]
+        last4 = [v for _, v in sorted_weeks[-4:]] if len(sorted_weeks) >= 4 else last12
+        if not last12:
+            return 1.0
+        mean12 = sum(last12) / len(last12)
+        mean4 = sum(last4) / len(last4) if last4 else mean12
+        if mean12 <= 0:
+            return 1.0
+        ratio = mean4 / mean12
+        if ratio < 0.5:
+            ratio = 0.5
+        elif ratio > 2.0:
+            ratio = 2.0
+        return round(ratio, 3)
+    except Exception:
+        return 1.0
+
+
+def _promo_multiplier(cfg_promo: dict, asof: str = None) -> float:
+    """大促倍数：今天 (asof) 落在 cfg.promo.dates 任一日期的 ±cfg.promo.lead_days 窗口内 → boost；否则 1.0。
+
+    cfg_promo：get_replenishment_cfg()['advanced']['promo']（enabled/dates/boost/lead_days）
+    asof：'YYYY-MM-DD'，None 时取今天。
+    - promo 未启用或 dates 为空 → 1.0
+    - asof 解析失败 → 1.0（不阻塞）
+    - boost <= 1 也按 1.0 处理（不放大）
+    """
+    try:
+        if not isinstance(cfg_promo, dict) or not cfg_promo.get('enabled'):
+            return 1.0
+        dates = cfg_promo.get('dates') or []
+        if not dates:
+            return 1.0
+        from datetime import datetime as _dt, timedelta as _td
+        try:
+            ld = max(0, int(cfg_promo.get('lead_days', 0) or 0))
+        except Exception:
+            ld = 0
+        try:
+            boost = float(cfg_promo.get('boost', 1.0) or 1.0)
+        except Exception:
+            boost = 1.0
+        if boost <= 1.0:
+            return 1.0
+        try:
+            today = _dt.fromisoformat((asof or '')[:10]).date() if asof else _dt.now().date()
+        except Exception:
+            return 1.0
+        hit = False
+        for ds in dates:
+            try:
+                pdate = _dt.fromisoformat(str(ds)[:10]).date()
+            except Exception:
+                continue
+            if abs((today - pdate).days) <= ld:
+                hit = True
+                break
+        return boost if hit else 1.0
+    except Exception:
+        return 1.0
+
+
+def _recent_avg(history_rows: list, days: int) -> float:
+    """近 N 日日均销量（无历史返 0.0，失败返 0.0）。
+
+    与 _weighted_daily 同源数据契约：每行 {captured_at, sales}，按日期累计后取均值。
+    """
+    if not history_rows or not isinstance(history_rows, list):
+        return 0.0
+    try:
+        from datetime import datetime as _dt
+        latest = None
+        per_day = {}
+        for r in history_rows:
+            if not isinstance(r, dict):
+                continue
+            try:
+                sv = float(r.get('sales') or 0)
+            except Exception:
+                sv = 0.0
+            ts = str(r.get('captured_at') or '')
+            if not ts:
+                continue
+            try:
+                d = _dt.fromisoformat(ts[:10]).date()
+            except Exception:
+                continue
+            per_day[d] = per_day.get(d, 0.0) + sv
+            if latest is None or d > latest:
+                latest = d
+        if latest is None or days <= 0:
+            return 0.0
+        floor_ord = latest.toordinal() - days + 1
+        vals = [v for d, v in per_day.items() if d.toordinal() >= floor_ord and v > 0]
+        if not vals:
+            return 0.0
+        return sum(vals) / len(vals)
+    except Exception:
+        return 0.0
+
+
+def calc_replenishment_advanced(item: dict, region: str, shipping: int,
+                                 safety_days: int, in_transit_qty: int,
+                                 history_lookup, cfg: dict = None) -> dict:
+    """高级模式补货：经典/加权之上的可选层，叠加季节/大促/滞销/超卖四个因子。
+
+    公式语义：
+      daily_raw        = item['sales'] 整数（沿用经典取数）
+      season_factor    = history 近 12 周周销量 vs 近 4 周均值的比，钳制 [0.5, 2.0]；无历史=1.0
+      promo_multiplier = 命中 cfg.promo.dates 区间 → cfg.promo.boost，否则 1.0
+      effective_daily  = daily_raw × season_factor × promo_multiplier
+      lead_time        = shipping + safety_days
+      required         = lead_time × effective_daily
+      qty_raw          = max(0, required - in_transit_qty - stock)（同 weighted）
+      qty              = ceil(qty_raw / 100) × 100
+      ratio            = stock / max(effective_daily, 1)
+      reorder          = ratio - lead_time（用于颜色判定）
+      color            = reorder <= 0 ? red : (reorder <= 2 ? yellow : green)
+      slow_moving      = (近14日均销 < slow.threshold_per_day) AND (stock/daily_raw > slow.stock_ratio) AND 有历史
+      oversell_risk    = stock < required
+      oversell_level   = oversell_risk ? ('high' if stock < high_ratio × required else 'medium') : None
+
+    输入：item={name,stock,sales,sku_id,...}, region, shipping, safety_days, in_transit_qty
+          history_lookup：callable(sku_id, region, days[, name]) → list[dict]（与 query_sku_history 兼容）
+          cfg：get_replenishment_cfg() 输出；缺省或 None 时调 get_replenishment_cfg() 取（不传则拿不到 advanced 节点）
+    输出：与 classic/weighted 同构字段 + 附加
+      {model:'advanced', season_factor, promo_multiplier, effective_daily,
+       slow_moving, oversell_risk, oversell_level}
+
+    任何历史/参数异常 → 回退 calc_replenishment_classic + model='classic(error)'
+    """
+    sku_id = (item.get('sku_id', '') or '')
+    name = item.get('name', '')
+    _it_region = item.get('region') or region
+    stock = _to_int_safe(item.get('stock', 0))
+    daily_raw = max(_to_int_safe(item.get('sales', 0)), 0)
+    # 兜底 cfg
+    try:
+        if not isinstance(cfg, dict):
+            cfg = get_replenishment_cfg()
+    except Exception:
+        cfg = {'model': MODEL_ADVANCED, 'safety_days': safety_days,
+               'in_transit_qty': in_transit_qty, 'advanced': _default_advanced_cfg()}
+    adv = cfg.get('advanced') if isinstance(cfg, dict) else None
+    if not isinstance(adv, dict):
+        adv = _default_advanced_cfg()
+
+    # 拉历史（30 天覆盖季节计算；近 14 日均销看滞销）
+    rows = []
+    try:
+        if sku_id:
+            rows = history_lookup(sku_id, _it_region, 30) or []
+        else:
+            rows = history_lookup('', _it_region, 30, name=name) or []
+    except Exception:
+        # history_lookup 抛异常 → 经典公式兜底，标注 'classic(error)'
+        try:
+            fb = calc_replenishment_classic(item, _it_region, shipping, 1)
+        except Exception:
+            fb = {
+                'status': '计算异常', 'color': 'gray', 'qty': 0,
+                'ratio': 0.0, 'reorder': 0.0, 'daily': 0, 'stock': stock,
+                'model': 'classic(error)',
+            }
+        fb['model'] = 'classic(error)'
+        return fb
+    if rows is None:
+        rows = []
+    if not isinstance(rows, list):
+        rows = []
+    has_history = bool(rows)
+
+    # 1) 季节系数
+    season_cfg = adv.get('season') or {}
+    if season_cfg.get('enabled') and has_history:
+        season_factor = _season_factor(rows)
+    else:
+        season_factor = 1.0
+
+    # 2) 大促倍数（不依赖历史）
+    promo_factor = _promo_multiplier(adv.get('promo') or {})
+
+    effective_daily = daily_raw * season_factor * promo_factor
+
+    # 3) 滞销判定（需要 history）
+    slow_cfg = adv.get('slow') or {}
+    slow_moving = False
+    if slow_cfg.get('enabled') and has_history and daily_raw > 0:
+        try:
+            avg14 = _recent_avg(rows, 14)
+            thr = float(slow_cfg.get('threshold_per_day', 1.0) or 0)
+            sr = float(slow_cfg.get('stock_ratio', 5.0) or 0)
+            if avg14 < thr and (stock / daily_raw) > sr:
+                slow_moving = True
+        except Exception:
+            slow_moving = False
+
+    # 4) 超卖判定
+    lead_time = shipping + max(0, int(safety_days or 0))
+    required = lead_time * effective_daily
+    oversell_cfg = adv.get('oversell') or {}
+    oversell_risk = False
+    oversell_level = None
+    if oversell_cfg.get('enabled') and effective_daily > 0:
+        try:
+            if stock < required:
+                oversell_risk = True
+                hr = float(oversell_cfg.get('high_ratio', 0.5) or 0)
+                oversell_level = 'high' if stock < (hr * required) else 'medium'
+        except Exception:
+            oversell_risk = False
+            oversell_level = None
+
+    # 5) qty / 颜色（沿用 weighted 语义）
+    try:
+        if effective_daily <= 0:
+            # 无销量：照搬经典「无销量·观察」
+            return {
+                'status': '无销量·观察', 'color': 'gray', 'qty': 0,
+                'ratio': 0.0, 'reorder': 0.0, 'daily': 0, 'stock': stock,
+                'model': MODEL_ADVANCED,
+                'season_factor': season_factor, 'promo_multiplier': promo_factor,
+                'effective_daily': 0.0, 'slow_moving': False,
+                'oversell_risk': False, 'oversell_level': None,
+            }
+        ratio = stock / effective_daily
+        reorder = ratio - lead_time
+        if reorder <= 0:
+            status = '立刻补货'
+            color = 'red'
+            qty_raw = required - int(in_transit_qty or 0) - stock
+        elif reorder <= 2:
+            status = f'{reorder:.0f}天后下单'
+            color = 'yellow'
+            qty_raw = required - int(in_transit_qty or 0) - stock
+        else:
+            status = f'{reorder:.0f}天后下单'
+            color = 'green'
+            qty_raw = 0
+        qty = max(0, int(qty_raw))
+        qty = ((qty + 99) // 100) * 100
+    except Exception:
+        # 任何算术/参数异常 → 经典兜底
+        try:
+            fb = calc_replenishment_classic(item, _it_region, shipping, 1)
+        except Exception:
+            fb = {
+                'status': '计算异常', 'color': 'gray', 'qty': 0,
+                'ratio': 0.0, 'reorder': 0.0, 'daily': 0, 'stock': stock,
+                'model': 'classic(error)',
+            }
+        fb['model'] = 'classic(error)'
+        return fb
+
+    return {
+        'status': status, 'color': color, 'qty': qty,
+        'ratio': round(ratio, 1),
+        'reorder': reorder,
+        'daily': round(effective_daily, 2), 'stock': stock,
+        'model': MODEL_ADVANCED,
+        'season_factor': season_factor,
+        'promo_multiplier': promo_factor,
+        'effective_daily': round(effective_daily, 2),
+        'slow_moving': slow_moving,
+        'oversell_risk': oversell_risk,
+        'oversell_level': oversell_level,
+    }
+
+
 def calc_replenishment(items, region, model, safety_days, in_transit_qty,
-                       shipping_lookup, history_lookup, offset=1) -> list:
-    """t13 P3-A 补货模型入口：分发到 classic 或 weighted。
+                       shipping_lookup, history_lookup, offset=1,
+                       cfg: dict = None) -> list:
+    """t13 P3-A 补货模型入口：分发到 classic / weighted / advanced。
 
     shipping_lookup：callable(item, region) → int（运输天数；无则返 1）
     history_lookup：callable(sku_id, region, days[, name]) → list[dict]（与 query_sku_history 兼容）
+    cfg：可选，advanced 模型专用配置（get_replenishment_cfg() 输出）；
+         缺省或 None 时调 get_replenishment_cfg() 取；其他模型忽略。
     返回与原 _calc_from_items 同款字段的 plan dict 列表，附加 'model' 字段。
     任何异常 → 逐商品回退经典公式（绝不中断整批）。
+
+    向后兼容：新增 cfg 为可选形参，已有调用方（test_smoke / gui）不传也照常工作。
     """
+    # advanced 模式需要 cfg：缺参或非 dict 时拉一次默认配置
+    _adv_cfg = None
+    if str(model or '').strip().lower() == MODEL_ADVANCED:
+        if not isinstance(cfg, dict):
+            try:
+                _adv_cfg = get_replenishment_cfg()
+            except Exception:
+                _adv_cfg = {'model': MODEL_ADVANCED,
+                            'safety_days': int(safety_days or 0),
+                            'in_transit_qty': int(in_transit_qty or 0),
+                            'advanced': _default_advanced_cfg()}
+        else:
+            _adv_cfg = cfg
+
     out = []
     for item in items:
         try:
@@ -387,6 +812,12 @@ def calc_replenishment(items, region, model, safety_days, in_transit_qty,
                     item, it_region, shipping,
                     int(safety_days or 0), int(in_transit_qty or 0),
                     history_lookup,
+                )
+            elif model == MODEL_ADVANCED:
+                plan = calc_replenishment_advanced(
+                    item, it_region, shipping,
+                    int(safety_days or 0), int(in_transit_qty or 0),
+                    history_lookup, _adv_cfg,
                 )
             else:
                 plan = calc_replenishment_classic(item, it_region, shipping, int(offset or 1))
@@ -522,7 +953,7 @@ class Config:
         Config._load_cache['data'] = data
         return _copy.deepcopy(data)
 
-    # ── v1.4.8 ：DPAPI 凭据加密迁移（docs/SOLUTION_tech_ .md §①）──
+    # ── v1.4.8 ：DPAPI 凭据加密迁移（docs/SOLUTION_tech_ .md § ）──
     @staticmethod
     def _migrate_secrets(data: dict) -> bool:
         """首启检到 api.providers.*.api_key 或 backend.password 为非空明文→静默加密覆写。

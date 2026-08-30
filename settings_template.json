@@ -55,6 +55,12 @@
     "retention_days": 180,
     "max_rows": 200000
   },
+  "stores": {
+    "active": "default",
+    "list": [
+      { "id": "default", "name": "默认店铺" }
+    ]
+  },
   "eula_accepted_v1": false,
   "license": {
     "key": "",

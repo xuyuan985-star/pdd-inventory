@@ -119,11 +119,11 @@ class TestDPAPI(unittest.TestCase):
         spec.loader.exec_module(m)
         if not m.is_available():
             self.skipTest('DPAPI 不可用')
-        # 合法 base64 但不是 DPAPI 输出
+        # 合法 base64 但不是 DPAPI 输出 → CryptUnprotectData 返回 False
         bad = 'dpapi:v1:' + 'A' * 200
         with self.assertRaises(m.DPAPIError):
             m.dec(bad)
-        # 非 base64
+        # 非 base64 → 抛 DPAPIError（base64 decode 失败包成 DPAPIError）
         with self.assertRaises(m.DPAPIError):
             m.dec('dpapi:v1:!!!not-base64!!!')
 
@@ -137,7 +137,7 @@ class TestDPAPI(unittest.TestCase):
         self.assertEqual(u.Config.decrypt_value('plain-text'), 'plain-text')
         # 空串
         self.assertEqual(u.Config.decrypt_value(''), '')
-        # 损坏密文
+        # 损坏密文 → 返回空串（不抛）
         self.assertEqual(u.Config.decrypt_value('dpapi:v1:' + 'X' * 200), '')
 
     def test_migrate_secrets_encrypts_plaintext(self):
@@ -296,11 +296,11 @@ class TestUpdater(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('pdd_updater', os.path.join(HERE, 'updater.py'))
         m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(m)
-        # 不存在的 PID
+        # 不存在的 PID → 进程已死 → True
         self.assertTrue(m._wait_pid_exit(99999999, timeout=1))
-        # 活进程（自己）等待 0.1s 超时
+        # 活进程（自己）等待 0.1s 超时 → False
         self.assertFalse(m._wait_pid_exit(os.getpid(), timeout=0.1))
-        # 活进程匹配 expected_exe 路径（本进程 python）
+        # 活进程匹配 expected_exe 路径（本进程 python）→ 等待超时 False
         self.assertFalse(m._wait_pid_exit(os.getpid(), expected_exe=sys.executable, timeout=0.1))
 
     def test_do_finalize_full_chain(self):
@@ -578,7 +578,7 @@ class TestUpdaterRegression(unittest.TestCase):
             r, l = _p(remote), _p(local)
             n = max(len(r), len(l))
             return (r + [0] * (n - len(r))) > (l + [0] * (n - len(l)))
-        # 远端 < 本地
+        # 远端 < 本地 → 不更新（false）；远端 > 本地 → 更新（true）；相等 → 不更新
         self.assertFalse(_version_newer('v1.4.5', 'v1.4.6'), '远端<本地应不更新')
         self.assertTrue(_version_newer('v1.4.7', 'v1.4.6'), '远端>本地应更新')
         self.assertFalse(_version_newer('v1.4.6', 'v1.4.6'), '相同版本应不更新')
@@ -984,7 +984,7 @@ class TestImportItemsNumberParsing(unittest.TestCase):
             _write_csv(path, content.encode('utf-8'))
             items, _ = import_items(path)
             self.assertEqual(items[0]['stock'], 200, '全角 200 应解析为 200')
-            # 销量单元格为'统计中'，_parse_num_text 返 0
+            # 销量单元格为'统计中'，_parse_num_text 返 0 → warning
             self.assertEqual(items[0]['sales'], 0)
 
 
@@ -1271,8 +1271,8 @@ class TestUsageExtractorExtract(unittest.TestCase):
         self.assertIsNotNone(r)
         self.assertEqual(r['prompt'], 1024)
         self.assertEqual(r['completion'], 0)
-        # total = 1024 (image) + 0 (completion)
-        # 1071 > 1024
+        # total = 1024 (image) + 0 (completion) → 自校验补齐 1024
+        # 1071 > 1024 → 保留原值
         self.assertEqual(r['total'], 1071)
         self.assertEqual(r['image_tokens'], 1024)
         self.assertEqual(r['source'], 'data.usage.multimodal')
@@ -1319,8 +1319,8 @@ class TestUsageExtractorExtract(unittest.TestCase):
             'output': [{'usage': {'input_tokens': 999, 'output_tokens': 999}}],
         }
         r = self.ux.extract(data, 'doubao', 'responses')
-        # 步 2 先命中（顶层 input/output 命名... 但这里是 prompt/completion 命名
-        # 步 1 要求有 prompt_tokens 或 completion_tokens
+        # 步 2 先命中（顶层 input/output 命名... 但这里是 prompt/completion 命名 → 步 1 命中）
+        # 步 1 要求有 prompt_tokens 或 completion_tokens → 命中
         self.assertEqual(r['source'], 'data.usage')
 
 
@@ -1373,7 +1373,7 @@ class TestUsageExtractorFallback(unittest.TestCase):
     def test_fallback_chinese_mix(self):
         """中文×2 + 字母数字×0.25 × 1.25 冗余。"""
         # '示例商品A500g' = 4 中文 + 5 alnum (A500g) + 0 other
-        # = 4*2 + 5*0.25 = 8+1.25 = 9.25
+        # = 4*2 + 5*0.25 = 8+1.25 = 9.25 → ×1.25 = 11.5625 → 12
         r = self.ux.estimate_fallback(content='示例商品A500g', prompt='', provider='doubao', max_tok=2048)
         self.assertEqual(r['source'], 'fallback')
         self.assertEqual(r['completion'], 12)
@@ -1397,6 +1397,7 @@ class TestUsageExtractorFallback(unittest.TestCase):
     def test_fallback_max_tok_extreme(self):
         """极端失败：content 空 + prompt 空 + max_tok 给定 → fallback_max_tok。"""
         # 实际上：content 空时 c=0；prompt 空时 p_text=0；max_side=0 时 p_img=0
+        # → total=0+0=0；若 max_tok=0 → 走 fallback_max_tok 分支
         r = self.ux.estimate_fallback(content='', prompt='', provider='doubao', max_tok=0, max_side=0)
         self.assertEqual(r['source'], 'fallback_max_tok')
         self.assertEqual(r['total'], 0)
@@ -1432,7 +1433,7 @@ class TestUsageExtractorComputeCost(unittest.TestCase):
     def test_string_pricing_value_does_not_crash(self):
         """SPEC §6.2 表格：定价字符串异常按 0 算 + 不外抛。"""
         usage = {'prompt': 100, 'completion': 50, 'image_tokens': None}
-        # input_per_million 是字符串，强制转 float 失败
+        # input_per_million 是字符串，强制转 float 失败 → 按 0 算
         pricing = {'input_per_million': 'invalid', 'output_per_million': '0.5 元'}
         try:
             r = self.ux.compute_cost(usage, pricing)
@@ -1444,7 +1445,7 @@ class TestUsageExtractorComputeCost(unittest.TestCase):
     def test_no_image_tokens_no_image_cost(self):
         usage = {'prompt': 100, 'completion': 50, 'image_tokens': None}
         pricing = {'image_per_call': 0.003}
-        # image_tokens 缺失
+        # image_tokens 缺失 → 不计 image_per_call
         self.assertEqual(self.ux.compute_cost(usage, pricing), 0.0)
 
     def test_model_name_with_injection_chars_in_pricing_lookup_does_not_eval(self):
@@ -1476,7 +1477,7 @@ class TestUsageStoreRecord(unittest.TestCase):
         usage_store.get_base_dir = lambda: self.tmp
         # 重置 session
         usage_store.session_reset()
-        # 重置 _is_usage_enabled
+        # 重置 _is_usage_enabled → 写入一份 settings.json 启用
         with open(os.path.join(self.tmp, 'settings.json'), 'w', encoding='utf-8') as f:
             json.dump({'usage': {'enabled': True}}, f)
 
@@ -2206,7 +2207,7 @@ class TestOcrVisionThreeTupleContract(unittest.TestCase):
             content, mdl, usage = ocr._ocr_api_call('img', '示例提示词', max_tok=1024)
         self.assertEqual(content, '示例商品')
         self.assertIsInstance(usage, dict)
-        # usage 缺失
+        # usage 缺失 → 走 §3 兜底估算
         self.assertIn(usage['source'], ('fallback', 'fallback_max_tok'))
 
     def test_vision_api_returns_three_tuple(self):
@@ -2299,7 +2300,7 @@ class TestOcrVisionThreeTupleContract(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────
-# 5. 集成式断言：record
+# 5. 集成式断言：record → aggregate 往返
 # ──────────────────────────────────────────────────────────────────
 
 class TestEndToEndPipeline(unittest.TestCase):
@@ -2340,7 +2341,7 @@ class TestEndToEndPipeline(unittest.TestCase):
 
     def test_missing_count(self):
         agg = self.us.aggregate('all')
-        # 1 行 cost_cny=None
+        # 1 行 cost_cny=None → missing_count += 1
         self.assertEqual(agg['missing_count'], 1)
 
 
@@ -2464,7 +2465,7 @@ class TestHistoryDB(unittest.TestCase):
         self.assertEqual(r0['status'], '')
         self.assertEqual(r1['name'], '只有名字')
 
-        # 非法入参
+        # 非法入参 → -1，绝不抛
         self.assertEqual(self.hdb.record_capture(None, 'live'), -1)
         self.assertEqual(self.hdb.record_capture('not-a-dict', 'live'), -1)
 
@@ -2491,7 +2492,7 @@ class TestHistoryDB(unittest.TestCase):
         sids = [r[0] for r in self._raw('SELECT id FROM capture_sessions')]
         self.assertEqual(sids, [sid1])
 
-        # 行数上限：再灌 3 session × 3 行
+        # 行数上限：再灌 3 session × 3 行 → 共 12 行 → cap=5 保留最新 5 行
         for k in range(3):
             self.hdb.record_capture({'云南': [
                 {'name': f'批量商品{k}-{j}', 'sku_id': f'900000000{k}{j}', 'stock': j}
@@ -2705,7 +2706,7 @@ class TestNavRefactorV147(unittest.TestCase):
         self.assertIn('after_idle', body[usage_idx:usage_idx + 600],
                       'page_usage 刷新必须经 after_idle 调度（主线程事件队列）')
 
-    # ── 5. 地区 tab「📈 历史」按钮
+    # ── 5. 地区 tab「📈 历史」按钮 → _goto_history_page ────────────
     def test_region_tab_history_button_uses_nav_shortcut(self):
         src = _read(self.GUI)
         # _update_tabs 必须有「📈 历史」按钮，command 必须是 _goto_history_page
@@ -2809,23 +2810,23 @@ class TestNavRefactorV147(unittest.TestCase):
         fn = m.StatsPagesMixin._chart_empty_message
         self.assertTrue(callable(fn), '_chart_empty_message 必须可调用')
 
-        # 分支 1：panel=None / by_model 缺省 / 空 dict
+        # 分支 1：panel=None / by_model 缺省 / 空 dict → 引导识别
         self.assertIn('暂无', fn(None))
         self.assertIn('暂无', fn({}))
         self.assertIn('暂无', fn({'by_model': {}}))
-        # 分支 2：entries 非空但全部 cost=0（含 None / 负数归 0）
+        # 分支 2：entries 非空但全部 cost=0（含 None / 负数归 0）→ 引导配价格表
         self.assertIn('价格表', fn({'by_model': {
             'doubao-seed': {'cost': 0.0, 'tokens': 100, 'count': 1},
             'qwen-vl': {'cost': None, 'tokens': 50, 'count': 1},
         }}))
-        # 分支 3：至少一条 cost>0
+        # 分支 3：至少一条 cost>0 → None（正常绘制）
         self.assertIsNone(fn({'by_model': {
             'doubao-seed': {'cost': 0.0, 'tokens': 100, 'count': 1},
             'glm-4.6': {'cost': 0.05, 'tokens': 200, 'count': 2},
         }}))
         # 边界：单个模型 cost=0 仍属分支 2
         self.assertIn('价格表', fn({'by_model': {'only': {'cost': 0.0}}}))
-        # 边界：entries 含负数 cost（被 (v.get('cost', 0.0) or 0.0) 归 0）
+        # 边界：entries 含负数 cost（被 (v.get('cost', 0.0) or 0.0) 归 0）→ 分支 2
         self.assertIn('价格表', fn({'by_model': {
             'a': {'cost': -1.0}, 'b': {'cost': -0.5},
         }}))
@@ -2876,7 +2877,7 @@ class TestKeyDecryptWiring(unittest.TestCase):
         self.assertEqual(u.decrypt_secret(blob), 'sk-wiring-test-key')
         self.assertIn(blob, u._decrypt_memo, '解密结果应进 memo 缓存')
         self.assertEqual(u.decrypt_secret(blob), 'sk-wiring-test-key')
-        # 损坏密文
+        # 损坏密文 → 返回 ""（调用方按 key 为空路径处理，不抛）
         self.assertEqual(u.decrypt_secret('dpapi:v1:not-a-valid-blob'), '')
 
     def test_config_save_get_set_are_class_methods(self):
@@ -2964,7 +2965,7 @@ class TestLicense(unittest.TestCase):
 
     def test_get_tier_enforce_true_empty_is_free(self):
         from auth.license import get_tier
-        # enforce=True 且无 license
+        # enforce=True 且无 license → free
         self.assertEqual(get_tier("", enforce=True), 'free')
         self.assertEqual(get_tier("garbage", enforce=True), 'free')
 
@@ -2976,7 +2977,7 @@ class TestLicense(unittest.TestCase):
         self.assertEqual(len(a), 32)  # 16 字节 hex = 32 chars
 
     def test_get_tier_cache_ttl_expires_and_reevaluates(self):
-        """缓存 TTL=300s 到期后必须重验：缓存 TTL=300s 到期后必须重验。
+        """缓存 TTL=300s 到期后必须重验。
 
         修前：get_tier('', enforce=True) 第一次返 'free'，缓存永不过期，
         外部修改 settings.json 后该进程内仍返 'free' 直到重启。
@@ -3000,7 +3001,7 @@ class TestLicense(unittest.TestCase):
         _lic.reset_cache()
 
     def test_get_tier_cache_ttl_fresh_hit_uses_cache(self):
-        """缓存 TTL=300s 到期后必须重验：TTL 内命中应直接返缓存，不重验。
+        """TTL 内命中应直接返缓存，不重验。
 
         防回归：避免 TTL 实现错误把「同 license_text 重复调用」也走重验路径。
         """
@@ -3018,7 +3019,7 @@ class TestLicense(unittest.TestCase):
         _lic.reset_cache()
 
     def test_settings_ui_enforce_rollback_on_save_failure(self):
-        """授权开关写盘失败时必须回滚 UI：_on_enforce_toggle 写盘失败时必须回滚 UI。
+        """授权开关写盘失败时必须回滚 UI。
 
         直接验证源码：except 分支内必须执行 _enforce_var.set(not bool(_enforce_var.get()))。
         """
@@ -3029,7 +3030,7 @@ class TestLicense(unittest.TestCase):
         self.assertIn('_enforce_var.set(not bool(_enforce_var.get()))', src)
 
     def test_settings_ui_import_rollback_on_save_failure(self):
-        """卡密导入写盘失败时必须回滚 _key_var 为旧值：_on_import 写盘失败时必须回滚 _key_var 为旧值。
+        """卡密导入写盘失败时必须回滚 _key_var 为旧值。
 
         直接验证源码：except 分支内必须执行 _key_var.set(_old_key)。
         """
@@ -3095,13 +3096,13 @@ class TestGating(unittest.TestCase):
     def test_enforce_true_free_live_quota_blocks_at_50(self):
         """enforce=true + free：used >= 50 阻断，< 50 通过"""
         from auth.license import check_live_quota
-        # used=49
+        # used=49 → 通过
         g = check_live_quota(49, "garbage_no_valid_license", enforce=True)
         self.assertTrue(g["allowed"])
-        # used=50
+        # used=50 → 阻断
         g = check_live_quota(50, "garbage_no_valid_license", enforce=True)
         self.assertFalse(g["allowed"])
-        # used=100
+        # used=100 → 阻断
         g = check_live_quota(100, "garbage_no_valid_license", enforce=True)
         self.assertFalse(g["allowed"])
 
@@ -3110,14 +3111,14 @@ class TestGating(unittest.TestCase):
         所以这里只能断言"is_pro=False 的 free 路径在 enforce=true 下被钳制"，
         真正 Pro 验证需密钥——保留扩展点）。"""
         from auth.license import check_live_quota
-        # 无 license + enforce=true
+        # 无 license + enforce=true → free 路径 → 50 次上限
         g = check_live_quota(60, "", enforce=True)
         self.assertFalse(g["allowed"])
 
     def test_enforce_true_free_history_30_days(self):
         """enforce=true + free：history 钳到 30 天"""
         from auth.license import get_history_days_limit
-        # 无 license
+        # 无 license → free
         self.assertEqual(get_history_days_limit("", enforce=True), 30)
         self.assertEqual(get_history_days_limit("garbage", enforce=True), 30)
 
@@ -3214,7 +3215,7 @@ class TestReplenishmentModels(unittest.TestCase):
         """经典公式：固定输入 → 固定输出（与改动前完全一致）"""
         from utils import calc_replenishment_classic
         # 输入：stock=0, sales=10, shipping=1, offset=1
-        # daily=10, ratio=0/10=0, lead_time=2
+        # daily=10, ratio=0/10=0, lead_time=2, reorder=-2 → 立刻补货
         # qty = max(10*8, 100) = 100, round to 100
         p = calc_replenishment_classic({'name': 'X', 'stock': 0, 'sales': 10}, '广东', 1, 1)
         self.assertEqual(p['status'], '立刻补货')
@@ -3222,7 +3223,7 @@ class TestReplenishmentModels(unittest.TestCase):
         self.assertEqual(p['qty'], 100)
         self.assertEqual(p['model'], 'classic')
         # 输入：stock=200, sales=10, shipping=1, offset=1
-        # ratio=20, lead_time=2
+        # ratio=20, lead_time=2, reorder=18 → green
         p2 = calc_replenishment_classic({'name': 'X', 'stock': 200, 'sales': 10}, '广东', 1, 1)
         self.assertEqual(p2['color'], 'green')
         self.assertEqual(p2['qty'], 0)
@@ -3256,6 +3257,7 @@ class TestReplenishmentModels(unittest.TestCase):
         self.assertEqual(p['model'], 'weighted')
         # 加权日销 = 0.5*avg(7) + 0.3*avg(14) + 0.2*avg(30)
         # avg(7)=20, avg(14)=(7*20+7*10)/14=15, avg(30)=(7*20+7*10+16*5)/30=290/30≈9.67
+        # → 0.5*20 + 0.3*15 + 0.2*9.67 ≈ 16.43
         self.assertAlmostEqual(p['daily'], 16.4, delta=0.5)
         # 立刻补货（stock=0/daily=14 ≈ 0, lead_time=2+2=4）
         self.assertEqual(p['color'], 'red')
@@ -3321,7 +3323,7 @@ class TestReplenishmentModels(unittest.TestCase):
         plans = calc_replenishment(items, '广东', 'weighted', 2, 0, sl, hl)
         self.assertEqual(len(plans), 2)
         for p in plans:
-            # 无有效历史
+            # 无有效历史 → 经典(无历史) 兜底
             self.assertIn(p['model'], ('classic(no_history)', 'classic'))
 
     def test_settings_template_has_replenishment(self):
@@ -3413,7 +3415,7 @@ class TestBatchCostPreview(unittest.TestCase):
         # <1 元用 4 位小数
         r = _fmt_yuan(0.001)
         self.assertIn('¥', r)
-        # 0
+        # 0 → ¥0
         self.assertIn('¥0', _fmt_yuan(0))
 
     def test_preview_batch_cost_uses_pricing_cfg(self):
@@ -3464,7 +3466,7 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertIsInstance(pricing, dict)
 
     def test_t24_f1_classic_error_label_distinguishes(self):
-        """加权模式异常回退标注 classic(error)：gui.py 加权 except 回退标注 'classic(error)'。
+        """加权模式异常回退标注 classic(error)。
 
         与 utils.calc_replenishment_weighted 的 'classic(no_history)' 区分：
         - classic(no_history) = utils 内部查到空结果主动回退
@@ -3479,7 +3481,7 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertIn('classic(no_history)', src)
 
     def test_t24_f2_self_tier_dead_code_removed(self):
-        """删除 _tier 死状态与相关 import：gui.py 删除 self._tier 死状态 + _auth_get_tier import。
+        """删除 _tier 死状态与相关 import。
 
         防回归：避免后续又把死代码加回来。
         """
@@ -3494,14 +3496,14 @@ class TestBatchCostPreview(unittest.TestCase):
 
 
 class TestNavGrouping(unittest.TestCase):
-    """导航默认展开 + 三组分组 + 标题统一 + 导出降权：导航默认展开 + 三组分组 + 标题统一 + 导出降权 + 死代码清理。
+    """导航默认展开 + 三组分组 + 标题统一 + 导出降权。
 
     用户裁定：t25 IA 审计 → t27 实施 4 项定稿（提案 1+2+5+4+6）。
     约束：零新配色/字体/token；首页双入口布局不动；业务逻辑零变化。
     """
 
     def test_nav_default_expanded_in_build_ui(self):
-        """导航默认展开：gui.py _build_ui 初始即 add(nav_frame, before=content_frame)。
+        """t27 ①：gui.py _build_ui 初始即 add(nav_frame, before=content_frame)。
 
         修 P-A1（新用户看不到 8 项功能）——main_paned 不能再只 add content_frame。
         """
@@ -3522,7 +3524,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertTrue(hasattr(gui.App, '_toggle_nav'))
 
     def test_nav_three_group_layout(self):
-        """导航三组布局：_build_nav 必须按【工作区】【数据】【设置】三组布局。
+        """t27 ②：_build_nav 必须按【工作区】【数据】【设置】三组布局。
 
         修 P-A2（8 项平铺无分组，命名不一致）。
         """
@@ -3544,7 +3546,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertIn('padx=14, pady=7', src)
 
     def test_page_titles_unified_to_font_heading(self):
-        """页面标题统一：所有 page 顶部标题统一 FONT_HEADING + 无 emoji（emoji 在导航）。
+        """t27 ③：所有 page 顶部标题统一 FONT_HEADING + 无 emoji（emoji 在导航）。
 
         修 P-A4（page 标题字体/pady/emoji 不统一）。
         """
@@ -3581,7 +3583,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertNotIn('💰', usage_title_match.group(1))
 
     def test_export_btn_demoted_weight(self):
-        """导出按钮降权：「导出 Excel」13pt bold 16w×2h 降为 9pt bold 常规。
+        """t27 ④：「导出 Excel」13pt bold 16w×2h 降为 9pt bold 常规。
 
         修 P-A3（结果动作视觉权重超过数据入口）。
         """
@@ -3600,7 +3602,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertIn('self._export', src)
 
     def test_calibrate_tab_dead_code_removed(self):
-        """校准页改名：_build_calibrate_tab 改名为 _build_calibrate_inline（零外部引用）。"""
+        """t27 ⑤：_build_calibrate_tab 改名为 _build_calibrate_inline（零外部引用）。"""
         import settings_ui
         import inspect
         # 必须有 _build_calibrate_inline
@@ -3613,7 +3615,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertNotIn('_build_calibrate_tab', gui_src)
 
     def test_no_new_color_font_token_added(self):
-        """设计约束：零新配色/字体/token。"""
+        """t27 约束：零新配色/字体/token。"""
         import gui
         import settings_ui
         import stats_ui
@@ -3634,21 +3636,40 @@ class TestNavGrouping(unittest.TestCase):
                              f'意外的新 C_ token: {unexpected}')
 
     def test_home_dual_entry_layout_intact(self):
-        """设计约束：首页 primary_row / btn_row 双入口几何不动。"""
+        """v1.5.7 t27 约束更新：首页 primary_row / btn_row 布局（用户拍板定版）。
+         ① 第一排 primary_row：批量(居左) + 导入(居左，文件统一入口弹菜单) + 识图(居右) + 导出(居右)
+         ② 第二排 btn_row：刷新(居左) + 🛡双模型(居右)
+         ③ 识图 = 截取当前窗口（直连 _live_screenshot，不再弹菜单）
+         ④ 本地图片选择识别并入导入（_open_import_menu 二选一）
+         ⑤ 全部按钮统一宽度（home_actions.BTN_WIDTH_HOME）"""
         import gui
         import inspect
         src = inspect.getsource(gui.App._build_ui)
-        # primary_row 截图 + 导入 仍 dark bold
-        self.assertIn('"截图"', src)
-        self.assertIn("self._live_screenshot", src)
+        # primary_row 按钮文字（批量/导入/识图/导出，用户拍板顺序）
+        self.assertIn('"批量"', src)
         self.assertIn('"导入"', src)
-        self.assertIn("self._import_table", src)
-        # kind='dark' 两次（左右主入口）
+        self.assertIn('"识图"', src)
+        self.assertIn('"导出"', src)
+        # v1.5.6 的「截图」按钮已解散（拆为 识图=截窗口 + 导入菜单=选图片）
+        self.assertNotIn('"截图"', src)
+        # 识图直连实时截图（最小化→截 PDD 窗口→恢复→识别）
+        self.assertIn("self._live_screenshot", src)
+        # 导入 = 文件统一入口（表格/图片菜单；菜单项分派函数存在）
+        self.assertIn("self._open_import_menu", src)
+        self.assertIn("self._export", src)
+        # 全部按钮统一宽度：BTN_WIDTH_HOME 常量已引入
+        self.assertIn("btn_width_for", src)
+        self.assertIn("home_actions", src)
+        # 🛡双模型仍在 btn_row（second 行）
+        self.assertIn('"🛡 双模型"', src)
+        self.assertIn("self._single_dual_var", src)
+        # kind='dark' 次数：批量 + 导入 + 刷新 = 3 次（第一排2 + 第二排1）
         dark_count = src.count("kind='dark'")
-        self.assertGreaterEqual(dark_count, 3)  # 截图 + 导入 + 至少 1 个 btn_row
+        self.assertGreaterEqual(dark_count, 3,
+                               f"kind='dark' 应至少 4 次（截图/导入/刷新/批量），实际 {dark_count}")
 
     def test_build_nav_called_in_build_ui_after_page_frames(self):
-        """导航冷启动回归：_build_ui 函数体内必须存在 self._build_nav() 调用，
+        """t29 冷启动修复回归：_build_ui 函数体内必须存在 self._build_nav() 调用，
         且该调用必须位于 8 个 page_* 帧创建之后（_build_nav 引用 page_home 等帧，
         若先调用会 AttributeError）。修 t27 默认展开后冷启动导航空壳 bug。
         """
@@ -3676,7 +3697,7 @@ class TestNavGrouping(unittest.TestCase):
                           'self._build_nav() 必须晚于所有 8 个 page_* 帧创建（否则 AttributeError）')
 
     def test_toggle_nav_lazy_build_guard_preserved(self):
-        """导航冷启动回归：_toggle_nav 里的懒构建守卫必须保留——
+        """t29 冷启动修复回归：_toggle_nav 里的懒构建守卫必须保留——
         `if not self.nav_buttons: self._build_nav()` 防止折叠再展开时重复构建。
         冷启动修复只是新增 _build_ui 内的预构建，_toggle_nav 守卫不能丢。
         """
@@ -3690,7 +3711,7 @@ class TestNavGrouping(unittest.TestCase):
                       '_toggle_nav 内缺少 self._build_nav() 调用')
 
     def test_nav_width_dpi_scaled(self):
-        """导航宽度 DPI 联动：nav 宽度三处（frame width / _build_ui minsize / _toggle_nav
+        """t29 迭代R3：nav 宽度三处（frame width / _build_ui minsize / _toggle_nav
         minsize）必须随 dpi_scale 联动，不得残留裸 176 像素字面量。
         背景：nav 是全 UI 唯一 pack_propagate(False) 冻结像素宽的容器，字号随
         tk scaling 缩放而 176px 不缩，200% DPI 下「💰 用量明细」会被裁。
@@ -3709,8 +3730,8 @@ class TestNavGrouping(unittest.TestCase):
                          '残留裸 176 minsize 字面量（DPI 下会裁导航项）')
 
     def test_page_title_margins_unified(self):
-        """页标题边距统一 padx=16, pady=(14, 2)——settings_ui 5 页
-        （商品/主题/校准/后台/API）+ stats_ui 2 页（历史/用量）；
+        """t29 迭代R3：页标题边距统一 padx=16, pady=(14, 2)——settings_ui 5 页
+        （商品/主题/校准/后台/API）+ stats_ui 2 页（历史/用量，已是基准值）；
         不得残留旧 pady=(15,2) 或 API 页 padx=20。
         """
         import settings_ui
@@ -3846,16 +3867,12 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
             return f.read()
 
     def test_stats_ui_padx_aligned_to_16(self):
-        """stats_ui.py：用量页 8 个区域 padx 统一为 16（topbar / mid / cv / 说明 / 价格表标题 / ptree / 双击说明 / pbtns）。
-        断言：源码里没有任何 padx=14 残留（旧值已被 padx=16 替换）。
-        """
+        """stats_ui.py：用量页区域 padx 统一为 16，源码不应再有 padx=14 残留。"""
         import re
         src = self._src('stats_ui.py')
-        # 匹配所有 padx=14 出现位置——源码里不应再有 padx=14 值
         hits = [(i, src[max(0, i-30):i+50]) for i in range(len(src)) if src[i:i+7] == 'padx=14']
         self.assertEqual(hits, [],
                          f'stats_ui.py 仍有 {len(hits)} 处 padx=14 残留：{hits}')
-
     def test_stats_ui_history_hint_has_padx(self):
         """stats_ui.py：历史页 hint label 加了 padx=(0, 4) 离左缘 4px（t26 c-3）。"""
         src = self._src('stats_ui.py')
@@ -3959,7 +3976,7 @@ class TestLayoutRound1(unittest.TestCase):
                       '主题页 cards_frame 缺列等权 1')
         self.assertIn("card.grid(row=i // 2, column=i % 2,", src,
                       '主题页 card 未改用 grid(i//2, i%2)')
-        # token 擦边修复：#E2E8F0
+        # token 擦边修复：#E2E8F0 → self.C_BORDER
         self.assertNotIn('"#E2E8F0"', src,
                          '主题页仍残留 hex 硬编码 #E2E8F0（应改 self.C_BORDER）')
         self.assertIn('self.C_BORDER', src, '主题页未使用 self.C_BORDER')
@@ -4021,21 +4038,21 @@ class TestAnimationsRound1(unittest.TestCase):
         import sys
         sys.path.insert(0, HERE)
         import gui
-        # 同色
+        # 同色 → 原色
         self.assertEqual(gui._lerp_hex('#000000', '#000000', 0.5), '#000000')
         self.assertEqual(gui._lerp_hex('#FFFFFF', '#FFFFFF', 0.0), '#FFFFFF')
-        # 异色 t=0
+        # 异色 t=0 → a；t=1 → b
         self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 0.0), '#000000')
         self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 1.0), '#FFFFFF')
-        # 异色 t=0.5
+        # 异色 t=0.5 → 中点附近（int 截断 127.5 = 127 = 0x7F）
         self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 0.5), '#7F7F7F')
         # 越界 t 自动夹紧
         self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', -1.0), '#000000')
         self.assertEqual(gui._lerp_hex('#000000', '#FFFFFF', 2.0), '#FFFFFF')
-        # 容错：非 hex 字符串
+        # 容错：非 hex 字符串 → 返回 b
         self.assertEqual(gui._lerp_hex('invalid', '#FFFFFF', 0.5), '#FFFFFF')
         self.assertEqual(gui._lerp_hex(None, '#FFFFFF', 0.5), '#FFFFFF')
-        # 起点非 0：#FF0000#00FF00 t=0.5#7F7F00
+        # 起点非 0：#FF0000 → #00FF00 t=0.5 → #7F7F00
         self.assertEqual(gui._lerp_hex('#FF0000', '#00FF00', 0.5), '#7F7F00')
 
     def test_animations_master_switch_and_meltdown(self):
@@ -4101,7 +4118,7 @@ class TestAnimationsRound1(unittest.TestCase):
         self.assertIn('self._anim_jobs[_key] = []', src,
                       '动效终态 snap 时 _anim_jobs[_key] = [] 应先于 cancel')
 class TestAnimationsFixRound2(unittest.TestCase):
-    """动效兜底/禁用：③ 删 canvas gate + _highlight_nav 兜底 / ② disabled snap 禁用色 /
+    """动效兜底：③ 删 canvas gate + _highlight_nav 兜底 / ② disabled snap 禁用色 /
     ⑤ 真熔断（_meltdown_animations 翻 ANIMATIONS_ENABLED）/ ⑧a 脉冲实时 self.tc /
     ⑧b 脉冲起拍捕获当前 fg。"""
 
@@ -4203,10 +4220,10 @@ class TestAnimationsFixRound2(unittest.TestCase):
         import gui
         import inspect
         src = inspect.getsource(gui.App._pulse_status)
-        # ⑧a：_do 内每步 / 终态用 self.tc 实时查
+        # a：_do 内每步 / 终态用 self.tc 实时查
         self.assertIn("self.tc('C_TEXT'", src,
                       '_pulse_status 终态必须 self.tc(\"C_TEXT\") 实时查（v4f 修正：200ms 内切主题不残留）')
-        # ⑧b：起拍捕获 _lbl.cget('fg')
+        # b：起拍捕获 _lbl.cget('fg')
         self.assertIn("_lbl.cget('fg')", src,
                       '_pulse_status 起拍必须捕获 label 当前 fg（v4f 修正：不硬编码 C_TEXT）')
 

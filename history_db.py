@@ -23,6 +23,10 @@ WS-A 本地历史库（SQLite · 纯 stdlib，零新增依赖）
 
 输入契约（供 gui 集成任务 T-A2/A3 使用，gui._calc_from_items 产物 plans）：
     record_capture({地区: [plans 字典, ...]}, source)
+    record_capture({店铺id: {地区: [plans 字典, ...]}}, source)  # 双层：多店铺一次入账
+    record_capture({地区: [plans 字典, ...]}, source, store_id=当前店铺)  # 单层显式指定店铺
+    - 双层/单层自动判别（按顶层值类型逐项：list/tuple=单层地区→store_id 参数
+      （缺省 default）；dict=双层店铺映射）。旧调用方零改动，行为不变。
     - plans 期望键：name / stock / sales / days_left / status / qty / warehouse /
       sku_id；**缺键容忍**，按默认值落库（sku_id 在 gui A1 改动后才携带，此前为 ''）。
     - 注意：gui plans 里"日销量"键名为 **daily**（_calc_from_items 产物），
@@ -30,21 +34,31 @@ WS-A 本地历史库（SQLite · 纯 stdlib，零新增依赖）
     - source：'live'（实时截图）| 'batch'（批量）| 'file'（图片文件）| 'import'（表格导入）。
     - 返回 session_id；一次识别/导入 = 一个 session（按次追加而非按日快照，
       captured_at 冗余 session.ts，可 SQL 聚合出任意粒度日视图，信息无损）。
+      capture_sessions 不加店铺列（t1 拍板：店铺落在 history_rows 行级，
+      删店清行后孤儿 session 由既有清理顺带回收）。
     - 空 dict / 空 plans 也入账一个 item_count=0 的 session（诚实审计；
       所有查询只读 history_rows，不受空 session 影响）。
 
 查询语义：
-    - query_daily(days, region)   → 按 (日, 地区) 聚合：items 记录数 / alerts 预警数 /
-      stock_total 库存合计。**alerts 只统计 status=='立刻补货'（红色硬预警）**——
-      黄色"N天后下单"的天数阈值依赖各地区运输时效配置，历史库不做二次推导，
-      语义宁可窄而准（DESIGN §4 显式不猜）。
-    - query_sku_history(sku_key, days, region, name) → 单商品时间序列（升序）。
+    - query_daily(days, region, store)   → 按 (日, 地区) 聚合：items 记录数 /
+      alerts 预警数 / stock_total 库存合计。**alerts 只统计 status=='立刻补货'
+      （红色硬预警）**——黄色"N天后下单"的天数阈值依赖各地区运输时效配置，
+      历史库不做二次推导，语义宁可窄而准（DESIGN §4 显式不猜）。
+    - query_sku_history(sku_key, days, region, name, store) → 单商品时间序列（升序）。
       sku_key（SKU 权威关联键，与 ocr.dedup_items 同语义）非空走 sku 索引；
       无 ID 行回退 (region, name) 精确匹配走 (region, name) 索引，内部二选一。
-    - query_region_days(region, day) → 某地区某日（'YYYY-MM-DD'）明细行（升序）。
+    - query_region_days(region, day, store) → 某地区某日（'YYYY-MM-DD'）明细行（升序）。
+    - **店铺维度（t1 多店铺隔离）**：所有查询/删除带可选 store 参数——None/''
+      = 全部店铺；'default' = default 店铺（旧行 store='' 与 store='default'
+      视为同店）；其他 = 精确匹配。旧行形状新增 store 字段（'' 归一化为
+      'default' 返回，与查询语义一致）。
     - prune(retention_days, max_rows) → 双阈值清理；某阈值 <=0 视为不启用该规则；
       返回清理的总行数（含孤儿 session 清理不计入），失败 -1。
-    - delete_region(region) → 删除地区联动（settings_ui 调用），返回删除行数，失败 -1。
+    - delete_region(region, store) → 删除地区联动（settings_ui 调用，store 可选
+      限定店铺），返回删除行数，失败 -1。
+    - delete_store(store_id) → 删店历史联动（store_registry.delete_store 成功后
+      GUI 调用），返回删除行数，失败 -1；'' /None 无效；'default' 显式清空
+      default 店铺（含 '' 旧行，同店语义）。
     - clear_all() → 清空全部历史（gui「清空全部历史」按钮用，二次确认在 GUI 层），
       成功 True。本模块不主动 VACUUM 日常写入，仅清空时回收空间。
 
@@ -58,10 +72,13 @@ from datetime import datetime, timedelta
 
 from utils import get_base_dir
 
+DEFAULT_STORE_ID = 'default'
+"""默认店铺固定 id（与 store_registry.DEFAULT_STORE_ID 同值；store='' 旧行同店语义）。"""
+
 __all__ = [
-    'DB_NAME', 'db_path', 'set_db_path', 'reset_db_path',
+    'DB_NAME', 'db_path', 'set_db_path', 'reset_db_path', 'DEFAULT_STORE_ID',
     'record_capture', 'query_daily', 'query_sku_history', 'query_region_days',
-    'query_regions', 'prune', 'delete_region', 'clear_all',
+    'query_regions', 'prune', 'delete_region', 'delete_store', 'clear_all',
 ]
 
 DB_NAME = 'history.db'
@@ -89,6 +106,7 @@ CREATE TABLE IF NOT EXISTS history_rows (
     session_id  INTEGER NOT NULL REFERENCES capture_sessions(id),
     captured_at TEXT NOT NULL,              -- 冗余 session.ts，按日聚合免 join
     region      TEXT NOT NULL,
+    store       TEXT NOT NULL DEFAULT '',   -- 店铺 id（t1 多店铺隔离）；'' 旧行 ≡ 'default'
     sku_id      TEXT NOT NULL DEFAULT '',   -- SKU 权威关联键（与 ocr.dedup_items 同语义）
     name        TEXT NOT NULL,
     stock       INTEGER NOT NULL DEFAULT 0,
@@ -103,6 +121,12 @@ CREATE INDEX IF NOT EXISTS idx_rows_sku  ON history_rows(sku_id, captured_at DES
 CREATE INDEX IF NOT EXISTS idx_rows_rn   ON history_rows(region, name, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rows_day  ON history_rows(captured_at);
 CREATE INDEX IF NOT EXISTS idx_rows_sess ON history_rows(session_id);
+"""
+
+# store 列索引独立成第二段 script：必须等老库 ALTER 补列完成之后再建，
+# 否则旧库上 CREATE INDEX ... (store) 会因列不存在直接失败（_ensure_ready 顺序敏感）。
+_SCHEMA_EXTRA = """
+CREATE INDEX IF NOT EXISTS idx_rows_store ON history_rows(store, captured_at DESC);
 """
 
 
@@ -269,8 +293,23 @@ def _quarantine(path: str):
             pass  # WAL 侧文件被锁不致命，sqlite 下次打开会自行处理
 
 
+def _migrate_store_column(conn):
+    """t1 老库迁移：history_rows 缺 store 列 → ALTER TABLE 补列（默认 ''）。
+
+    **绝不丢老数据**：只加列不改行，旧行 store=''，查询层 '' 与 'default'
+    同店语义。新库建表已含 store 列，本检查为 no-op（PRAGMA 每次初始化
+    只跑一次，成本可忽略）。列存在性检查是唯一可靠手段——CREATE TABLE
+    IF NOT EXISTS 对已存在的旧表不会补列。
+    """
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(history_rows)')}
+    if 'store' not in cols:
+        conn.execute("ALTER TABLE history_rows ADD COLUMN store TEXT NOT NULL DEFAULT ''")
+        _dlog('[history] 老库迁移完成：history_rows 补 store 列（旧行归 default 店铺语义）')
+
+
 def _ensure_ready() -> bool:
-    """确保库目录存在、损坏库已隔离重建、schema 就绪；失败返回 False（不外抛）。
+    """确保库目录存在、损坏库已隔离重建、schema 就绪（含 t1 store 列迁移）；
+    失败返回 False（不外抛）。
 
     quick_check 每进程每路径只做一次（_READY 缓存）——大库上每次操作都查太贵；
     进程中途出现损坏由操作路径的 DatabaseError 自愈重试兜底（见 _run_db）。
@@ -308,6 +347,8 @@ def _ensure_ready() -> bool:
                 except sqlite3.Error:
                     pass  # 只读库等场景不阻塞初始化（后续写入会显式失败并被吞）
                 conn.executescript(_SCHEMA)
+                _migrate_store_column(conn)  # 老库 ALTER 补 store 列（新库 no-op）
+                conn.executescript(_SCHEMA_EXTRA)  # store 列就绪后才能建店铺索引
             finally:
                 conn.close()
         except sqlite3.Error as e:
@@ -344,11 +385,15 @@ def _run_db(fn, default):
 
 
 _ROW_COLS = ('id', 'session_id', 'captured_at', 'region', 'sku_id', 'name', 'stock',
-             'sales', 'days_left', 'status', 'qty', 'warehouse')
+             'sales', 'days_left', 'status', 'qty', 'warehouse', 'store')
 
 
 def _row_dicts(cur) -> list:
-    """游标 → _ROW_COLS 顺序的 dict 列表（查询出口统一形状）。"""
+    """游标 → _ROW_COLS 顺序的 dict 列表（查询出口统一形状）。
+
+    t1：store='' 旧行出口归一化为 'default'（与"''≡default"查询语义一致，
+    GUI/统计层拿到的 store 永远是可显示的店铺 id）。
+    """
     out = []
     for r in cur:
         row = dict(zip(_ROW_COLS, r))
@@ -356,36 +401,70 @@ def _row_dicts(cur) -> list:
         row['sales'] = _to_int(row.get('sales'))
         row['qty'] = _to_int(row.get('qty'))
         row['days_left'] = _to_float(row.get('days_left'))
+        if not _to_str(row.get('store')):
+            row['store'] = DEFAULT_STORE_ID
         out.append(row)
     return out
 
 
+def _store_where(store, params) -> str:
+    """按店铺过滤的 SQL 片段（t1）。
+
+    None/'' → ''（全部店铺，不过滤——保持旧调用行为）；
+    'default' → 含 '' 旧行与 'default' 行（同店语义）；
+    其他 → 精确匹配。params 就地追加绑定参数。
+    """
+    s = _to_str(store)
+    if not s:
+        return ''
+    if s == DEFAULT_STORE_ID:
+        params.extend([DEFAULT_STORE_ID, ''])
+        # R2 问题 修复：末位空格去除。当前所有调用方都 .rstrip()
+        # 但调用方有遗漏风险——函数自身保证无尾随空格最稳。
+        return 'AND store IN (?, ?)'
+    params.append(s)
+    return 'AND store = ?'
+
+
 # ── 写入 ──────────────────────────────────────────────────────────────
 
-def record_capture(plans_by_region, source='live') -> int:
+def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID) -> int:
     """记录一次识别/导入 = 一个 session（详见模块 docstring 输入契约）。
+
+    t1 店铺维度：入参支持单层 {region: [plans]}（store_id 参数，缺省 default）
+    或双层 {store_id: {region: [plans]}}（按顶层值类型逐项判别，旧调用零改动）。
+    store_id='' /None 落库归一化为 'default'。
 
     executemany 批量 INSERT + BEGIN IMMEDIATE 单事务；返回 session_id；
     **任何异常仅记日志并返回 -1，绝不外抛（R8 铁律）**。
     """
     try:
         if not isinstance(plans_by_region, dict):
-            _dlog('[history] record_capture 入参非 dict（期望 {region: [plans]}），忽略')
+            _dlog('[history] record_capture 入参非 dict（期望 {region: [plans]} 或 '
+                  '{store: {region: [plans]}}），忽略')
             return -1
         ts = _now_ts()
         src = _to_str(source)[:32] or 'live'
-        rows = []  # (region, sku_id, name, stock, sales, days_left, status, qty, warehouse)
-        first_region = ''  # session 首地区（取第一个非空地区）
-        for region, plans in plans_by_region.items():
+        # R2 问题 修复：删除「if default_store == '': default_store = DEFAULT_STORE_ID」
+        # 死分支。_to_str(store_id) or DEFAULT_STORE_ID 已经把空值（None/''）兜底
+        # 成 'default'，下面的 == '' 永远 False，是无副作用的死代码。
+        default_store = _to_str(store_id) or DEFAULT_STORE_ID
+        rows = []  # (store, region, sku_id, name, stock, sales, days_left, status, qty, warehouse)
+        first_region = ''  # session 首地区（取第一个非空地区，跨店铺按入参顺序）
+
+        def _collect(store, region, plans):
+            """把一个 (店铺, 地区) 的 plans 拼成行；脏数据逐条跳过。"""
+            nonlocal first_region
             reg = _to_str(region)
             if not isinstance(plans, (list, tuple)):
-                continue
+                return
             if plans and not first_region:
                 first_region = reg
             for p in plans:
                 if not isinstance(p, dict):
                     continue  # 单条脏数据跳过，不影响其余行
                 rows.append((
+                    _to_str(store) or DEFAULT_STORE_ID,
                     reg,
                     _to_str(p.get('sku_id')),
                     _to_str(p.get('name')),
@@ -397,6 +476,18 @@ def record_capture(plans_by_region, source='live') -> int:
                     _to_str(p.get('warehouse')),
                 ))
 
+        for top_key, sub in plans_by_region.items():
+            if isinstance(sub, (list, tuple)):
+                # 旧契约（单层）：{region: [plans]} → store_id 参数指定店铺
+                _collect(default_store, top_key, sub)
+            elif isinstance(sub, dict):
+                # 新契约（双层）：{store_id: {region: [plans]}}
+                sid = _to_str(top_key) or DEFAULT_STORE_ID
+                for region, plans in sub.items():
+                    _collect(sid, region, plans)
+            else:
+                continue  # 脏值跳过（与旧行为一致：session 仍入账）
+
         def op(conn):
             conn.execute('BEGIN IMMEDIATE')
             try:
@@ -405,9 +496,9 @@ def record_capture(plans_by_region, source='live') -> int:
                     (ts, first_region, src, len(rows)))
                 sid = int(cur.lastrowid)
                 conn.executemany(
-                    'INSERT INTO history_rows (session_id, captured_at, region, sku_id, name,'
-                    ' stock, sales, days_left, status, qty, warehouse)'
-                    ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    'INSERT INTO history_rows (session_id, captured_at, store, region, sku_id,'
+                    ' name, stock, sales, days_left, status, qty, warehouse)'
+                    ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
                     [(sid, ts) + r for r in rows])
                 conn.execute('COMMIT')
                 return sid
@@ -463,9 +554,11 @@ def prune(retention_days=180, max_rows=200000) -> int:
         return -1
 
 
-def delete_region(region) -> int:
+def delete_region(region, store=None) -> int:
     """删除某地区全部历史行 + 孤儿 session（settings_ui 删除地区联动用）。
 
+    t1：store 可选限定店铺（None/'' = 全部店铺；'default' 含 '' 旧行同店语义），
+    旧签名 delete_region(region) 行为不变（跨店删该地区）。
     返回删除行数；region 为空视为无效调用，失败记日志返回 -1。
     """
     try:
@@ -474,9 +567,13 @@ def delete_region(region) -> int:
             return -1
 
         def op(conn):
+            params = []
+            sql = 'DELETE FROM history_rows WHERE region = ? '
+            params.append(reg)
+            sql += _store_where(store, params)
             conn.execute('BEGIN IMMEDIATE')
             try:
-                cur = conn.execute('DELETE FROM history_rows WHERE region = ?', (reg,))
+                cur = conn.execute(sql, params)
                 n = max(cur.rowcount, 0)
                 conn.execute('DELETE FROM capture_sessions WHERE id NOT IN'
                              ' (SELECT DISTINCT session_id FROM history_rows)')
@@ -490,6 +587,43 @@ def delete_region(region) -> int:
             return _run_db(op, -1)
     except Exception as e:
         _dlog(f'[history] delete_region 失败：{e}')
+        return -1
+
+
+def delete_store(store_id) -> int:
+    """删除某店铺全部历史行 + 孤儿 session（store_registry.delete_store 成功后
+    GUI 联动调用，t1）。
+
+    语义：'' /None 视为无效调用返回 -1；'default' 显式清空 default 店铺
+    （store IN ('', 'default')，同店语义——default 店铺在店铺层不可删，
+    这里仅供「清空默认店历史」类操作显式使用）；其他 id 精确匹配。
+    返回删除行数；失败记日志返回 -1。
+    """
+    try:
+        sid = _to_str(store_id)
+        if not sid:
+            return -1
+
+        def op(conn):
+            params = []
+            sql = 'DELETE FROM history_rows WHERE 1=1 '
+            sql += _store_where(sid, params)
+            conn.execute('BEGIN IMMEDIATE')
+            try:
+                cur = conn.execute(sql, params)
+                n = max(cur.rowcount, 0)
+                conn.execute('DELETE FROM capture_sessions WHERE id NOT IN'
+                             ' (SELECT DISTINCT session_id FROM history_rows)')
+                conn.execute('COMMIT')
+                return n
+            except Exception:
+                _rollback_safe(conn)
+                raise
+
+        with _WRITE_LOCK:
+            return _run_db(op, -1)
+    except Exception as e:
+        _dlog(f'[history] delete_store 失败：{e}')
         return -1
 
 
@@ -521,10 +655,11 @@ def clear_all() -> bool:
 
 # ── 查询（只读；失败返回空列表不外抛，趋势页可安全调用）───────────────
 
-def query_daily(days=30, region=None) -> list:
+def query_daily(days=30, region=None, store=None) -> list:
     """按 (日, 地区) 聚合的趋势数据源：[{day, region, items, alerts, stock_total}, ...]。
 
-    days：最近 N 天窗口（<=0 不限）；region：None/'' 查全部地区，否则单地区。
+    days：最近 N 天窗口（<=0 不限）；region：None/'' 查全部地区，否则单地区；
+    store：None/'' 全部店铺，'default' 含 '' 旧行，其他精确匹配（t1）。
     按日期降序、地区升序。alerts = 立刻补货（红色硬预警）行数（语义见模块 docstring）。
 
     t12 P2-C：enforce=true 且 free 时把 days 钳制到 FREE_HISTORY_DAYS（30），数据库数据不删。
@@ -557,7 +692,7 @@ def query_daily(days=30, region=None) -> list:
             sql = ['SELECT substr(captured_at, 1, 10) AS day, region, COUNT(*) AS items,',
                    "       SUM(CASE WHEN status = '立刻补货' THEN 1 ELSE 0 END) AS alerts,",
                    '       SUM(stock) AS stock_total',
-                   'FROM history_rows WHERE 1=1']
+                   'FROM history_rows WHERE 1=1 ']
             params = []
             if floor:
                 sql.append('AND captured_at >= ?')
@@ -565,6 +700,9 @@ def query_daily(days=30, region=None) -> list:
             if reg:
                 sql.append('AND region = ?')
                 params.append(reg)
+            store_sql = _store_where(store, params)
+            if store_sql:
+                sql.append(store_sql.strip())
             sql.append('GROUP BY day, region ORDER BY day DESC, region ASC')
             out = []
             for day, r, items, alerts, stock_total in conn.execute(' '.join(sql), params):
@@ -579,13 +717,14 @@ def query_daily(days=30, region=None) -> list:
         return []
 
 
-def query_sku_history(sku_key='', days=90, region='', name='') -> list:
+def query_sku_history(sku_key='', days=90, region='', name='', store=None) -> list:
     """单商品时间序列（captured_at 升序），行形状 = 全业务字段 dict。
 
     关联键二选一（SKU 权威，无 ID 回退，与 ocr.dedup_items 同语义）：
     - sku_key 非空 → WHERE sku_id = ?（走 idx_rows_sku）；
     - 否则 region+name 均非空 → WHERE region = ? AND name = ?（走 idx_rows_rn）；
     - 两者皆无 → 返回 []（不给全表——调用方必须明确要哪件商品）。
+    store：None/'' 全部店铺，否则限定店铺（t1；'default' 含 '' 旧行）。
     """
     try:
         sku = _to_str(sku_key)
@@ -597,7 +736,7 @@ def query_sku_history(sku_key='', days=90, region='', name='') -> list:
 
         def op(conn):
             sql = ('SELECT id, session_id, captured_at, region, sku_id, name, stock, sales,'
-                   ' days_left, status, qty, warehouse FROM history_rows WHERE ')
+                   ' days_left, status, qty, warehouse, store FROM history_rows WHERE ')
             params = []
             if sku:
                 sql += 'sku_id = ?'
@@ -608,6 +747,7 @@ def query_sku_history(sku_key='', days=90, region='', name='') -> list:
             if floor:
                 sql += ' AND captured_at >= ?'
                 params.append(floor)
+            sql += _store_where(store, params).rstrip()
             sql += ' ORDER BY captured_at ASC, id ASC'
             return _row_dicts(conn.execute(sql, params))
 
@@ -617,8 +757,11 @@ def query_sku_history(sku_key='', days=90, region='', name='') -> list:
         return []
 
 
-def query_region_days(region, day) -> list:
-    """某地区某日（day='YYYY-MM-DD'，容忍更长前缀）明细行，captured_at/name 升序。"""
+def query_region_days(region, day, store=None) -> list:
+    """某地区某日（day='YYYY-MM-DD'，容忍更长前缀）明细行，captured_at/name 升序。
+
+    store：None/'' 全部店铺，否则限定店铺（t1；'default' 含 '' 旧行）。
+    """
     try:
         reg = _to_str(region)
         d = _to_str(day)
@@ -626,11 +769,13 @@ def query_region_days(region, day) -> list:
             return []
 
         def op(conn):
+            params = [reg, d]
             sql = ('SELECT id, session_id, captured_at, region, sku_id, name, stock, sales,'
-                   ' days_left, status, qty, warehouse FROM history_rows'
-                   " WHERE region = ? AND captured_at LIKE ? || '%'")
-            return _row_dicts(conn.execute(sql + ' ORDER BY captured_at ASC, name ASC, id ASC',
-                                           (reg, d)))
+                   ' days_left, status, qty, warehouse, store FROM history_rows'
+                   " WHERE region = ? AND captured_at LIKE ? || '%' ")
+            sql += _store_where(store, params).rstrip()
+            return _row_dicts(conn.execute(
+                sql + ' ORDER BY captured_at ASC, name ASC, id ASC', params))
 
         return _run_db(op, [])
     except Exception as e:
@@ -638,12 +783,18 @@ def query_region_days(region, day) -> list:
         return []
 
 
-def query_regions() -> list:
-    """历史库中出现过的地区列表（升序，趋势页地区下拉数据源）；失败返回 []。"""
+def query_regions(store=None) -> list:
+    """历史库中出现过的地区列表（升序，趋势页地区下拉数据源）；失败返回 []。
+
+    store：None/'' 全部店铺，否则限定店铺（t1；'default' 含 '' 旧行）。
+    """
     try:
         def op(conn):
-            return [r[0] for r in conn.execute(
-                "SELECT DISTINCT region FROM history_rows WHERE region != '' ORDER BY region ASC")]
+            params = []
+            sql = ("SELECT DISTINCT region FROM history_rows WHERE region != '' ")
+            sql += _store_where(store, params).rstrip()
+            sql += ' ORDER BY region ASC'
+            return [r[0] for r in conn.execute(sql, params)]
 
         return _run_db(op, [])
     except Exception as e:

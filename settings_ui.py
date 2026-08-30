@@ -2,15 +2,74 @@
 PDD EZ — 设置页 UI 构建器 (Mixin)
 从 gui.py 拆分：通用/商品/皮肤/校准/分辨率/后台 六个设置页面的构建逻辑。
 """
+from datetime import datetime
 from tkinter import messagebox, ttk
 import tkinter as tk
 
 from config import THEMES, save_theme_pref
 from utils import get_base_dir, get_api_config, Config
 
+# 多店铺隔离：店铺管理数据源（store_registry， 产出）。
+# 守护式导入：缺失时店铺管理卡片显示降级提示，设置页其余功能不受影响。
+try:
+    import store_registry
+except Exception:
+    store_registry = None
+
 
 class SettingsUIMixin:
     """混入 App 类，提供所有设置页面构建方法。"""
+
+    # ─────────────── R1 布局优化：纯逻辑助手（无 Tk 依赖，便于单测） ───────────────
+    # 这些 helper 与 widget 解耦——只接受 plain 数据 → 返回 plain 结果；test_layout_logic
+    # 直接 import settings_ui 即可断言（不需要创建 Tk 根窗口）。
+
+    @staticmethod
+    def store_list_row_label(store_name, store_id, active_id):
+        """店铺列表行文本：「name  ★ 当前」/「name」。active 不匹配则不加 ★。"""
+        nm = str(store_name or '').strip() or str(store_id or '')
+        if active_id and store_id and str(store_id) == str(active_id):
+            return f"{nm}  ★ 当前"
+        return nm
+
+    @staticmethod
+    def store_list_active_index(stores, active_id):
+        """返回 active 店在 stores 列表里的索引；未命中/单家 -1。
+        用于 Listbox 选中态高亮（★ 当前）；store id 权威，name 仅展示。
+        """
+        if not isinstance(stores, (list, tuple)) or not stores:
+            return -1
+        for i, s in enumerate(stores):
+            if isinstance(s, dict) and str(s.get('id') or '') == str(active_id or ''):
+                return i
+        return -1
+
+    @staticmethod
+    def store_button_disabled_state(store_count, selected_idx):
+        """店铺管理 4 个动作按钮的禁用态表（基于店铺总数 + 当前列表选中）。
+
+        返回 dict {'add': bool, 'rename': bool, 'activate': bool, 'delete': bool}。
+        - add 永远可点（加新店无前置依赖）；
+        - rename / activate / delete 都需要列表选中；delete 还需选中非 default；
+        - 当只有 1 家店时，activate / delete 也禁掉（删完无店 / 切同店无意义）。
+        """
+        n = int(store_count or 0)
+        sel = int(selected_idx) if selected_idx is not None and int(selected_idx) >= 0 else -1
+        only_one = n <= 1
+        return {
+            'add': False,  # 新增永远可点
+            'rename': only_one or sel < 0,  # 单店/未选 → 禁
+            'activate': only_one or sel < 0,  # 单店/未选 → 禁
+            'delete': only_one or sel < 0,  # 单店/未选 → 禁
+        }
+
+    @staticmethod
+    def adv_frame_visibility_for_model(model):
+        """补货策略卡高级因子编辑区的显隐表（基于当前 model）。
+
+        高级（'advanced'）→ 全展开；其它 → 全折叠。仅返回 visibility 表，调用方按表操作。
+        """
+        return {'advanced_frame': str(model or '') == 'advanced'}
 
     def _lbl(self, parent, *args, **kwargs):
         """Label 创建 helper：未显式指定 bg 时继承父容器背景色，杜绝异色文字块"""
@@ -37,7 +96,7 @@ class SettingsUIMixin:
         canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
         # B1：canvas 提升为 self 属性，供 5 段锚点按钮实时计算 winfo_y
         self._general_canvas = canvas
-        # B1：5 段段名
+        # B1：5 段段名→锚点 Frame 引用字典（build 时填，click 时实时算 y）
         self._general_anchors = {}
 
         # ── 导出路径模块（浅灰白卡片容器）──
@@ -78,7 +137,7 @@ class SettingsUIMixin:
         self._mk_btn(_m1, '保存', lambda: self._save_settings(None), kind='primary', font=(self.FONT[0], 9, 'bold'), width=12).pack_configure(pady=(5,12))
 
         # ── 定位校准（AI 智能定位，v1.3 起唯一模式）──
-        # ⑤：原 _build_calibrate_tab 改名为 _build_calibrate_inline
+        # ：原 _build_calibrate_tab 改名为 _build_calibrate_inline
         # B1：校准段锚点——取该函数内创建并 pack 的 ai_card 作为锚
         self._build_calibrate_inline(content)
         try:
@@ -145,7 +204,7 @@ class SettingsUIMixin:
                         _sec_models.append(_v)
         except Exception:
             pass
-        ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=20,  # : 22
+        ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=20,  # : 22→20
                      values=_sec_models,
                      font=(self.FONT[0], 8)).pack(side="left", padx=8)
         def _save_sec():
@@ -154,9 +213,9 @@ class SettingsUIMixin:
             self.col_status_var.set(f"副模型已保存：{_v}")
             self.status_text.set(f"副模型已保存：{_v}")
         self._mk_btn(sec_row, '保存', _save_sec, kind='primary',
-                  font=(self.FONT[0], 8)).pack(side="left")  # : 7
+                  font=(self.FONT[0], 8)).pack(side="left")  # : 7→8 视觉对齐
         self._lbl(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(padx=20, pady=(0, 8))  # (b-1/a-3): 左缘对齐+8px
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(padx=20, pady=(0, 8))  # : 左缘对齐+8px
 
         # ── 授权管理──
         # B1：授权管理段锚点——取该函数创建的最后一个 pack(fill=x) 子 Frame
@@ -187,6 +246,56 @@ class SettingsUIMixin:
                         break
             if _last_rep is not None:
                 self._general_anchors['补货策略'] = _last_rep
+        except Exception:
+            pass
+
+        # ── 店铺管理──
+        # B1：店铺管理段锚点——同上取最后一个 fill=x 卡片
+        self._build_store_card(content)
+        try:
+            _last_store_card = None
+            for _c in reversed(content.winfo_children()):
+                if isinstance(_c, tk.Frame):
+                    _info = _c.pack_info()
+                    if _info.get('fill') == 'x' and _c not in self._general_anchors.values():
+                        _last_store_card = _c
+                        break
+            if _last_store_card is not None:
+                self._general_anchors['店铺管理'] = _last_store_card
+        except Exception:
+            pass
+
+        # ── 导入与窗口（R1 流程效率 产出）──
+        # 设置页卡：上次导入映射摘要 + 清除映射按钮 + 恢复上次窗口位置开关。
+        # 状态变更走 Config.save（失败静默 + 状态栏提示）；settings_ui 本身
+        # 在主线程可直调——不开 worker 线程。
+        self._build_import_window_card(content)
+        try:
+            _last_iw = None
+            for _c in reversed(content.winfo_children()):
+                if isinstance(_c, tk.Frame):
+                    _info = _c.pack_info()
+                    if _info.get('fill') == 'x' and _c not in self._general_anchors.values():
+                        _last_iw = _c
+                        break
+            if _last_iw is not None:
+                self._general_anchors['导入与窗口'] = _last_iw
+        except Exception:
+            pass
+
+        # ── 备份与恢复（R3 健壮闭环 产出）──
+        # 三个按钮：导出设置备份 / 从备份恢复 / 历史库快照；恢复前 confirm 弹窗。
+        self._build_backup_card(content)
+        try:
+            _last_bk = None
+            for _c in reversed(content.winfo_children()):
+                if isinstance(_c, tk.Frame):
+                    _info = _c.pack_info()
+                    if _info.get('fill') == 'x' and _c not in self._general_anchors.values():
+                        _last_bk = _c
+                        break
+            if _last_bk is not None:
+                self._general_anchors['备份与恢复'] = _last_bk
         except Exception:
             pass
 
@@ -227,14 +336,682 @@ class SettingsUIMixin:
         except Exception:
             pass
 
-    def _build_replenishment_card(self, parent):
-        """t13 P3-A 补货策略卡片：模型单选（经典/加权）+ safety_days + in_transit_qty。
+    # ─────────────── 多店铺隔离：店铺管理卡片 ───────────────
 
+    def _build_store_card(self, parent):
+        """店铺管理卡片（t6 R1 布局优化版）：店铺列表（★=当前 + 行高亮）/
+        新增 / 重命名 / 删除 / 设为当前。
+
+        删除三选（askyesnocancel）：【是】删配置并清该店识别历史（history_db.
+        delete_store，t1 产出）；【否】仅删配置保留历史；【取消】放弃。
+        default 店铺禁删（store_registry 拒绝 + UI 前置提示，双保险）。
+
+        布局要点：
+        - 列表/按钮两段统一 padx=16，垂直节奏 4/6/8px 三档；
+        - 4 个动作按钮按「操作对象在左、操作引导在右」分两行（新增/重命名 vs 设为当前/删除）；
+        - 单店 / 未选中时 rename/activate/delete 自动禁掉（pure helper
+          store_button_disabled_state 决定态，_refresh_store_card 同步）；
+        - 当前店铺用 selectbackground (#FFF3B0) 高亮，比 ★ 字符更显眼。
+        """
+        card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1,
+                        highlightbackground=self.C_BORDER)
+        card.pack(fill="x", padx=20, pady=8)
+        self._lbl(card, text='店铺管理', font=self.FONT_HEADING, bg=self.C_BG,
+                  fg=self.C_SECONDARY).pack(pady=(12, 2))
+        self._lbl(card, text="多店铺数据隔离：各店铺的运输时效配置与识别历史分开保存",
+                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack()
+        self._store_cur_lbl = self._lbl(card, text='', font=(self.FONT[0], 8),
+                                        fg=self.C_TEXT, bg=self.C_BG)
+        self._store_cur_lbl.pack(pady=(4, 2))
+
+        mid = tk.Frame(card, bg=self.C_BG)
+        mid.pack(fill='x', padx=16, pady=(4, 6))
+        self._store_listbox = tk.Listbox(
+            mid, height=5, font=(self.FONT[0], 9), relief='flat',
+            highlightthickness=1, highlightbackground="#EAEAEA",
+            highlightcolor="#EAEAEA", bg="#FFFFFF", fg=self.C_TEXT,
+            exportselection=False, selectbackground="#FFF3B0")
+        self._store_listbox.pack(side='left', fill='both', expand=True)
+        # R1：列表选中态 → 重算 4 按钮禁用态（焦点切换时也响应）
+        self._store_listbox.bind('<<ListboxSelect>>',
+                                  lambda _e: self._refresh_store_button_states())
+
+        # 新增 / 重命名 行：标签 + 输入 + 两个操作按钮（统一 grid 列对齐）
+        new_row = tk.Frame(card, bg=self.C_BG)
+        new_row.pack(fill='x', padx=16, pady=(2, 4))
+        self._lbl(new_row, text="店铺名称:", font=(self.FONT[0], 8),
+                  fg=self.C_MUTED, bg=self.C_BG).pack(side='left')
+        self._store_new_var = tk.StringVar(self.win, value='')
+        tk.Entry(new_row, textvariable=self._store_new_var, font=self.FONT, width=22,
+                 relief='flat', bd=0, highlightthickness=1,
+                 highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                 bg="#FFFFFF", fg=self.C_TEXT,
+                 insertbackground=self.C_TEXT).pack(side='left', padx=(6, 8))
+        self._store_add_btn = self._mk_btn(new_row, '＋ 新增店铺', self._store_add,
+                                            kind='primary', font=(self.FONT[0], 8))
+        self._store_add_btn.pack(side='left', padx=(0, 4))
+        self._store_rename_btn = self._mk_btn(new_row, '✎ 重命名选中', self._store_rename,
+                                               kind='ghost', font=(self.FONT[0], 8))
+        self._store_rename_btn.pack(side='left', padx=4)
+
+        # 设为当前 / 删除行：两按钮 + 右侧引导文案
+        btn_row = tk.Frame(card, bg=self.C_BG)
+        btn_row.pack(fill='x', padx=16, pady=(0, 12))
+        self._store_activate_btn = self._mk_btn(btn_row, '★ 设为当前店铺', self._store_activate,
+                                                 kind='ghost', font=(self.FONT[0], 8))
+        self._store_activate_btn.pack(side='left', padx=(0, 4))
+        self._store_delete_btn = self._mk_btn(btn_row, '🗑 删除选中店铺', self._store_delete,
+                                               kind='ghost', font=(self.FONT[0], 8))
+        self._store_delete_btn.pack(side='left', padx=4)
+        self._lbl(btn_row, text="重命名/删除前先在列表选中店铺；重命名需在上方输入新名称",
+                  font=(self.FONT[0], 7), fg=self.C_MUTED, bg=self.C_BG).pack(
+            side='left', padx=(8, 0))
+        self._refresh_store_card()
+
+    def _refresh_store_button_states(self):
+        """R1：根据店铺总数 + 当前列表选中 → 同步 4 按钮禁用态（不依赖业务回调）。"""
+        try:
+            # 店铺数
+            if store_registry is None:
+                n = 0
+            else:
+                n = len(store_registry.get_stores() or [])
+            # 当前选中
+            sel_idx = -1
+            try:
+                sel = self._store_listbox.curselection()
+                if sel:
+                    sel_idx = int(sel[0])
+            except Exception:
+                sel_idx = -1
+            st = self.store_button_disabled_state(n, sel_idx)
+        except Exception:
+            return
+        for btn, key in ((getattr(self, '_store_add_btn', None), 'add'),
+                         (getattr(self, '_store_rename_btn', None), 'rename'),
+                         (getattr(self, '_store_activate_btn', None), 'activate'),
+                         (getattr(self, '_store_delete_btn', None), 'delete')):
+            if btn is None:
+                continue
+            try:
+                btn.configure(state=('disabled' if st[key] else 'normal'))
+            except Exception:
+                pass
+
+    def _store_selected(self):
+        """列表选中项 → (store_id, store_name)；未选中/越界返回 (None, None)。"""
+        try:
+            sel = self._store_listbox.curselection()
+        except Exception:
+            return None, None
+        if not sel or store_registry is None:
+            return None, None
+        stores = store_registry.get_stores()
+        idx = sel[0]
+        if 0 <= idx < len(stores):
+            return stores[idx]['id'], stores[idx]['name']
+        return None, None
+
+    def _refresh_store_card(self):
+        """重绘店铺列表 + 当前店铺显示；同步主界面切换器（App 方法，容错）。
+
+        R1：列表行文本走 store_list_row_label 统一（与 ★ 高亮规则一致），
+        当前店铺直接 selection_set 让 selectbackground 立即生效（用户进设置页
+        就能看见高亮，不用先点一次），并触发按钮禁用态同步。
+        """
+        if store_registry is None:
+            try:
+                self._store_cur_lbl.config(text='店铺模块缺失（增量更新不完整），店铺管理停用')
+            except Exception:
+                pass
+            return
+        stores = store_registry.get_stores()
+        active = store_registry.get_active()
+        # R1：列表填充 + 当前店铺高亮（selectbackground）
+        try:
+            self._store_listbox.delete(0, 'end')
+            for s in stores:
+                txt = self.store_list_row_label(s.get('name', ''), s.get('id', ''),
+                                                active)
+                self._store_listbox.insert('end', txt)
+            act_idx = self.store_list_active_index(stores, active)
+            if act_idx >= 0:
+                # 仅首次设置选中（用户切走时不强制抢回焦点）
+                if not self._store_listbox.curselection():
+                    try:
+                        self._store_listbox.selection_set(act_idx)
+                        self._store_listbox.activate(act_idx)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            self._store_cur_lbl.config(
+                text=f"当前店铺：{store_registry.get_store_name(active) or '默认店铺'}"
+                     f"（共 {len(stores)} 家）")
+        except Exception:
+            pass
+        # 按钮禁用态同步（单店/未选时锁住 rename/activate/delete）
+        self._refresh_store_button_states()
+        # 主界面切换器同步（主窗口一定已构建；widget 缺失时静默跳过）
+        try:
+            self._refresh_store_combo()
+        except Exception:
+            pass
+
+    def _store_add(self):
+        """新增店铺（名称取输入框；允许重名，id 权威）。"""
+        if store_registry is None:
+            return
+        nm = self._store_new_var.get().strip()
+        if not nm:
+            messagebox.showwarning("名称为空", "请先在输入框填写新店铺名称。", parent=self.win)
+            return
+        item = store_registry.add_store(nm)
+        if not item:
+            messagebox.showerror("新增失败", "店铺新增失败（详见日志 ocr_dlog.txt）。",
+                                 parent=self.win)
+            return
+        self._store_new_var.set('')
+        self.status_text.set(f"已新增店铺「{item['name']}」")
+        self._refresh_store_card()
+
+    def _store_rename(self):
+        """重命名选中店铺（输入框为空则提示；id 永不变）。"""
+        if store_registry is None:
+            return
+        sid, name = self._store_selected()
+        if not sid:
+            messagebox.showwarning("未选中", "请先在列表中选中要重命名的店铺。", parent=self.win)
+            return
+        new_name = self._store_new_var.get().strip()
+        if not new_name:
+            messagebox.showwarning("名称为空", "请先在输入框填写新名称（重命名不改 id）。",
+                                   parent=self.win)
+            return
+        if not store_registry.rename_store(sid, new_name):
+            messagebox.showerror("重命名失败", "店铺重命名失败（详见日志 ocr_dlog.txt）。",
+                                 parent=self.win)
+            return
+        self._store_new_var.set('')
+        self.status_text.set(f"店铺「{name}」已重命名为「{new_name}」")
+        self._refresh_store_card()
+
+    def _store_activate(self):
+        """把选中店铺设为当前店铺（走 _apply_store_switch：全量重建主界面，DESIGN §3）。"""
+        if store_registry is None:
+            return
+        sid, name = self._store_selected()
+        if not sid:
+            messagebox.showwarning("未选中", "请先在列表中选中要启用的店铺。", parent=self.win)
+            return
+        if sid == getattr(self, '_store_id', None):
+            messagebox.showinfo("已是当前店铺", f"「{name}」已经是当前店铺。", parent=self.win)
+            return
+        if self._apply_store_switch(sid):
+            self.status_text.set(f"已切换到店铺「{name}」")
+            self._refresh_store_card()
+        else:
+            messagebox.showerror("切换失败", "店铺切换失败（详见日志 ocr_dlog.txt）。",
+                                 parent=self.win)
+
+    def _store_delete(self):
+        """删除选中店铺：三选（删配置+清历史 / 仅删配置保留历史 / 取消）。
+
+        - 【是】store_registry.delete_store 成功后调 history_db.delete_store(id)
+          联动清历史（t1 契约：返回删行数）；
+        - 若删的是当前店铺，注册表已把 active 回落 default，主界面同步切换重建；
+        - default 店铺 UI 前置拒绝 + store_registry 兜底拒绝（双保险）。
+        """
+        if store_registry is None:
+            return
+        sid, name = self._store_selected()
+        if not sid:
+            messagebox.showwarning("未选中", "请先在列表中选中要删除的店铺。", parent=self.win)
+            return
+        if sid == 'default':
+            messagebox.showwarning("不可删除", "「默认店铺」是系统内置店铺，不能删除。",
+                                   parent=self.win)
+            return
+        ans = messagebox.askyesnocancel(
+            "确认删除",
+            f"确定删除店铺「{name}」？\n\n"
+            "【是】删除配置，并同时清除该店铺的全部识别历史；\n"
+            "【否】仅删除配置，保留历史数据（趋势仍可见）；\n"
+            "【取消】放弃删除。",
+            parent=self.win)
+        if ans is None:
+            return
+        deleted = store_registry.delete_store(sid)
+        if deleted is None:
+            messagebox.showerror("删除失败", "店铺删除失败（详见日志 ocr_dlog.txt）。",
+                                 parent=self.win)
+            return
+        if ans is True:
+            try:
+                import history_db as _hdb
+                _n = _hdb.delete_store(sid)
+                msg = (f"店铺「{deleted}」已删除（含历史 {_n} 行）"
+                       if _n >= 0 else f"店铺「{deleted}」已删除（历史清理失败，见日志）")
+            except Exception:
+                msg = f"店铺「{deleted}」已删除（历史清理失败，见日志）"
+        else:
+            msg = f"店铺「{deleted}」已删除（历史数据已保留）"
+        self.status_text.set(msg)
+        # 删的是当前店铺 → 注册表已回落 default，主界面同步切换重建
+        if sid == getattr(self, '_store_id', None):
+            self._apply_store_switch(store_registry.get_active())
+        self._refresh_store_card()
+
+    # ─────────────── R1 流程效率：导入与窗口卡片 ───────────────
+
+    @staticmethod
+    def _import_summary_lines(mapping, saved_at):
+        """上次导入映射摘要（多行），供 UI 渲染。
+
+        纯函数 / 无 Tk 依赖，便于单测。
+        - mapping 非 dict 或为空 → 始终返回「暂无上次导入记录」。
+        - 否则每行一条「字段: 列名」，字段名走中文显示；尾部追加保存时间（可省略）。
+        """
+        # 字段 → 中文标签（与导入向导/识别列配置用词保持一致）
+        _LABELS = {
+            'name': '名称', 'stock': '库存', 'sales': '销量',
+            'region': '销售区域', 'warehouse': '仓库',
+        }
+        if not isinstance(mapping, dict) or not mapping:
+            return ['（暂无上次导入记录）']
+        lines = []
+        # 顺序固定：核心字段优先（name/stock/sales），其他字段按字母序追加
+        keys = [k for k in ('name', 'stock', 'sales') if k in mapping]
+        keys += sorted(k for k in mapping.keys() if k not in keys)
+        for k in keys:
+            v = mapping.get(k)
+            if not (isinstance(v, str) and v.strip()):
+                continue
+            label = _LABELS.get(k, k)
+            lines.append(f'{label}:{v}')
+        if saved_at and isinstance(saved_at, str):
+            lines.append(f'（保存于 {saved_at}）')
+        if not lines:
+            return ['（暂无上次导入记录）']
+        return lines
+
+    def _build_import_window_card(self, parent):
+        """R1 流程效率 t2：导入与窗口设置卡。
+
+        内容：
+        - 上次导入映射摘要（多行 Label，刷新逻辑内置）。
+        - 「清除映射」按钮：调 import_memory.clear_last_mapping → 状态栏提示 + 摘要刷新。
+        - 「恢复上次窗口位置」开关：走 Config.save('restore_window_pos'=bool)。
+          默认开（与现有「实时截图窗口恢复」（DESIGN §7）一致——主线程 2 秒无条件恢复）。
+          关掉后窗口位置不主动恢复（沿用默认几何）。
+        """
+        card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1,
+                        highlightbackground=self.C_BORDER)
+        card.pack(fill='x', padx=20, pady=8)
+        self._lbl(card, text='导入与窗口', font=self.FONT_HEADING, bg=self.C_BG,
+                  fg=self.C_SECONDARY).pack(pady=(12, 2))
+        self._lbl(card, text='上次导入的列映射（CSV/XLSX 导入后自动记忆，下次复用）',
+                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack()
+
+        # ── 摘要区 ──
+        summary_row = tk.Frame(card, bg=self.C_BG)
+        summary_row.pack(fill='x', padx=16, pady=(8, 4))
+        self._import_summary_var = tk.StringVar(self.win, value='')
+        # 用单 Label 显示多行（wraplength 控制宽度，justify 左对齐）
+        self._import_summary_lbl = self._lbl(
+            summary_row, textvariable=self._import_summary_var,
+            font=(self.FONT[0], 9), fg=self.C_TEXT, bg=self.C_BG,
+            justify='left', anchor='w', wraplength=520)
+        self._import_summary_lbl.pack(side='left', fill='x', expand=True)
+
+        def _refresh_import_summary():
+            """读 import_memory.get_last_mapping + saved_at → 摘要文案。"""
+            try:
+                from import_memory import get_last_mapping
+                mapping = get_last_mapping() or {}
+            except Exception:
+                mapping = {}
+            saved_at = ''
+            try:
+                cfg = Config.load() if hasattr(Config, 'load') else {}
+                node = cfg.get('import_memory') if isinstance(cfg, dict) else None
+                if isinstance(node, dict):
+                    saved_at = str(node.get('saved_at') or '')
+            except Exception:
+                saved_at = ''
+            try:
+                lines = self._import_summary_lines(mapping, saved_at)
+            except Exception:
+                lines = ['（暂无上次导入记录）']
+            self._import_summary_var.set('\n'.join(lines))
+
+        _refresh_import_summary()
+
+        # ── 清除映射按钮 ──
+        btn_row = tk.Frame(card, bg=self.C_BG)
+        btn_row.pack(fill='x', padx=16, pady=(2, 6))
+        def _on_clear_mapping():
+            try:
+                from import_memory import clear_last_mapping
+                ok = bool(clear_last_mapping())
+            except Exception:
+                ok = False
+            try:
+                _refresh_import_summary()
+            except Exception:
+                pass
+            if ok:
+                try:
+                    self.status_text.set('已清除上次导入映射')
+                except Exception:
+                    pass
+            else:
+                try:
+                    messagebox.showwarning(
+                        '清除失败', '清除映射失败（详见日志 ocr_dlog.txt）',
+                        parent=self.win)
+                except Exception:
+                    pass
+        self._mk_btn(btn_row, '清除映射', _on_clear_mapping, kind='ghost',
+                  font=(self.FONT[0], 8)).pack(side='left')
+
+        # 把 refresh 挂到 self 上，外部导入后也可触发刷新（其它设置卡会读到）
+        self._refresh_import_summary = _refresh_import_summary
+
+        # ── 恢复上次窗口位置 开关 ──
+        win_row = tk.Frame(card, bg=self.C_BG)
+        win_row.pack(fill='x', padx=16, pady=(4, 4))
+        self._restore_win_pos_var = tk.BooleanVar(self.win, value=True)
+        # 读当前值（首次构建卡时）
+        try:
+            _cur = Config.load() if hasattr(Config, 'load') else {}
+            _val = (_cur.get('window') or {}).get('restore_last_pos', True) if isinstance(_cur, dict) else True
+            self._restore_win_pos_var.set(bool(_val))
+        except Exception:
+            self._restore_win_pos_var.set(True)
+        def _on_restore_toggle():
+            try:
+                cfg = Config.load() if hasattr(Config, 'load') else {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                win_node = cfg.get('window') or {}
+                if not isinstance(win_node, dict):
+                    win_node = {}
+                win_node['restore_last_pos'] = bool(self._restore_win_pos_var.get())
+                cfg['window'] = win_node
+                Config.save(cfg)
+                try:
+                    self.status_text.set(
+                        f"恢复窗口位置：{'开启' if bool(self._restore_win_pos_var.get()) else '关闭'}")
+                except Exception:
+                    pass
+            except Exception:
+                # -13) 同款风格：写盘失败回滚 UI（避免"显示新值但磁盘未写入"）
+                try:
+                    self._restore_win_pos_var.set(not bool(self._restore_win_pos_var.get()))
+                except Exception:
+                    pass
+                try:
+                    self.status_text.set('恢复窗口位置设置保存失败（详见日志 ocr_dlog.txt）')
+                except Exception:
+                    pass
+        tk.Checkbutton(win_row, text='恢复上次窗口位置（关闭后启动用默认位置）',
+                       variable=self._restore_win_pos_var, command=_on_restore_toggle,
+                       font=(self.FONT[0], 9), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side='left')
+
+        self._lbl(card,
+                  text=('说明：导入 CSV/XLSX 后会自动记忆列映射，下次同结构文件导入时直接复用；'
+                        '窗口位置开关仅影响启动时是否恢复（最小化最多 2 秒无条件恢复，遵循 DESIGN §7）。'),
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED,
+                  wraplength=560, justify='left').pack(pady=(4, 12), padx=20, anchor='w')
+
+    # ─────────────── R3 健壮闭环：备份与恢复卡片 ───────────────
+
+    def _build_backup_card(self, parent):
+        """R3 健壮闭环 t9：备份与恢复卡。
+
+        三个动作按钮 + 结果状态行：
+        - 「导出设置备份」：弹保存对话框 → 调 backup_store.export_settings_zip
+          （含 history.db 快照开关）→ 状态栏反馈。
+        - 「从备份恢复」：弹打开对话框 → confirm 弹窗 → 调 backup_store.restore_settings_zip
+          → 状态栏反馈（含 .pre_restore 文件提示）。
+        - 「历史库快照」：调 backup_store.snapshot_history_db → 状态栏反馈路径。
+
+        全部 IO 走 backup_store 纯逻辑模块；状态栏 + 错误弹窗由本卡负责
+        （不弹、不写文件、不调 UI）。
+        """
+        card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1,
+                        highlightbackground=self.C_BORDER)
+        card.pack(fill='x', padx=20, pady=8)
+        self._lbl(card, text='备份与恢复', font=self.FONT_HEADING, bg=self.C_BG,
+                  fg=self.C_SECONDARY).pack(pady=(12, 2))
+        self._lbl(card, text='一键打包配置 / 从历史包恢复 / 单独历史库快照',
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack()
+
+        # 历史库快照选项（导出时可同时打包 history.db）
+        include_hist_row = tk.Frame(card, bg=self.C_BG)
+        include_hist_row.pack(fill='x', padx=16, pady=(8, 2))
+        _include_hist_var = tk.BooleanVar(self.win, value=False)
+        tk.Checkbutton(include_hist_row,
+                       text='导出时包含 history.db 快照（体积较大，按需开启）',
+                       variable=_include_hist_var,
+                       font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG,
+                       activebackground=self.C_BG).pack(side='left')
+
+        # 三个按钮行
+        btn_row = tk.Frame(card, bg=self.C_BG)
+        btn_row.pack(fill='x', padx=16, pady=(4, 4))
+
+        def _set_status(msg):
+            try:
+                _status_var.set(str(msg or ''))
+            except Exception:
+                pass
+
+        _status_var = tk.StringVar(self.win, value='')
+
+        def _on_export():
+            """导出设置备份（弹保存对话框 → export_settings_zip）。"""
+            try:
+                from tkinter import filedialog
+                from backup_store import export_settings_zip
+                default_name = f'pdd_ez_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip'
+                target = filedialog.asksaveasfilename(
+                    title='导出设置备份',
+                    defaultextension='.zip',
+                    initialfile=default_name,
+                    filetypes=[('Zip 备份', '*.zip'), ('所有文件', '*.*')],
+                    parent=self.win)
+                if not target:
+                    return  # 用户取消
+                r = export_settings_zip(
+                    target, include_history_db=bool(_include_hist_var.get()))
+            except Exception as e:
+                try:
+                    messagebox.showerror('导出失败', str(e)[:200],
+                                         parent=self.win)
+                except Exception:
+                    pass
+                return
+            if r is None:
+                _set_status('导出失败：路径无效')
+                try:
+                    messagebox.showerror('导出失败', '路径无效或不可写',
+                                         parent=self.win)
+                except Exception:
+                    pass
+                return
+            err = r.get('error')
+            if err:
+                _set_status(f'⚠ 导出部分成功：{err}')
+                try:
+                    messagebox.showwarning(
+                        '导出（部分成功）',
+                        f'已生成备份但有警告：\n{err}\n\n'
+                        f'路径：{r.get("path")}\n'
+                        f'文件：{", ".join(r.get("files") or []) or "（无）"}',
+                        parent=self.win)
+                except Exception:
+                    pass
+            else:
+                n = len(r.get('files') or [])
+                size = r.get('size_bytes', 0)
+                _set_status(
+                    f'✅ 已导出 {n} 个文件 ({size} 字节) → {r.get("path")}')
+                try:
+                    self.status_text.set(
+                        f'设置备份已导出：{r.get("path")}')
+                except Exception:
+                    pass
+
+        def _on_restore():
+            """从备份恢复（弹打开对话框 → confirm → restore_settings_zip）。"""
+            try:
+                from tkinter import filedialog
+                from backup_store import restore_settings_zip
+                target = filedialog.askopenfilename(
+                    title='选择备份 zip',
+                    filetypes=[('Zip 备份', '*.zip'), ('所有文件', '*.*')],
+                    parent=self.win)
+                if not target:
+                    return  # 用户取消
+                ans = messagebox.askyesnocancel(
+                    '确认恢复',
+                    f'从备份恢复会覆盖当前 settings.json / regions.json。\n'
+                    f'恢复前会自动备份现有文件为 .pre_restore 后缀。\n\n'
+                    f'备份：{target}\n\n【是】覆盖现有配置；【否】取消。',
+                    parent=self.win)
+                if not ans:
+                    return
+                r = restore_settings_zip(target)
+            except Exception as e:
+                try:
+                    messagebox.showerror('恢复失败', str(e)[:200],
+                                         parent=self.win)
+                except Exception:
+                    pass
+                return
+            err = r.get('error')
+            restored = r.get('restored') or []
+            pre = r.get('pre_restore') or []
+            if err:
+                _set_status(f'❌ 恢复失败：{err}')
+                try:
+                    messagebox.showerror(
+                        '恢复失败',
+                        f'{err}\n\n当前配置未改动。',
+                        parent=self.win)
+                except Exception:
+                    pass
+                return
+            # 成功
+            pre_txt = f'（.pre_restore: {", ".join(pre)}）' if pre else '（无原文件）'
+            _set_status(
+                f'✅ 已恢复 {len(restored)} 个文件 {pre_txt}')
+            try:
+                self.status_text.set(
+                    f'配置已从备份恢复（{len(restored)} 个文件）')
+            except Exception:
+                pass
+            try:
+                messagebox.showinfo(
+                    '恢复完成',
+                    f'已恢复 {len(restored)} 个文件：\n  '
+                    + '\n  '.join(restored)
+                    + (f'\n\n原文件已备份为：\n  {", ".join(pre)}'
+                       if pre else '\n\n（无原文件需备份）')
+                    + '\n\n部分设置（如 DPI/窗口位置）可能需重启程序生效。',
+                    parent=self.win)
+            except Exception:
+                pass
+            # R3 遗留修复（R3-Risk-B）：恢复写盘后显式失效进程内缓存——
+            # license tier 缓存（TTL 300s，reset_cache 显式清空）、usage enabled 缓存、
+            # Config mtime 缓存由 save 自清。均失败安全（缓存不失效也只是短暂陈旧）。
+            try:
+                from auth import license as _lic
+                _lic.reset_cache()
+            except Exception:
+                pass
+            try:
+                import usage_store as _us
+                _us._invalidate_enabled_cache()
+            except Exception:
+                pass
+
+        def _on_snapshot():
+            """单独历史库快照（snapshot_history_db → <base>/backups/history_<stamp>.db）。"""
+            try:
+                from backup_store import snapshot_history_db
+                snap = snapshot_history_db()
+            except Exception as e:
+                try:
+                    messagebox.showerror('快照失败', str(e)[:200],
+                                         parent=self.win)
+                except Exception:
+                    pass
+                return
+            if not snap:
+                _set_status('⚠ 快照失败或 history.db 不存在')
+                try:
+                    messagebox.showwarning(
+                        '快照失败',
+                        'history.db 不存在或快照失败（详见日志）。',
+                        parent=self.win)
+                except Exception:
+                    pass
+                return
+            try:
+                size = os.path.getsize(snap) if os.path.isfile(snap) else 0
+            except Exception:
+                size = 0
+            _set_status(f'✅ 历史库快照 ({size} 字节) → {snap}')
+            try:
+                self.status_text.set(f'历史库快照：{snap}')
+            except Exception:
+                pass
+
+        self._mk_btn(btn_row, '📦 导出设置备份', _on_export, kind='primary',
+                  font=(self.FONT[0], 8)).pack(side='left', padx=(0, 4))
+        self._mk_btn(btn_row, '♻ 从备份恢复', _on_restore, kind='ghost',
+                  font=(self.FONT[0], 8)).pack(side='left', padx=4)
+        self._mk_btn(btn_row, '📸 历史库快照', _on_snapshot, kind='ghost',
+                  font=(self.FONT[0], 8)).pack(side='left', padx=4)
+
+        # 状态行
+        status_row = tk.Frame(card, bg=self.C_BG)
+        status_row.pack(fill='x', padx=16, pady=(2, 8))
+        self._lbl(status_row, textvariable=_status_var,
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                  justify='left', anchor='w', wraplength=520).pack(
+            side='left', fill='x', expand=True)
+
+        # 说明
+        self._lbl(card,
+                  text=('说明：导出 → 把当前 settings.json / regions.json（可选 history.db）'
+                        '打包到一个 zip；恢复 → 校验 zip + JSON 合法性后原子写回，'
+                        '覆盖前会自动备份原文件为 .pre_restore；快照 → SQLite VACUUM INTO '
+                        '一致性快照（不锁库）。所有异常路径绝不外抛，由本卡弹窗/状态栏反馈。'),
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED,
+                  wraplength=560, justify='left').pack(pady=(0, 12), padx=20,
+                                                       anchor='w')
+
+    def _build_replenishment_card(self, parent):
+        """t13 P3-A 补货策略卡片：模型单选（经典/加权/高级）+ safety_days + in_transit_qty。
+
+        t8 P2-C：新增「高级」选项（calc_replenishment_advanced），展开四因子编辑区：
+        - 大促日历（日期文本框 + boost + lead_days）
+        - 滞销阈值（threshold_per_day + stock_ratio）
+        - 季节系数（开关）
+        - 超卖（high_ratio）
+        高级模式下默认全部 enabled=False 静默关闭——用户勾选/填值才生效。
         用户裁定：默认 'classic'（一行公式逻辑都不许改）；切到 'weighted' 时
         会按 sku_id 关联历史库做加权日销，无历史自动回退经典并标注「经典(无历史)」。
         """
         try:
-            from utils import get_replenishment_cfg, MODEL_CLASSIC, MODEL_WEIGHTED
+            from utils import get_replenishment_cfg, MODEL_CLASSIC, MODEL_WEIGHTED, MODEL_ADVANCED
         except Exception:
             self._lbl(parent, text="补货策略模块加载失败（utils）",
                      fg=self.C_MUTED).pack(pady=8)
@@ -250,7 +1027,23 @@ class SettingsUIMixin:
         try:
             cur = get_replenishment_cfg()
         except Exception:
-            cur = {'model': 'classic', 'safety_days': 2, 'in_transit_qty': 0}
+            cur = {'model': 'classic', 'safety_days': 2, 'in_transit_qty': 0,
+                   'advanced': {
+                       'promo': {'dates': [], 'boost': 1.5, 'lead_days': 3, 'enabled': False},
+                       'slow': {'threshold_per_day': 1.0, 'stock_ratio': 5.0, 'enabled': False},
+                       'season': {'enabled': False},
+                       'oversell': {'high_ratio': 0.5, 'enabled': False},
+                   }}
+        cur_adv = cur.get('advanced') if isinstance(cur.get('advanced'), dict) else {
+            'promo': {'dates': [], 'boost': 1.5, 'lead_days': 3, 'enabled': False},
+            'slow': {'threshold_per_day': 1.0, 'stock_ratio': 5.0, 'enabled': False},
+            'season': {'enabled': False},
+            'oversell': {'high_ratio': 0.5, 'enabled': False},
+        }
+        cur_promo = cur_adv.get('promo') or {}
+        cur_slow = cur_adv.get('slow') or {}
+        cur_season = cur_adv.get('season') or {}
+        cur_over = cur_adv.get('oversell') or {}
 
         # 模型单选
         _model_var = tk.StringVar(self.win, value=str(cur.get('model', 'classic')))
@@ -264,18 +1057,117 @@ class SettingsUIMixin:
                        variable=_model_var, value='weighted',
                        font=(self.FONT[0], 9), bg=self.C_BG, fg=self.C_TEXT,
                        selectcolor=self.C_BG, activebackground=self.C_BG).pack(side='left', padx=(8, 0))
+        # 高级模式 radio
+        tk.Radiobutton(model_row, text='高级（季节/大促/滞销/超卖）',
+                       variable=_model_var, value=MODEL_ADVANCED,
+                       font=(self.FONT[0], 9), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(side='left', padx=(8, 0))
 
         # safety_days spinbox
         sd_row = tk.Frame(card, bg=self.C_BG); sd_row.pack(pady=(6, 2), padx=20, fill='x')
         self._lbl(sd_row, text="安全库存天数：", font=(self.FONT[0], 9),
                   bg=self.C_BG, fg=self.C_TEXT).pack(side='left', padx=(0, 6))
         _sd_var = tk.IntVar(self.win, value=int(cur.get('safety_days', 2) or 0))
-        tk.Spinbox(sd_row, from_=0, to=30, textvariable=_sd_var, width=8,  # : 6
+        tk.Spinbox(sd_row, from_=0, to=30, textvariable=_sd_var, width=8,  # : 6→8
                    font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
                    highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                    bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(side='left')
-        self._lbl(sd_row, text="（加权模式：运输+此值=到货覆盖天数）",
+        self._lbl(sd_row, text="（加权/高级模式：运输+此值=到货覆盖天数）",
                   font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(side='left', padx=(8, 0))
+
+        # R2 安全库存推荐 — 显示上次缓存 + 一键应用按钮
+        # 写入方：fix-glm 在 _calc_from_items 后把 recommend_safety_days 结果写
+        # settings['replenishment']['recommendation']；本卡读出展示。
+        rec_row = tk.Frame(card, bg=self.C_BG)
+        rec_row.pack(pady=(2, 2), padx=20, fill='x')
+        rec_var = tk.StringVar(self.win, value='')
+
+        def _refresh_recommendation():
+            """读 algorithm_ui.load_recommendation_cache → 更新摘要 + 按钮态。"""
+            try:
+                from algorithm_ui import load_recommendation_cache
+                node = load_recommendation_cache()
+            except Exception:
+                node = None
+            if not isinstance(node, dict):
+                try:
+                    rec_var.set('（无上次推荐——点「识别+补货」后自动计算）')
+                except Exception:
+                    pass
+                try:
+                    _apply_btn.configure(state='disabled')
+                except Exception:
+                    pass
+                return
+            try:
+                sd = int(node.get('safety_days') or 0)
+            except Exception:
+                sd = 0
+            try:
+                lead = int(node.get('safety_days_lead') or 0)
+            except Exception:
+                lead = 0
+            sigma = node.get('sigma') or 0.0
+            forecast = node.get('forecast') or 0.0
+            n_samples = node.get('n_samples') or 0
+            computed_at = str(node.get('computed_at') or '')
+            try:
+                rec_var.set(
+                    f'上次推荐：{sd} 天（基于运输 {lead} 天 · σ≈{float(sigma):.2f} · '
+                    f'样本 {n_samples} 天 · 预测日销 ≈{float(forecast):.2f}'
+                    + (f' · {computed_at}' if computed_at else '')
+                    + '）'
+                )
+            except Exception:
+                pass
+            try:
+                _apply_btn.configure(state='normal')
+            except Exception:
+                pass
+
+        self._lbl(rec_row, textvariable=rec_var, font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_MUTED, justify='left',
+                  anchor='w', wraplength=420).pack(side='left', fill='x', expand=True)
+
+        def _on_apply_recommendation():
+            """把缓存推荐值一键写入 _sd_var + 状态栏提示。"""
+            try:
+                from algorithm_ui import load_recommendation_cache
+                node = load_recommendation_cache()
+            except Exception:
+                node = None
+            if not isinstance(node, dict):
+                try:
+                    self.status_text.set('当前无推荐缓存')
+                except Exception:
+                    pass
+                return
+            try:
+                sd = int(node.get('safety_days') or 0)
+            except Exception:
+                sd = 0
+            if sd <= 0:
+                try:
+                    self.status_text.set('推荐缓存无效')
+                except Exception:
+                    pass
+                return
+            sd = max(0, min(30, sd))
+            try:
+                _sd_var.set(sd)
+            except Exception:
+                pass
+            try:
+                self.status_text.set(
+                    f'已应用推荐 safety_days = {sd}（记得点「保存」持久化）')
+            except Exception:
+                pass
+
+        _apply_btn = self._mk_btn(rec_row, '一键应用', _on_apply_recommendation,
+                                  kind='ghost', font=(self.FONT[0], 8))
+        _apply_btn.pack(side='left', padx=(6, 0))
+        self._refresh_recommendation = _refresh_recommendation
+        _refresh_recommendation()
 
         # in_transit_qty spinbox
         it_row = tk.Frame(card, bg=self.C_BG); it_row.pack(pady=(6, 2), padx=20, fill='x')
@@ -286,8 +1178,239 @@ class SettingsUIMixin:
                    font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
                    highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                    bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(side='left')
-        self._lbl(it_row, text="（加权模式：补货量 = (运输+安全)×日销 − 在途 − 库存，100 取整）",
+        self._lbl(it_row, text="（加权/高级模式：补货量 = (运输+安全)×日销 − 在途 − 库存，100 取整）",
                   font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(side='left', padx=(8, 0))
+
+        # 高级模式编辑区（折叠在独立 Frame，按 radio 切换可见）
+        # R1 布局优化：四个 LabelFrame 走统一 padx=8 / pady=(0, 6) + 内层 padx=8 / pady=4
+        # 三档节奏；标题统一前缀「▌ <name>（<desc>）」便于快速扫读；季节+超卖同
+        # 行仍保留（节省垂直空间，但季节/超卖 box 内部都用 pack，与其他两卡同节奏）。
+        adv_frame = tk.Frame(card, bg=self.C_BG)
+        adv_frame.pack(pady=(6, 4), padx=20, fill='x')
+        self._lbl(adv_frame, text="高级因子（仅「高级」模型生效，缺省全部关闭）",
+                  font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(
+            anchor='w', pady=(2, 4))
+
+        # 公共 LabelFrame 风格：padding 内 padx=8 / pady=4，标题前缀统一
+        def _make_factor_box(parent, title, desc):
+            """构造一个高级因子卡片——统一标题风格 + 内层节奏（便于四卡视觉对齐）。"""
+            box = tk.LabelFrame(
+                parent, text=f" {title}（{desc}）",
+                bg=self.C_BG, fg=self.C_TEXT, font=(self.FONT[0], 8, 'bold'),
+                bd=1, relief='solid', labelanchor='nw', padx=8, pady=6)
+            return box
+
+        # ── 大促日历 ──
+        promo_box = _make_factor_box(
+            adv_frame, "▌ 大促日历", "命中日期 ±lead_days 窗口内 → boost 倍")
+        promo_box.pack(fill='x', padx=8, pady=(0, 6))
+        _promo_enabled_var = tk.BooleanVar(self.win, value=bool(cur_promo.get('enabled', False)))
+        tk.Checkbutton(promo_box, text='启用', variable=_promo_enabled_var,
+                       font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(
+            anchor='w', padx=4, pady=(0, 4))
+        date_row = tk.Frame(promo_box, bg=self.C_BG); date_row.pack(fill='x', pady=2)
+        self._lbl(date_row, text="日期（逗号/空格分隔）:", font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left')
+        _promo_dates_text = ', '.join(cur_promo.get('dates') or [])
+        _promo_dates_var = tk.StringVar(self.win, value=_promo_dates_text)
+        tk.Entry(date_row, textvariable=_promo_dates_var, font=(self.FONT[0], 9), width=36,
+                 relief='flat', bd=0, highlightthickness=1,
+                 highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                 bg="#FFFFFF", fg=self.C_TEXT,
+                 insertbackground=self.C_TEXT).pack(side='left', padx=(6, 0))
+
+        # R2 批量粘贴入口（多行 YYYY-MM-DD 一次粘入）——
+        # 弹文本域对话框，按行解析 + 逐行错误标注；合法行替换到 _promo_dates_var。
+        def _on_bulk_paste():
+            try:
+                from algorithm_ui import parse_bulk_promo_dates
+                dlg = tk.Toplevel(self.win)
+                dlg.title('批量粘贴大促日期')
+                dlg.configure(bg=self.C_BG)
+                try:
+                    dlg.geometry(self._geo(420, 320))
+                except Exception:
+                    dlg.geometry('420x320')
+                self._lbl(dlg, text='每行一个 YYYY-MM-DD（可混合逗号/空格/分号）',
+                          font=(self.FONT[0], 8), bg=self.C_BG,
+                          fg=self.C_MUTED).pack(pady=(8, 2))
+                txt = tk.Text(dlg, font=(self.FONT[0], 9), height=10, width=46,
+                              relief='flat', bd=0, highlightthickness=1,
+                              highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                              bg="#FFFFFF", fg=self.C_TEXT,
+                              insertbackground=self.C_TEXT, wrap='word')
+                txt.pack(padx=10, pady=(2, 6), fill='both', expand=True)
+                # 预填当前已有日期（每行一个），方便追加
+                try:
+                    existing = _promo_dates_var.get()
+                    if existing:
+                        txt.insert('1.0', existing.replace(', ', '\n'))
+                except Exception:
+                    pass
+                status_var = tk.StringVar(dlg, value='')
+                status_lbl = self._lbl(dlg, textvariable=status_var,
+                                       font=(self.FONT[0], 8), bg=self.C_BG,
+                                       fg=self.C_TEXT, justify='left', anchor='w',
+                                       wraplength=400)
+                status_lbl.pack(padx=10, fill='x')
+
+                def _apply():
+                    try:
+                        raw = txt.get('1.0', 'end')
+                        valid, invalid, total = parse_bulk_promo_dates(raw)
+                    except Exception as e:
+                        try:
+                            messagebox.showerror('解析失败', str(e)[:200],
+                                                 parent=dlg)
+                        except Exception:
+                            pass
+                        return
+                    try:
+                        _promo_dates_var.set(', '.join(valid))
+                    except Exception:
+                        pass
+                    msg = f'已应用 {len(valid)} 个日期'
+                    if total > 0:
+                        msg += f'（共 {total} 行'
+                        if invalid:
+                            msg += f'，非法 {len(invalid)} 行：'
+                            shown = invalid[:5]
+                            msg += '; '.join(
+                                f'第{ln}行:{t[:30]}' for ln, t in shown)
+                            if len(invalid) > 5:
+                                msg += f' 等{len(invalid)}行'
+                            msg += '）'
+                        else:
+                            msg += '，全部合法）'
+                    try:
+                        status_var.set(msg)
+                    except Exception:
+                        pass
+                    if invalid:
+                        try:
+                            preview = '\n'.join(
+                                f'第{ln}行: {t[:40]}' for ln, t in invalid[:8])
+                            if len(invalid) > 8:
+                                preview += f'\n…等 {len(invalid)} 行'
+                            messagebox.showwarning(
+                                '部分行非法',
+                                f'以下行无法解析为 YYYY-MM-DD：\n{preview}\n\n'
+                                f'合法行已应用，是否继续？',
+                                parent=dlg)
+                        except Exception:
+                            pass
+                    try:
+                        dlg.after(1500, dlg.destroy)
+                    except Exception:
+                        pass
+
+                btn_row = tk.Frame(dlg, bg=self.C_BG)
+                btn_row.pack(pady=(0, 10))
+                self._mk_btn(btn_row, '解析并应用', _apply, kind='primary',
+                          font=(self.FONT[0], 8)).pack(side='left', padx=4)
+                self._mk_btn(btn_row, '取消', dlg.destroy, kind='ghost',
+                          font=(self.FONT[0], 8)).pack(side='left', padx=4)
+            except Exception as e:
+                try:
+                    messagebox.showerror('批量粘贴失败', str(e)[:200],
+                                         parent=self.win)
+                except Exception:
+                    pass
+        self._mk_btn(date_row, '📋 批量粘贴', _on_bulk_paste, kind='ghost',
+                  font=(self.FONT[0], 8)).pack(side='left', padx=(6, 0))
+        boost_row = tk.Frame(promo_box, bg=self.C_BG); boost_row.pack(fill='x', pady=2)
+        self._lbl(boost_row, text="boost 权重:", font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left')
+        _promo_boost_var = tk.DoubleVar(self.win, value=float(cur_promo.get('boost', 1.5) or 1.5))
+        tk.Spinbox(boost_row, from_=1.0, to=10.0, increment=0.1,
+                   textvariable=_promo_boost_var, width=6,
+                   font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
+                   highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                   bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(
+            side='left', padx=(6, 12))
+        self._lbl(boost_row, text="lead_days 窗口:", font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left')
+        _promo_lead_var = tk.IntVar(self.win, value=int(cur_promo.get('lead_days', 3) or 3))
+        tk.Spinbox(boost_row, from_=0, to=30, textvariable=_promo_lead_var, width=6,
+                   font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
+                   highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                   bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(
+            side='left', padx=(6, 0))
+
+        # ── 滞销阈值 ──
+        slow_box = _make_factor_box(
+            adv_frame, "▌ 滞销阈值", "近14日均销<阈值 且 库存/日销>比例")
+        slow_box.pack(fill='x', padx=8, pady=(0, 6))
+        _slow_enabled_var = tk.BooleanVar(self.win, value=bool(cur_slow.get('enabled', False)))
+        tk.Checkbutton(slow_box, text='启用', variable=_slow_enabled_var,
+                       font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(
+            anchor='w', padx=4, pady=(0, 4))
+        slow_row = tk.Frame(slow_box, bg=self.C_BG); slow_row.pack(fill='x', pady=2)
+        self._lbl(slow_row, text="均销阈值(件/日):", font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left')
+        _slow_thr_var = tk.DoubleVar(self.win, value=float(cur_slow.get('threshold_per_day', 1.0) or 1.0))
+        tk.Spinbox(slow_row, from_=0.0, to=100.0, increment=0.1,
+                   textvariable=_slow_thr_var, width=6,
+                   font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
+                   highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                   bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(
+            side='left', padx=(6, 12))
+        self._lbl(slow_row, text="库存/日销比例阈值:", font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_TEXT).pack(side='left')
+        _slow_ratio_var = tk.DoubleVar(self.win, value=float(cur_slow.get('stock_ratio', 5.0) or 5.0))
+        tk.Spinbox(slow_row, from_=0.0, to=100.0, increment=0.5,
+                   textvariable=_slow_ratio_var, width=6,
+                   font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
+                   highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                   bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(
+            side='left', padx=(6, 0))
+
+        # ── 季节系数 + 超卖 同一行（节省空间，但卡片标题/内层节奏统一） ──
+        season_over_row = tk.Frame(adv_frame, bg=self.C_BG)
+        season_over_row.pack(fill='x', padx=8, pady=(0, 6))
+        season_box = _make_factor_box(
+            season_over_row, "▌ 季节系数", "近4周/近12周 均值比，钳制[0.5, 2.0]")
+        season_box.pack(side='left', fill='both', expand=True, padx=(0, 4))
+        _season_enabled_var = tk.BooleanVar(self.win, value=bool(cur_season.get('enabled', False)))
+        tk.Checkbutton(season_box, text='启用', variable=_season_enabled_var,
+                       font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).pack(
+            anchor='w', padx=4, pady=2)
+        over_box = _make_factor_box(
+            season_over_row, "▌ 超卖等级", "stock<high_ratio×需求=🔥重")
+        over_box.pack(side='left', fill='both', expand=True, padx=(4, 0))
+        # 超卖卡：启用 + high_ratio + Spinbox 三件同行（grid 列对齐）
+        _over_enabled_var = tk.BooleanVar(self.win, value=bool(cur_over.get('enabled', False)))
+        tk.Checkbutton(over_box, text='启用', variable=_over_enabled_var,
+                       font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
+                       selectcolor=self.C_BG, activebackground=self.C_BG).grid(
+            row=0, column=0, padx=(4, 6), pady=4, sticky='w')
+        self._lbl(over_box, text="high_ratio:", font=(self.FONT[0], 8),
+                  bg=self.C_BG, fg=self.C_TEXT).grid(row=0, column=1, padx=(0, 4), pady=4, sticky='w')
+        _over_hr_var = tk.DoubleVar(self.win, value=float(cur_over.get('high_ratio', 0.5) or 0.5))
+        tk.Spinbox(over_box, from_=0.05, to=0.95, increment=0.05,
+                   textvariable=_over_hr_var, width=6,
+                   font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
+                   highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
+                   bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).grid(
+            row=0, column=2, padx=(0, 4), pady=4, sticky='w')
+
+        # 高级区块的显示切换：根据当前 model
+        # R1：visible → pack(pady=(6,4), padx=20, fill='x')；hidden → pack_forget。
+        # 显隐决策由 adv_frame_visibility_for_model 统一，调用方按表操作。
+        def _toggle_adv_visibility(*_):
+            try:
+                vis = self.adv_frame_visibility_for_model(_model_var.get())
+                if vis.get('advanced_frame'):
+                    adv_frame.pack(pady=(6, 4), padx=20, fill='x')
+                else:
+                    adv_frame.pack_forget()
+            except Exception:
+                pass
+        _model_var.trace_add('write', _toggle_adv_visibility)
+        _toggle_adv_visibility()
 
         # 保存
         def _on_save():
@@ -299,9 +1422,64 @@ class SettingsUIMixin:
                 rep["model"] = str(_model_var.get() or 'classic')
                 rep["safety_days"] = max(0, int(_sd_var.get() or 0))
                 rep["in_transit_qty"] = max(0, int(_it_var.get() or 0))
+                # 高级子配置：仅当 model='advanced' 时落盘；其他模式清空（用户切走即失效）
+                if rep["model"] == MODEL_ADVANCED:
+                    from algorithm_ui import collect_advanced_cfg_from_form
+                    rep["advanced"] = collect_advanced_cfg_from_form({
+                        'promo': {
+                            'enabled': bool(_promo_enabled_var.get()),
+                            'dates_text': str(_promo_dates_var.get() or ''),
+                            'boost': float(_promo_boost_var.get() or 1.5),
+                            'lead_days': int(_promo_lead_var.get() or 3),
+                        },
+                        'slow': {
+                            'enabled': bool(_slow_enabled_var.get()),
+                            'threshold_per_day': float(_slow_thr_var.get() or 1.0),
+                            'stock_ratio': float(_slow_ratio_var.get() or 5.0),
+                        },
+                        'season': {'enabled': bool(_season_enabled_var.get())},
+                        'oversell': {
+                            'enabled': bool(_over_enabled_var.get()),
+                            'high_ratio': float(_over_hr_var.get() or 0.5),
+                        },
+                    })
+                else:
+                    # 切回非高级模式：保留 advanced 节点（防止反复切丢失用户配置），但关闭全部
+                    from algorithm_ui import collect_advanced_cfg_from_form
+                    rep["advanced"] = collect_advanced_cfg_from_form({
+                        'promo': {
+                            'enabled': False,
+                            'dates_text': str(_promo_dates_var.get() or ''),
+                            'boost': float(_promo_boost_var.get() or 1.5),
+                            'lead_days': int(_promo_lead_var.get() or 3),
+                        },
+                        'slow': {
+                            'enabled': False,
+                            'threshold_per_day': float(_slow_thr_var.get() or 1.0),
+                            'stock_ratio': float(_slow_ratio_var.get() or 5.0),
+                        },
+                        'season': {'enabled': False},
+                        'oversell': {
+                            'enabled': False,
+                            'high_ratio': float(_over_hr_var.get() or 0.5),
+                        },
+                    })
                 cfg["replenishment"] = rep
                 Config.save(cfg)
-                self.status_text.set(f"补货策略已保存：model={rep['model']}  safety_days={rep['safety_days']}  in_transit={rep['in_transit_qty']}")
+                adv_summary = ''
+                if rep["model"] == MODEL_ADVANCED:
+                    a = rep.get("advanced") or {}
+                    p_on = a.get('promo', {}).get('enabled')
+                    s_on = a.get('slow', {}).get('enabled')
+                    sn_on = a.get('season', {}).get('enabled')
+                    o_on = a.get('oversell', {}).get('enabled')
+                    adv_summary = (f"  高级: 大促{'✓' if p_on else '×'} "
+                                   f"滞销{'✓' if s_on else '×'} "
+                                   f"季节{'✓' if sn_on else '×'} "
+                                   f"超卖{'✓' if o_on else '×'}")
+                self.status_text.set(
+                    f"补货策略已保存：model={rep['model']}  safety_days={rep['safety_days']}  "
+                    f"in_transit={rep['in_transit_qty']}{adv_summary}")
             except Exception as e:
                 try:
                     messagebox.showerror("保存失败", str(e)[:200])
@@ -313,7 +1491,9 @@ class SettingsUIMixin:
         self._lbl(card,
                   text=("经典模式 = 现行公式原样保留（默认，一行公式逻辑都不改）。"
                         "加权模式按 sku_id 从 history_db 读近 7/14/30 日销量做加权日销，"
-                        "无历史数据时自动回退经典并标注「经典(无历史)」。"),
+                        "无历史数据时自动回退经典并标注「经典(无历史)」。"
+                        "高级模式叠加季节系数/大促倍数/滞销预警/超卖预警四因子，"
+                        "可在下方编辑区单独启用（默认全关闭）。"),
                   font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED,
                   wraplength=560, justify='left').pack(pady=(0, 12), padx=20, anchor='w')
 
@@ -366,7 +1546,7 @@ class SettingsUIMixin:
         _refresh()
 
         # enforce 开关
-        enf_row = tk.Frame(card, bg=self.C_BG); enf_row.pack(pady=(6, 2), padx=20, fill='x')  # : (8,2)
+        enf_row = tk.Frame(card, bg=self.C_BG); enf_row.pack(pady=(6, 2), padx=20, fill='x')  # : (8,2)→(6,2) 紧凑
         _enforce_var = tk.BooleanVar(self.win, value=False)
         def _on_enforce_toggle():
             try:
@@ -411,7 +1591,7 @@ class SettingsUIMixin:
             _key_var.set((_cur2.get("license") or {}).get("key", "") or "")
         except Exception:
             pass
-        _key_entry = tk.Entry(in_row, textvariable=_key_var, font=self.FONT, width=48,  # : 60
+        _key_entry = tk.Entry(in_row, textvariable=_key_var, font=self.FONT, width=48,  # : 60→48 留位按钮
                               relief='flat', bd=0, highlightthickness=1,
                               highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                               bg="#FFFFFF", fg=self.C_TEXT, insertbackground=self.C_TEXT)
@@ -836,7 +2016,7 @@ class SettingsUIMixin:
             ac = theme_data['C_ACCENT']
 
             is_sel = name == self._theme_name
-            # A4：#E2E8F0
+            # A4：#E2E8F0 → self.C_BORDER（零新 token）
             card = tk.Frame(cards_frame, bg="#FFFFFF",
                            highlightbackground=ac if is_sel else self.C_BORDER,
                            highlightthickness=2 if is_sel else 1)
@@ -1069,8 +2249,8 @@ class SettingsUIMixin:
         config = self._get_backend_config()
 
         url_frame = tk.Frame(parent, bg=self.C_BG)
-        url_frame.pack(fill="x", padx=20, pady=(14, 4))  # : (15,5)
-        self._lbl(url_frame, text="后台地址:", font=self.FONT, width=9, anchor="e").pack(side="left")  # : 10
+        url_frame.pack(fill="x", padx=20, pady=(14, 4))  # : (15,5)→(14,4) 与其它页标题距对齐
+        self._lbl(url_frame, text="后台地址:", font=self.FONT, width=9, anchor="e").pack(side="left")  # : 10→9
         url_var = tk.StringVar(self.win, value=config.get('url', 'https://mms.pinduoduo.com/'))
         tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40, bg=self.C_BG,
                  fg=self.C_TEXT, relief='flat', bd=0, highlightthickness=1,
@@ -1144,7 +2324,7 @@ class SettingsUIMixin:
                 s = {}  # 顶层合法 JSON 但不是 dict（如 []）时防 TypeError
             # 关键判定：只有勾选「记住密码」才把密码写入；否则强制为空
             typed_pwd = '' if pwd_var.get() == '输入密码' else pwd_var.get()
-            # v1.4.8 ：勾选记住
+            # v1.4.8 ：勾选记住 → DPAPI 加密落盘（防明文 settings.json 被拷走即丢账号）
             if remember_var.get() and typed_pwd:
                 try:
                     from dpapi_utils import enc as _dpapi_enc, is_available as _dpi_avail
@@ -1153,7 +2333,7 @@ class SettingsUIMixin:
                         if _enc:
                             typed_pwd = _enc
                 except Exception:
-                    pass  # DPAPI 不可用
+                    pass  # DPAPI 不可用 → 静默保留明文（与设计一致：降级可用）
             final_pwd = typed_pwd if remember_var.get() else ''
             s['backend'] = {
                 'url': url_var.get().strip(),
@@ -1196,7 +2376,7 @@ class SettingsUIMixin:
 
         # 活跃提供商选择（机能单选：选中圆点填充亮黄）
         active_frame = tk.Frame(parent, bg=self.C_BG)
-        active_frame.pack(fill="x", padx=20, pady=(8, 4))  # , pady=(14,6)
+        active_frame.pack(fill="x", padx=20, pady=(8, 4))  # : padx=24→20, pady=(14,6)→(8,4)
         self._lbl(active_frame, text="当前使用:", font=self.FONT_BOLD, bg=self.C_BG, fg=self.C_TEXT).pack(side="left", padx=(0,8))
         active_var = tk.StringVar(self.win, value=active)
         for key, info in PRESET_PROVIDERS.items():
@@ -1204,7 +2384,7 @@ class SettingsUIMixin:
                           value=key, font=self.FONT, bg=self.C_BG, fg=self.C_TEXT,
                           selectcolor=self.C_ACCENT, activebackground=self.C_BG,
                           bd=0, relief='flat', highlightthickness=0,
-                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=(12, 0))  # ,0) 与左缘对齐
+                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=(12, 0))  # : padx=12→(12,0) 与左缘对齐
 
         # 三张提供商卡片（浅灰机能卡片 + 细黑切角边框，带滚轮）
         canvas = tk.Canvas(parent, highlightthickness=0, bg=self.C_BG)
@@ -1238,17 +2418,18 @@ class SettingsUIMixin:
             # 浅灰机能卡片（细黑边框 + 内边距）
             card = tk.Frame(cards_frame, bg=self.C_BG, highlightthickness=1,
                             highlightbackground="#EAEAEA", bd=0)
-            card.pack(fill="x", padx=8, pady=8)
+            card.pack(fill="x", padx=8, pady=8)  # : padx=4→8 卡片间 8px
             self._lbl(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
                      bg=self.C_BG, fg=self.C_TEXT, anchor="w").pack(
-                fill="x", padx=16, pady=(8, 2))
+                fill="x", padx=16, pady=(8, 2))  # : padx=12→16
 
             # API Key 行
             kf = tk.Frame(card, bg=self.C_BG)
-            kf.pack(fill="x", padx=16, pady=6)
+            kf.pack(fill="x", padx=16, pady=6)  # : padx=12→16, pady=4→6
             self._lbl(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             # v1.4.8 ：若存的是 dpapi:v1: 密文，解密后填入；解密失败（跨机/损坏）
+            # → Config.decrypt_value 返回空串 → 提示用户重填，绝不让界面卡住
             from utils import Config as _CfgKey
             _stored_key = cfg.get('api_key', '')
             _dec_key = _CfgKey.decrypt_value(_stored_key) if _stored_key else ''
@@ -1335,7 +2516,7 @@ class SettingsUIMixin:
                     history.insert(0, model)
                 history = history[:10]  # 保留最近10个
                 _typed_key = key_vars[key].get().strip()
-                # 若用户粘贴回已是 dpapi:v1: 密文
+                # 若用户粘贴回已是 dpapi:v1: 密文 → 跳过再加密（防双重包裹）
                 if _typed_key and not _typed_key.startswith("dpapi:v1:") and _dpi_avail() and _dpapi_enc:
                     _enc_key = _dpapi_enc(_typed_key)
                     _typed_key = _enc_key if _enc_key else _typed_key
