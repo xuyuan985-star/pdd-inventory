@@ -1608,6 +1608,37 @@ class App(SettingsUIMixin, StatsPagesMixin):
                        command=toggle_filter, font=(self.FONT[0], 8),
                        bg=self.C_SURFACE, fg=self.C_TEXT, selectcolor=self.C_SURFACE,
                        activebackground=self.C_SURFACE).pack(side="left")
+        # v1.5.13 结果列开关：预警/预测/模型三列可关（列表与导出共用配置，默认全开）
+        try:
+            from utils import get_result_cols_cfg as _grc, save_result_cols_cfg as _src
+            self._result_cols = _grc()
+
+            def _mk_col_toggle(label, key):
+                _var = tk.BooleanVar(self.win, value=bool(self._result_cols.get(key, True)))
+
+                def _on_toggle():
+                    try:
+                        self._result_cols[key] = bool(_var.get())
+                        _src(self._result_cols)
+                        if self.plans:
+                            self._render_tree(self.plans)
+                    except Exception:
+                        pass
+                tk.Checkbutton(filter_frame, text=label, variable=_var,
+                               command=_on_toggle, font=(self.FONT[0], 8),
+                               bg=self.C_SURFACE, fg=self.C_TEXT, selectcolor=self.C_SURFACE,
+                               activebackground=self.C_SURFACE).pack(side="left", padx=(8, 0))
+            tk.Label(filter_frame, text="列:", font=(self.FONT[0], 8), bg=self.C_SURFACE,
+                     fg=self.C_MUTED).pack(side="left", padx=(14, 0))
+            _mk_col_toggle('☑预警', 'warning')
+            _mk_col_toggle('☑预测', 'forecast')
+            _mk_col_toggle('☑模型', 'model')
+        except Exception:
+            try:
+                from utils import get_result_cols_cfg as _grc2
+                self._result_cols = _grc2()
+            except Exception:
+                self._result_cols = {'warning': True, 'forecast': True, 'model': True}
         tk.Label(filter_frame, text="商品过多时可筛选，减少渲染量",
                  font=(self.FONT[0], 8), fg=self.C_MUTED).pack(side="left", padx=8)
         # 仓库筛选（v1.3：识别全部商品后按 OCR 仓库信息列过滤展示）
@@ -3456,6 +3487,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 紧跟「可售卖天数」（同属日销/库存推算语义组）
         calc_cols = [('可售卖天数', 'ratio'), ('预测', 'forecast'), ('状态', 'status'),
                      ('补货量', 'qty'), ('预警', 'warning'), ('模型', 'rmodel')]
+        # v1.5.13 结果列开关：预警/预测/模型可关（列表+导出联动，见 filter_row 勾选）
+        try:
+            from utils import filter_result_cols
+            calc_cols = filter_result_cols(calc_cols, getattr(self, '_result_cols', None))
+        except Exception:
+            pass
         display_cols = list(_sel_cols) + [c[0] for c in calc_cols]
         try:
             self.tree.configure(columns=display_cols)

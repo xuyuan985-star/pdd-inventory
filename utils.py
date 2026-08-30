@@ -4,7 +4,7 @@ PDD EZ — 公共工具函数
 """
 import os, re, sys, json, threading
 
-VERSION = "v1.5.12"
+VERSION = "v1.5.13"
 
 
 # ── v1.4.8 P1-C：日志/调试脱敏（logger.py / ocr.py 共用）─────────
@@ -164,6 +164,58 @@ def get_history_cfg() -> dict:
     s = Config.load()
     h = s.get('history')
     return dict(h) if isinstance(h, dict) else {}
+
+
+# ── v1.5.13 结果列开关（用户反馈：预警/预测列不想要，列表+导出需可关）──
+# 三列默认全开（向后兼容）；关闭后 结果表 与 Excel 导出 同步去掉对应列。
+RESULT_COL_DEFAULTS = {'warning': True, 'forecast': True, 'model': True}
+
+
+def get_result_cols_cfg() -> dict:
+    """结果列开关：{'warning': bool, 'forecast': bool, 'model': bool}（默认全开）。"""
+    s = Config.load()
+    rc = s.get('result_columns')
+    out = dict(RESULT_COL_DEFAULTS)
+    if isinstance(rc, dict):
+        for k in out:
+            v = rc.get(k)
+            if isinstance(v, bool):
+                out[k] = v
+    return out
+
+
+def save_result_cols_cfg(cfg: dict) -> bool:
+    """持久化结果列开关（原子写；失败返回 False 不抛）。"""
+    try:
+        if not isinstance(cfg, dict):
+            return False
+        s = Config.load()
+        s['result_columns'] = {k: bool(cfg.get(k, RESULT_COL_DEFAULTS[k]))
+                               for k in RESULT_COL_DEFAULTS}
+        Config.save(s)
+        return True
+    except Exception:
+        return False
+
+
+def filter_result_cols(calc_cols, cfg=None) -> list:
+    """结果表/导出列过滤：calc_cols 为 (显示名, 字段key) 列表。
+
+    按字段 key 过滤（gui 的 'rmodel' 与 export 的 'model' 同视为「模型」列）：
+      forecast → 预测列；warning → 预警列；model/rmodel → 模型列。
+    缺省/非法 cfg → 全开（原列表）；绝不抛。
+    """
+    cfg = cfg if isinstance(cfg, dict) else get_result_cols_cfg()
+    hide = set()
+    if not cfg.get('forecast', True):
+        hide.add('forecast')
+    if not cfg.get('warning', True):
+        hide.add('warning')
+    if not cfg.get('model', True):
+        hide |= {'model', 'rmodel'}
+    if not hide:
+        return list(calc_cols)
+    return [c for c in calc_cols if c[1] not in hide]
 
 
 # ============================================================

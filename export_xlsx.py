@@ -114,11 +114,24 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = 
             break
     if not sel_cols:
         sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
-    # t6：「店铺」列固定紧跟「地区」（store_name 未提供时留空，列结构保持稳定）
-    # t8：「预警」列紧跟「模型」（滞销⚠/超卖🔥/超卖⚠/低置信⚠，' / '分隔；旧数据无字段默认空）
-    # R2 预测：「预测日销」紧跟「可售卖天数」（与 GUI 结果表列序一致；t5 forecast_next_period，
-    #          旧缓存 plans 无 forecast 字段 → 空单元格，便于 Excel 数值处理）
-    headers = ['地区', '店铺', '仓库'] + list(sel_cols) + ['可售卖天数', '预测日销', '状态', '补货量', '模型', '预警']
+    # 「店铺」列固定紧跟「地区」（store_name 未提供时留空，列结构保持稳定）
+    # 「预警」列紧跟「模型」（滞销⚠/超卖🔥/超卖⚠/低置信⚠，' / '分隔；旧数据无字段默认空）
+    # R2 预测：「预测日销」紧跟「可售卖天数」（与 GUI 结果表列序一致； forecast_next_period，
+    # 旧缓存 plans 无 forecast 字段 → 空单元格，便于 Excel 数值处理）
+    # v1.5.13：结果列开关（预警/预测/模型可关）——列表与导出共用 filter_result_cols
+    try:
+        from utils import filter_result_cols, get_result_cols_cfg
+        _kept_cols = filter_result_cols(
+            [('可售卖天数', 'ratio'), ('预测日销', 'forecast'), ('状态', 'status'),
+             ('补货量', 'qty'), ('模型', 'model'), ('预警', 'warning')],
+            get_result_cols_cfg())
+    except Exception:
+        _kept_cols = [('可售卖天数', 'ratio'), ('预测日销', 'forecast'), ('状态', 'status'),
+                      ('补货量', 'qty'), ('模型', 'model'), ('预警', 'warning')]
+    _has_fc = any(c[1] == 'forecast' for c in _kept_cols)
+    _has_model = any(c[1] in ('model', 'rmodel') for c in _kept_cols)
+    _has_warn = any(c[1] == 'warning' for c in _kept_cols)
+    headers = ['地区', '店铺', '仓库'] + list(sel_cols) + [c[0] for c in _kept_cols]
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = styles['header_font']
@@ -157,19 +170,21 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = 
                         v = strip_tail_noise(v)  # 仅勾选文本列剥「查看地址/日期时间」词条噪音
                 vals.append(_sanitize_cell(v))
             vals += [p.get('ratio', p.get('days_left', ''))]
-            # R2 预测：预测日销列（t5 forecast_next_period，float|None）；
-            # 缺字段/无历史 → 空单元格（§4：空即"无预测"，不编 0 误导补货量计算）
+            # v1.5.13：列开关关闭时对应值不写入（headers 已过滤，值序需同步）
             _fc = p.get('forecast')
             try:
                 _fc = round(float(_fc), 2) if _fc is not None else ''
             except (TypeError, ValueError):
                 _fc = ''
-            vals.append(_fc)
+            if _has_fc:
+                vals.append(_fc)
             vals += [_sanitize_cell(p['status']), p['qty']]
-            # t13 P3-A：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
-            vals.append(_sanitize_cell(p.get('model', 'classic')))
-            # t8：预警列（高级模式预警标签：滞销⚠/超卖🔥/超卖⚠/低置信⚠；旧数据无此字段默认空字符串）
-            vals.append(_sanitize_cell(p.get('warning', '') or ''))
+            if _has_model:
+                # P3-A：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
+                vals.append(_sanitize_cell(p.get('model', 'classic')))
+            if _has_warn:
+                # 预警列（高级模式预警标签：滞销⚠/超卖🔥/超卖⚠/低置信⚠；旧数据无此字段默认空字符串）
+                vals.append(_sanitize_cell(p.get('warning', '') or ''))
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(row=row, column=ci, value=v)
                 c.font = styles['cell_font']
@@ -179,9 +194,11 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = 
                     c.fill = styles['fills'][p['color']]
             row += 1
 
-    # t6：列宽同步加「店铺」列（地区10 / 店铺14 / 仓库12）；t8 在「模型」后追加「预警」(16)
-    # R2 预测：「预测日销」10（「可售卖天数」后第二位）
-    widths = [10, 14, 12] + [20 if '名称' in c or '商品' in c else 12 for c in sel_cols] + [10, 10, 12, 10, 10, 16]
+    # 列宽同步加「店铺」列（地区10 / 店铺14 / 仓库12）； 在「模型」后追加「预警」(16)
+    # R2 预测：「预测日销」10（「可售卖天数」后第二位）；v1.5.13 列开关后按 kept 列对齐
+    _width_map = {'可售卖天数': 10, '预测日销': 10, '状态': 12, '补货量': 10, '模型': 10, '预警': 16}
+    widths = [10, 14, 12] + [20 if '名称' in c or '商品' in c else 12 for c in sel_cols] \
+        + [_width_map.get(c[0], 10) for c in _kept_cols]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
