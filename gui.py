@@ -1190,7 +1190,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             txt.configure(state="disabled")
             txt.pack(fill="both", expand=True, padx=5, pady=5)
             # 可选图片（v1.4.5 bug hunt F29：下载移出主线程——urlopen 最长 10s 会冻结事件循环；
-            # 此前 `Thread(lambda: after(lambda: _apply_img(_fetch_img())))` 的内层
+            # 验收回归：此前 `Thread(lambda: after(lambda: _apply_img(_fetch_img())))` 的内层
             # lambda 由主线程执行时仍调 _fetch_img()（urlopen 在主线程）——改为 worker 内取图
             if image_url:
                 def _fetch_img():
@@ -1507,7 +1507,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 构建按钮内容，否则 nav_frame 展开是空壳（用户报告：启动时导航空白，点 ☰
         # 收起再展开按钮才出现）。_build_nav 引用 page_* 帧，必须在 8 个 page Frame
         # 全部创建之后、_current_page 赋值之后调用。
-        # 修 v4f注释失实 注释失实：_build_ui 预构建后 nav_buttons 恒非空，
+        # 修正注释失实：_build_ui 预构建后 nav_buttons 恒非空，
         # _toggle_nav 的懒构建守卫实际不再触发（仅作历史防御保留）。
         self._build_nav()
 
@@ -1712,7 +1712,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 self._build_nav()
 
     def _build_nav(self):
-        # 修 v4f幂等守卫：幂等守卫——重复调用会重建按钮并泄漏旧 widget（旧
+        # 修复：幂等守卫——重复调用会重建按钮并泄漏旧 widget（旧
         # command 仍可触发）。当前调用点均有外层守卫，此处兜底防御未来调用点。
         if self.nav_buttons:
             return
@@ -1775,7 +1775,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 # 选中项：立即跳变（一点即用优先，不动画）
                 btn.configure(bg=self.C_CARD_HDR, fg="#FFFFFF")
             else:
-                # + 修正：先判动画资格——_animate_nav_leave 的动画链
+                # 先判动画资格——_animate_nav_leave 的动画链
                 # 自保证终态（_do 终步 configure + 异常熔断 + cancel snap 三重兜底），
                 # 若先无条件 configure 再判 _cur==C_CARD_HDR 则永远读到 C_BG、
                 # 渐隐动画永不触发（无害死代码）。非动画位显式 configure 兜底不漏配。
@@ -3868,7 +3868,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                         # 保留原值单位（'85份' → 用户改 90 → '90份'），
                         # v1.4.5（bug hunt F25）：先 strip_tail_noise 再去尾部非数字串——
                         # 否则 '69份 查看地址' 会把'查看地址'当单位回写（_raw 污染）
-                        # （fix-review P0）：此处需自导 re——旧补丁用了未定义 _re2
+                        # 验收回归（fix-review P0）：此处需自导 re——旧补丁用了未定义 _re2
                         # → NameError → 刷新计算对 OCR 数据整体失效
                         import re as _re2
                         from ocr import strip_tail_noise as _stn2

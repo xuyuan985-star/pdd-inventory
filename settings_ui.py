@@ -2062,7 +2062,7 @@ class SettingsUIMixin:
                     pass
 
     def _build_calibrate_inline(self, parent):
-        """ (⑤)：原 _build_calibrate_tab 改名为 _build_calibrate_inline。
+        """校准页构建函数更名 _build_calibrate_inline。
         原因：grep 显示零外部引用（仅 _build_general_page L76 调用），
         命名 "tab" 误导（实际是 _build_general_page 内的 section，不是独立 nav page）。
         保留为私有 method 而非 inline 函数体，因为函数体 200+ 行，inline 改动太大。

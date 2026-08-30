@@ -3888,7 +3888,7 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
             # 出现点若位于同行 '# t28' 尾随注释之内（前缀已含 '# t28'）则属文档化变更
             line_start = src.rfind('\n', 0, pos) + 1
             line_prefix = src[line_start:pos]
-            if True:  # 源码注释已清理，直接判定任何 padx=14 均为残留
+            if True:  # 注释已清理，任何 padx=14 均为残留
                 real_residue.append(ctx)
         self.assertEqual(real_residue, [],
                          f'stats_ui.py 仍有 {len(real_residue)} 处 padx=14 真正残留（不在 t28 注释内）：{real_residue}')

@@ -61,8 +61,8 @@ _SESSION_STATE = {
 _WRITE_FAIL_THRESHOLD = 5
 _WRITE_FAIL_STATE = {
     'consecutive': 0,  # 当前连续失败次数（写成功清零）
-    'last_error': '',   # 最近一次错误摘要
-    'alerted': False,   # 是否已向 GUI 报过警（防重复弹）
+    'last_error': '',  # 最近一次错误摘要
+    'alerted': False,  # 是否已向 GUI 报过警（防重复弹）
 }
 
 # v1.4.7 P3-R1-L3：本月 cost 内存增量缓存（_refresh_cost_label 热路径优化）。
@@ -70,7 +70,7 @@ _WRITE_FAIL_STATE = {
 # 此后每 60s 轮询仅读内存，不再扫 jsonl（10 万行级别从 ~50ms 降到常数时间）。
 # 注：仅统计非估算且 cost_cny 非空行（与 aggregate('month').cost_cny 同口径）。
 _MONTH_COST_CACHE = {
-    'year': -1,   # 缓存对应的年份；跨月变化时强制重建
+    'year': -1,  # 缓存对应的年份；跨月变化时强制重建
     'month': -1,  # 缓存对应的月份
     'cost': 0.0,  # 累计 cost（float）
     'built': False,  # 是否已初始化（首次走 jsonl 重算，之后走增量）
@@ -82,6 +82,42 @@ _MONTH_COST_CACHE = {
 # 单独 mtime 不够安全（Windows NTFS 时间精度 100ns 但 Python float 在快速覆写时
 # 可能返回同值；size 一起判定可解决"同 mtime 不同内容"边界）。
 _ENABLED_CACHE = {'mtime': -1, 'size': -1, 'enabled': True, 'exists': False}
+
+# ── v1.5.12 按用途汉化（用户反馈：用量明细「按用途」大量英文未汉化）──
+# call_site 是埋点审计标签（中文/英文混合：'OCR 识别'/'定位' 与 'locate_elements'
+# 等并存）。展示层统一映射中文；未知 key 保留原样（不猜不丢）。
+CALL_SITE_L10N = {
+    'OCR 识别': '表格识别（OCR）',
+    '定位': '界面定位',
+    'vision': '视觉调用',
+    'live': '实时截图识别',
+    'live_screenshot': '实时截图识别',
+    'real_time': '实时截图识别',
+    'batch': '批量识别',
+    'file': '文件图片识别',
+    'import': '表格导入',
+    'ocr_table': '表格识别（OCR）',
+    'ocr_verify': '二次识别复核',
+    'locate': '界面定位',
+    'locate_elements': '按钮/元素定位',
+    'locate_table': '表格区域定位',
+    'read_total_count': '读取官方总条数',
+    'read_selected_province': '读取省市区',
+    'check_page_state': '页面状态检测',
+    'detect_anomaly': '页面异常检测',
+    'probe_columns': '识别列探测',
+    'total_count': '读取总条数',
+    'unknown': '未知用途',
+}
+
+
+def display_call_site(site) -> str:
+    """call_site → 展示用中文名（v1.5.12 汉化；未知 key 原文兜底，不抛）。"""
+    try:
+        s = str(site or '')
+        return CALL_SITE_L10N.get(s, s or '未知用途')
+    except Exception:
+        return '未知用途'
 
 
 def _log_path() -> str:
@@ -738,7 +774,7 @@ def reset_month(month: str = None) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────
-# t12 P2-C：实时截图识别当日计数（按日期/call_site 双键匹配）
+# P2-C：实时截图识别当日计数（按日期/call_site 双键匹配）
 # 用于免费版每日 50 次门控（enforce=true 时）
 # ──────────────────────────────────────────────────────────────────
 def count_today_live_screenshot() -> int:

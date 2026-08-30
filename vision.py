@@ -192,7 +192,7 @@ def _pick_vision_model():
         mdl = p.get('custom_endpoint', '') or p.get('model', '') or mdl_name or default_mdl
         key = p.get('api_key', '') or os.environ.get(
             {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(prov_name, ''), '')
-        # v1.4.8 P1-C-fix（t18）：settings.json 密文 → 运行时解密
+        # v1.4.8 P1-C-fix：settings.json 密文 → 运行时解密
         # 函数内延迟 import：vision 已被 utils/logger 间接 import 过的项目里安全
         try:
             from utils import decrypt_secret
@@ -264,7 +264,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
         _providers = (_gac().get('providers') or {})
         _glm = (_providers.get('glm', {}) or {}) if isinstance(_providers, dict) else {}
         _glm_key = _glm.get('api_key', '') or os.environ.get('ZHIPU_API_KEY', '')
-        # v1.4.8 P1-C-fix（t18）：fallback 到智谱端点时同样需解密
+        # v1.4.8 P1-C-fix：fallback 到智谱端点时同样需解密
         if _glm_key:
             try:
                 from utils import decrypt_secret
@@ -356,7 +356,8 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
     try:
         if _usage is not None and _usage_store is not None:
             _u_pricing = _load_usage_pricing()
-            _u_entry = (_u_pricing.get(active) or {}).get(mdl) if isinstance(_u_pricing, dict) else None
+            # v1.5.12：前缀回退取价（快照模型名命中基础名价目，修"计价瘫痪"）
+            _u_entry = _usage_extractor.resolve_pricing(_u_pricing, active, mdl)
             _u_cost = _usage_extractor.compute_cost(_usage, _u_entry)
             _usage_store.record(active, _api_type, mdl, endpoint, _usage, _u_cost,
                                 str(_usage.get('source') or '').startswith('fallback'),

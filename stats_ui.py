@@ -758,7 +758,14 @@ class StatsPagesMixin:
             sub_lbl.config(text=" ".join(sub) or " ")
         self._usage_month_lbl.config(text=f"按模型（{panel.get('month_label', '')}）")
         self._refill_usage_tree(self._usage_model_tree, panel.get('by_model'))
-        self._refill_usage_tree(self._usage_site_tree, panel.get('by_call_site'))
+        # v1.5.12：按用途汉化（call_site 审计标签 → 中文；未知 key 原文兜底）
+        try:
+            from usage_store import display_call_site as _dcs
+            _sites = panel.get('by_call_site') or {}
+            _sites_zh = {_dcs(k): v for k, v in _sites.items()}
+        except Exception:
+            _sites_zh = panel.get('by_call_site') or {}
+        self._refill_usage_tree(self._usage_site_tree, _sites_zh)
         self._usage_chart_redraw()
 
     def _usage_chart_on_resize(self, event):

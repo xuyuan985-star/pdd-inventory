@@ -745,7 +745,8 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 try:
                     if _usage is not None and _usage_store is not None:
                         _u_pricing = _load_usage_pricing()
-                        _u_entry = (_u_pricing.get(active) or {}).get(mdl) if isinstance(_u_pricing, dict) else None
+                        # v1.5.12：前缀回退取价（快照模型名命中基础名价目，修"计价瘫痪"）
+                        _u_entry = _usage_extractor.resolve_pricing(_u_pricing, active, mdl)
                         _u_cost = _usage_extractor.compute_cost(_usage, _u_entry)
                         _usage_store.record(active, _api_type, mdl, cur_endpoint, _usage, _u_cost,
                                             str(_usage.get('source') or '').startswith('fallback'),
@@ -898,7 +899,7 @@ def strip_tail_noise(value) -> str:
             changed = True
     _out = _re.sub(r'[ \t\u3000\r\n]+', ' ', s).strip()
     if not _out and str(value).strip():
-        # v1.4.5（bug hunt F4）整值保护（N1/C7 收窄）：仅当原值呈"日期/数字形态"
+        # v1.4.5（bug hunt F4）整值保护（验收回归 N1/C7 收窄）：仅当原值呈"日期/数字形态"
         # 才保留原文（防 '2024-05-04' 这类真实数据被清空）；纯词条噪音（'查看地址'/
         # '更新记录'）仍剥空，避免噪音文本入库/导出
         _orig = str(value).strip()
@@ -1391,7 +1392,7 @@ def merge_verify_items(items: list, verify_items: list) -> list:
                 for _f in ('stock', 'sales'):
                     a = str(it.get(_f) or '')
                     b = str(v.get(_f) or '')
-                    # v1.4.5（bug hunt F8 + N2/C8）：仅真空缺（''）才用副模型补全——
+                    # v1.4.5（bug hunt F8 + 验收回归 N2/C8）：仅真空缺（''）才用副模型补全——
                     # 真实库存/销量为 0 是合法业务值，不得被副模型误读值覆盖
                     if a == '' and b and b != '0':
                         it[_f] = v[_f]
@@ -1798,7 +1799,7 @@ USER_MSG_NO_MODEL_AVAILABLE = '未配置可用的识别模型，请到「API 管
 USER_MSG_FATAL_QUOTA = '接口额度或鉴权异常，请检查账户余额或 API Key 是否正确'
 """_is_fatal_api_err 命中（额度耗尽/401/403）时的归一文案。"""
 
-# ── v1.5.11 报错提示体系（实施；对齐 docs/ERROR_SYSTEM_DESIGN.md）──
+# ── v1.5.11 报错提示体系（对齐错误提示设计文档）──
 USER_MSG_MODEL_NOT_FOUND = ('识别模型不存在或模型名无效 —— 请到「API 管理」检查模型名\n'
                             '（如 qwen3-vl-plus / glm-4.6v / Doubao 用 ep-xxx 接入点 ID）')
 """model_not_found 分类：1211 InvalidEndpointOrModel / model not found / 模型不存在。

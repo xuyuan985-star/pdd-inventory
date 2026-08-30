@@ -301,6 +301,46 @@ def estimate_fallback(content: str, prompt: str, provider: str,
 # §5.3 费用计算 compute_cost
 # ──────────────────────────────────────────────────────────────────
 
+def resolve_pricing(pricing, provider, model):
+    """取模型单价：精确命中 → 快照后缀回退 → 逐段前缀回退 → None。
+
+    页面价目表以基础名存储（如 'qwen3-vl-plus'），实际调用模型名常带快照后缀
+    （'qwen3-vl-plus-2025-12-19' / '-latest'）——精确匹配查不到价格导致计价
+    恒 0（用户反馈"token 抓到了计价瘫痪"的根因之一）。v1.5.12 前缀回退修复。
+
+    回退链：
+      1. model 精确命中 pricing[provider][model]
+      2. 去掉尾部快照（-YYYY-MM-DD / -latest / -instruct）后命中
+      3. 从右往左逐段截断前缀命中（qwen3-vl-plus-2025-12-19 → qwen3-vl-plus）
+      失败返 None（不抛，调用方保持 '?' 缺价语义）。
+    """
+    try:
+        if not isinstance(pricing, dict) or not provider or not model:
+            return None
+        pv = pricing.get(provider)
+        if not isinstance(pv, dict):
+            return None
+        m = str(model).strip()
+        if not m:
+            return None
+        if m in pv:
+            return pv[m]
+        # 快照后缀回退：qwen3-vl-plus-2025-12-19 / qwen3-vl-plus-latest / qwen2.5-vl-32b-instruct
+        import re as _re
+        cand = _re.sub(r'-\d{4}-\d{2}-\d{2}(?:-.*)?$|-latest$', '', m)
+        if cand and cand != m and cand in pv:
+            return pv[cand]
+        # 逐段前缀回退
+        parts = m.split('-')
+        for i in range(len(parts) - 1, 1, -1):
+            cand = '-'.join(parts[:i])
+            if cand in pv:
+                return pv[cand]
+        return None
+    except Exception:
+        return None
+
+
 def compute_cost(usage, pricing_entry) -> float:
     """按 §5.3 计算 cost_cny（元）；pricing 缺失返回 0.0（面板显示 ?）。
 
