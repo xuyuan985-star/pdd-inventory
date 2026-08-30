@@ -14,11 +14,11 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 # 大写 key（Pillow/PyYAML）会导致匹配失败漏打包（v1.4 审查修复）
 PIP_TO_INTERNAL = {
     'opencv-python':        ['cv2'],
-    'numpy':                ['numpy', 'numpy.libs'],  # + numpy-*.dist-info 通配
+    'numpy':                ['numpy', 'numpy.libs'],          # + numpy-*.dist-info 通配
     'pillow':               ['PIL'],
     'pywin32':              ['win32', 'pywin32_system32'],
     'lxml':                 ['lxml'],
-    'cryptography':         ['cryptography'],  # + cryptography-*.dist-info
+    'cryptography':         ['cryptography'],                 # + cryptography-*.dist-info
     'certifi':              ['certifi'],
     'pyyaml':               ['yaml'],
     'charset-normalizer':   ['charset_normalizer'],
@@ -265,7 +265,7 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
         # 资源文件（仅当变更时）— settings.json 是用户本机配置，绝不进包
         if resources_changed:
-            # v1.4.5（bug hunt F17 C6）：检测已加但仍需写包——模板/文档资源与 icon/regions
+            # v1.4.5（bug hunt F17 验收回归 C6）：检测已加但仍需写包——模板/文档资源与 icon/regions
             # 同一循环进包（settings_template.json/使用说明.txt 在 onedir 根，非 _internal）
             # v1.4.6（bug hunt L21/R4）：visited 去重——同资源若 onedir 与 _internal 双存在，arcname
             # 重复会写两条 zipfile 重复条目（提取时先写后写覆盖，Warning）。只写第一次命中。
@@ -339,7 +339,7 @@ def build_update_zip(onedir_path: str, output_path: str, force: bool = False):
 
 
 if __name__ == '__main__':
-    # v1.4.5（bug hunt F18- ）：git 不可用时明确报错退出——此前静默按"首次发布"打
+    # v1.4.5（bug hunt F18-②）：git 不可用时明确报错退出——此前静默按"首次发布"打
     # 全量包且文件仍叫 _update.zip，会误导发布（增量基准丢失）
     if _run(['git', 'rev-parse', '--is-inside-work-tree']) != 'true':
         print('错误: 当前目录不是 git 仓库（或 git 不可用）。增量包依赖 git tag/diff 基准，'
@@ -371,7 +371,7 @@ if __name__ == '__main__':
     print(f'[增量打包] 源: {onedir}')
     print(f'[增量打包] 输出: {output}')
     build_update_zip(onedir, output, force='--force' in sys.argv)
-    # v1.4.5（bug hunt F18- ）：构建后自动写 .sha256——之前只靠人工/发布时补传，漏传
+    # v1.4.5（bug hunt F18-①）：构建后自动写 .sha256——之前只靠人工/发布时补传，漏传
     # 即触发更新器 fail-open（跳过校验安装）
     import hashlib
     _h = hashlib.sha256(open(output, 'rb').read()).hexdigest()

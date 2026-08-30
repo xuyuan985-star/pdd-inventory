@@ -496,7 +496,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
 
     key = provider.get('api_key', '') or os.environ.get(
         {'doubao':'ARK_API_KEY','qwen':'DASHSCOPE_API_KEY','glm':'ZHIPU_API_KEY'}.get(active, ''), '')
-    # v1.4.8 -fix：settings.json 里 api_key 已是 dpapi:v1: 密文，
+    # v1.4.8 P1-C-fix：settings.json 里 api_key 已是 dpapi:v1: 密文，
     # 裸发给厂商必 401。运行时解密（明文直通 / 密文 → 明文 / 失败 → ""）
     try:
         from utils import decrypt_secret
@@ -585,7 +585,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 endpoint = _alt.get('endpoint', '')
                 key = _alt.get('api_key', '') or os.environ.get(
                     {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
-                # v1.4.8 -fix：强制模型走副 provider 时同样需要解密 key
+                # v1.4.8 P1-C-fix：强制模型走副 provider 时同样需要解密 key
                 try:
                     from utils import decrypt_secret
                     key = decrypt_secret(key)
@@ -642,7 +642,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
         if is_glm and (_is_official_ali or _is_official_ark):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers_global.get('glm', {}).get('api_key', '') if isinstance(providers_global, dict) else ''
-            # v1.4.8 -fix：fallback 到智谱端点时同样需解密
+            # v1.4.8 P1-C-fix：fallback 到智谱端点时同样需解密
             if cur_key:
                 try:
                     from utils import decrypt_secret
@@ -1171,7 +1171,7 @@ def _write_ocr_debug(cols, rows, note=''):
                 _hist = [_hist]
         except Exception:
             _hist = []
-        # v1.4.8 ：note 字段可能含 API 报错文本（带 Authorization/Bearer/api_key），
+        # v1.4.8 P1-C：note 字段可能含 API 报错文本（带 Authorization/Bearer/api_key），
         # 落盘前脱敏（仅字符串字段；columns/rows 是表格数据，不会含凭据）
         try:
             from utils import _sanitize_for_log
@@ -1646,11 +1646,12 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
     # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测
     # 换了 VL 主模型后副模型 qwen3.5-ocr 每轮都报'无法解析 JSON'然后降级）。
     if secondary_model and _is_qwen_ocr(secondary_model):
-        _ocr_dlog(f"副模型({secondary_model})为OCR专用模型，不参与表格JSON交叉验证——本次按单模型(主)识别")
+        # v1.5.11：提示友好化——不做坏事地告知"设计跳过"语义，并给出正确用法
+        _ocr_dlog(f"副模型({secondary_model})为OCR专用模型，不参与表格交叉验证——按单模型识别（OCR 副模型用于文字/数字复核属正常语义）")
         primary = _one(forced_model=None)
         if primary:
             for _it in primary:
-                _it['_dual_degraded'] = True  # GUI 提示双模型未生效
+                _it['_dual_skipped_ocr'] = True  # v1.5.11：区别于 _dual_degraded（失败），这是设计跳过
         return primary
 
     # 主模型
@@ -1796,6 +1797,27 @@ USER_MSG_NO_MODEL_AVAILABLE = '未配置可用的识别模型，请到「API 管
 
 USER_MSG_FATAL_QUOTA = '接口额度或鉴权异常，请检查账户余额或 API Key 是否正确'
 """_is_fatal_api_err 命中（额度耗尽/401/403）时的归一文案。"""
+
+# ── v1.5.11 报错提示体系（实施；对齐 docs/ERROR_SYSTEM_DESIGN.md）──
+USER_MSG_MODEL_NOT_FOUND = ('识别模型不存在或模型名无效 —— 请到「API 管理」检查模型名\n'
+                            '（如 qwen3-vl-plus / glm-4.6v / Doubao 用 ep-xxx 接入点 ID）')
+"""model_not_found 分类：1211 InvalidEndpointOrModel / model not found / 模型不存在。
+v1.5.11：必须在 fatal_quota 之前命中——用户模型名打错时不再误导去查余额。"""
+
+USER_MSG_DUAL_CONFIG = '双模型配置需调整 —— 请到「设置 → API 管理」按要求更换副模型'
+"""dual_config_invalid 分类：主副模型相同 / 副模型为 OCR 专用等提示类消息。"""
+
+USER_MSG_API_UNREACHABLE = '网络连接失败 —— 请检查网络或代理设置后重试'
+"""api_unreachable 分类：connection/proxy/DNS/SSL 等网络层错误。"""
+
+USER_MSG_NO_TABLE = '未识别到表格数据 —— 请确认截图包含完整的订货管理表格后重试'
+"""no_table_detected 分类：识别结果为空（截图不含表格/页面未就绪）。"""
+
+USER_MSG_DUAL_SEC_OCR = ('副模型为 OCR 专用（只做文字/数字复核），本次按单模型识别（数字仍准）；\n'
+                         '想双模型表格交叉验证，请把主副模型都换成 VL 通用视觉模型')
+"""副模型 qwen*-ocr 时跳过交叉验证的友好说明（识别不中断，仅状态栏提示）。"""
+
+USER_MSG_DUAL_MAIN_EQ_SEC = '主副模型相同，本次已按单模型识别 —— 双模型验证请配置不同的副模型'
 
 USER_MSG_CSV_ENCODING = '无法识别 CSV 编码，请用记事本另存为 UTF-8 后重试'
 """table_import._read_csv 编码探测全失败时的归一文案。"""

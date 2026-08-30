@@ -139,14 +139,14 @@ class StatsPagesMixin:
                   fg=self.C_TEXT).pack(anchor='w', padx=16, pady=(14, 2))
         self._lbl(page, text="识别数据按日汇总（仅保存在本机 history.db，不上传）",
                   font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(0, 8))  # : (0,6)→(0,8)
+            anchor='w', padx=16, pady=(0, 8))
 
         # ── 筛选行：店铺下拉+ 地区下拉（含'全部'）+ 天数 30/90/180 + 汇总提示 ──
         # R1：3 个筛选段用独立 Frame（side='left'，内部 label+Combo 同节奏），
         # 段间固定 padx；summary 留右侧贴边。Combo 列宽走 history_filter_segments()
         # 单一来源，避免硬编码漂移。
         bar = tk.Frame(page, bg=self.C_BG)
-        bar.pack(fill="x", padx=16, pady=(0, 6))  # : (0,4)→(0,6)
+        bar.pack(fill="x", padx=16, pady=(0, 6))
         # 第一段：店铺
         store_seg = tk.Frame(bar, bg=self.C_BG)
         store_seg.pack(side='left')
@@ -194,7 +194,7 @@ class StatsPagesMixin:
             tree.heading(cid, text=text)
             tree.column(cid, width=w, anchor='center')
         tree_wrap = tk.Frame(page, bg=self.C_BG)
-        tree_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))  # : (0,4)→(0,8)
+        tree_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))
         vsb = ttk.Scrollbar(tree_wrap, orient='vertical', command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
@@ -207,7 +207,7 @@ class StatsPagesMixin:
             if not sel:
                 return
             vals = tree.item(sel[0], 'values')
-            # 修 -F13：空态占位行（日期列为 '--'）不响应双击，
+            # 修 v4f-F13：空态占位行（日期列为 '--'）不响应双击，
             # 否则会打开"暂无数据 · --"的空明细窗困扰用户
             if not vals or vals[0] == '--':
                 return
@@ -241,12 +241,12 @@ class StatsPagesMixin:
             self._history_page_refresh()
 
         btns = tk.Frame(page, bg=self.C_BG)
-        btns.pack(fill="x", padx=16, pady=(4, 14))  # : (2,12)→(4,14)
+        btns.pack(fill="x", padx=16, pady=(4, 14))
         self._mk_btn(btns, "🗑 清空全部历史", clear_all_hist, kind='ghost',
                      font=(self.FONT[0], 9)).pack(side="right", padx=4)
         self._lbl(btns, text="双击行看当日明细；明细行双击看单商品库存趋势折线",
                   font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
-            side="left", padx=(0, 4))  # : 离左缘 4px
+            side="left", padx=(0, 4))
 
         # 筛选变化即刷新（trace 防重入见 _history_page_refresh）
         self._hist_reg_var.trace('w', lambda *_: self._history_page_refresh())
@@ -402,9 +402,9 @@ class StatsPagesMixin:
         for key, label in (('today', '今日'), ('week', '本周'), ('month', '本月'), ('all', '总计')):
             cell = tk.Frame(topbar, bg=self.C_BG, highlightthickness=1,
                             highlightbackground="#EAEAEA")
-            cell.pack(side="left", expand=True, fill="x", padx=6)  # : 4→6 视觉呼吸
+            cell.pack(side="left", expand=True, fill="x", padx=6)
             self._lbl(cell, text=label, font=(self.FONT[0], 8), fg=self.C_MUTED,
-                      bg=self.C_BG).pack(pady=(8, 0))  # : (6,0)→(8,0)
+                      bg=self.C_BG).pack(pady=(8, 0))
             cost_lbl = self._lbl(cell, text="¥0.00", font=(self.FONT[0], 13, 'bold'),
                                  fg=self.C_TEXT, bg=self.C_BG)
             cost_lbl.pack()
@@ -657,7 +657,7 @@ class StatsPagesMixin:
                      font=(self.FONT[0], 8)).pack(side="left", padx=3)
         self._mk_btn(pbtns, "保存价格表", save_pricing, kind='primary',
                      font=(self.FONT[0], 8, 'bold')).pack(side="right", padx=3)
-        # A8：重置本月数据——危险操作·用 C_RED_BG 视觉区分（修正：不新建 _warn_btn，复用 _mk_btn 返回值 config）
+        # 实施 A8：重置本月数据——危险操作·用 C_RED_BG 视觉区分（v4f 修正：不新建 _warn_btn，复用 _mk_btn 返回值 config）
         _reset_btn = self._mk_btn(pbtns, "重置本月数据", reset_this_month, kind='primary',
                      font=(self.FONT[0], 8))
         _reset_btn.configure(bg=self.C_RED_BG)

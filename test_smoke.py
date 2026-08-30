@@ -412,6 +412,11 @@ class TestPrivacy(unittest.TestCase):
             if f.startswith('_') or f == 'test_smoke.py':
                 # 跳过临时扫描脚本/测试本身（其内容含敏感词列表）
                 continue
+            # v1.5.11.2：settings.json / regions.json 是用户运行时数据（gitignore 已排除、
+            # 绝不入仓），但会被识别结果写入真实 SKU/地区——扫它们会让「用户一用就随机红」。
+            # 隐私扫描只针对**入仓文件**（.gitignore 之外）。
+            if f in ('settings.json', 'regions.json', 'settings.json.bak'):
+                continue
             with open(os.path.join(HERE, f), encoding='utf-8', errors='replace') as fp:
                 content = fp.read()
             for s in self.SENSITIVE:
@@ -547,11 +552,11 @@ class TestUpdaterRegression(unittest.TestCase):
             os.makedirs(extracted)
             os.makedirs(target)
             with open(os.path.join(extracted, 'deleted-files.txt'), 'w', encoding='utf-8') as f:
-                f.write('..\\escape.txt\n')  # 穿越
-                f.write('templates/legit.csv\n')  # 白名单内
-                f.write('PDD EZ.exe\n')  # exe 拒绝
-                f.write('C:/absolute.txt\n')  # 绝对路径拒绝
-                f.write('random_other.txt\n')  # 白名单外
+                f.write('..\\escape.txt\n')          # 穿越
+                f.write('templates/legit.csv\n')     # 白名单内
+                f.write('PDD EZ.exe\n')              # exe 拒绝
+                f.write('C:/absolute.txt\n')         # 绝对路径拒绝
+                f.write('random_other.txt\n')        # 白名单外
             with open(os.path.join(target, 'escape.txt'), 'w') as f:
                 f.write('x')
             os.makedirs(os.path.join(target, 'templates'))
@@ -619,7 +624,7 @@ class TestUpdaterRegression(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════
-# v1.4.7 商业升级三工作流回归合并
+# v1.4.7 商业升级三工作流回归合并（t8：t5 WS-C + t6 WS-B + t7 WS-A）
 # 来源：test_tmp_wsc.py / test_tmp_wsb.py / test_tmp_wsa.py（合并后删除）。
 # 既有锚点测试保持不动；本段类名与上文无冲突。
 # ══════════════════════════════════════════════════════════════════
@@ -1161,11 +1166,11 @@ class TestWriteTemplate(unittest.TestCase):
             wb = load_workbook(path, read_only=True, data_only=True)
             self.assertIn('数据样例', wb.sheetnames)
             self.assertIn('列名说明', wb.sheetnames)
-            # 验证 Shee 有表头 + 2 行示例
+            # 验证 Sheet1 有表头 + 2 行示例
             ws1 = wb['数据样例']
             rows = list(ws1.iter_rows(values_only=True))
             self.assertEqual(len(rows), 3, f'Sheet1 应 3 行（表头 + 2 示例），实际 {len(rows)}')
-            # 验证 Shee 有 5 字段说明 + 表头
+            # 验证 Sheet2 有 5 字段说明 + 表头
             ws2 = wb['列名说明']
             rows2 = list(ws2.iter_rows(values_only=True))
             self.assertEqual(len(rows2), 6, f'Sheet2 应 6 行（表头 + 5 字段），实际 {len(rows2)}')
@@ -2080,7 +2085,7 @@ class TestDebugDump(unittest.TestCase):
         self.ux._debug_dump_response('doubao', 'ep-abc/with:colon', 'ep', {'x': 1}, None)
         archive_dir = os.path.join(self.tmp, 'output', 'usage_archive')
         files = os.listdir(archive_dir)
-        # 文件名不应含 / 或
+        # 文件名不应含 / 或 :
         for fn in files:
             self.assertNotIn('/', fn)
             self.assertNotIn(':', fn)
@@ -2595,7 +2600,7 @@ class TestHistoryDB(unittest.TestCase):
 
 # ════════════════════════════════════════════════════════════════════════════
 # v1.4.x 导航页重构：📈 历史趋势 / 💰 用量明细 从弹窗独立为导航页
-# 验收测试（结构性/静态断言，无 Tk 主循环依赖）
+# t22 验收测试（结构性/静态断言，无 Tk 主循环依赖）
 # ════════════════════════════════════════════════════════════════════════════
 
 def _read(path):
@@ -2977,7 +2982,7 @@ class TestLicense(unittest.TestCase):
         self.assertEqual(len(a), 32)  # 16 字节 hex = 32 chars
 
     def test_get_tier_cache_ttl_expires_and_reevaluates(self):
-        """缓存 TTL=300s 到期后必须重验。
+        """t24 修复包 A (BUG-1)：缓存 TTL=300s 到期后必须重验。
 
         修前：get_tier('', enforce=True) 第一次返 'free'，缓存永不过期，
         外部修改 settings.json 后该进程内仍返 'free' 直到重启。
@@ -3001,7 +3006,7 @@ class TestLicense(unittest.TestCase):
         _lic.reset_cache()
 
     def test_get_tier_cache_ttl_fresh_hit_uses_cache(self):
-        """TTL 内命中应直接返缓存，不重验。
+        """t24 修复包 A (BUG-1)：TTL 内命中应直接返缓存，不重验。
 
         防回归：避免 TTL 实现错误把「同 license_text 重复调用」也走重验路径。
         """
@@ -3019,7 +3024,7 @@ class TestLicense(unittest.TestCase):
         _lic.reset_cache()
 
     def test_settings_ui_enforce_rollback_on_save_failure(self):
-        """授权开关写盘失败时必须回滚 UI。
+        """t24 修复包 A (BUG-13)：_on_enforce_toggle 写盘失败时必须回滚 UI。
 
         直接验证源码：except 分支内必须执行 _enforce_var.set(not bool(_enforce_var.get()))。
         """
@@ -3030,7 +3035,7 @@ class TestLicense(unittest.TestCase):
         self.assertIn('_enforce_var.set(not bool(_enforce_var.get()))', src)
 
     def test_settings_ui_import_rollback_on_save_failure(self):
-        """卡密导入写盘失败时必须回滚 _key_var 为旧值。
+        """t24 修复包 A (BUG-14)：_on_import 写盘失败时必须回滚 _key_var 为旧值。
 
         直接验证源码：except 分支内必须执行 _key_var.set(_old_key)。
         """
@@ -3466,7 +3471,7 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertIsInstance(pricing, dict)
 
     def test_t24_f1_classic_error_label_distinguishes(self):
-        """加权模式异常回退标注 classic(error)。
+        """t24 修复包 A (F1)：gui.py 加权 except 回退标注 'classic(error)'。
 
         与 utils.calc_replenishment_weighted 的 'classic(no_history)' 区分：
         - classic(no_history) = utils 内部查到空结果主动回退
@@ -3481,7 +3486,7 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertIn('classic(no_history)', src)
 
     def test_t24_f2_self_tier_dead_code_removed(self):
-        """删除 _tier 死状态与相关 import。
+        """t24 修复包 A (F2)：gui.py 删除 self._tier 死状态 + _auth_get_tier import。
 
         防回归：避免后续又把死代码加回来。
         """
@@ -3496,7 +3501,7 @@ class TestBatchCostPreview(unittest.TestCase):
 
 
 class TestNavGrouping(unittest.TestCase):
-    """导航默认展开 + 三组分组 + 标题统一 + 导出降权。
+    """t27 实施包 A：导航默认展开 + 三组分组 + 标题统一 + 导出降权 + 死代码清理。
 
     用户裁定：t25 IA 审计 → t27 实施 4 项定稿（提案 1+2+5+4+6）。
     约束：零新配色/字体/token；首页双入口布局不动；业务逻辑零变化。
@@ -3518,7 +3523,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertGreater(nav_add_pos, 0)
         self.assertGreater(content_add_pos, 0)
         self.assertLess(nav_add_pos, content_add_pos)
-        # 宽度统一 176
+        # 宽度统一 176（t29 迭代R3：字面量已 DPI 化为 int(176 * self.dpi_scale)）
         self.assertIn('width=int(176 * self.dpi_scale)', src)
         # _toggle_nav 仍保留（提供折叠入口给熟练用户）
         self.assertTrue(hasattr(gui.App, '_toggle_nav'))
@@ -3531,7 +3536,7 @@ class TestNavGrouping(unittest.TestCase):
         import gui
         import inspect
         src = inspect.getsource(gui.App._build_nav)
-        # 修 -P3：剥离行内注释后断言——防止断言被注释文本（如文档性提及）满足
+        # t29 修 v4f-P3：剥离行内注释后断言——防止断言被注释文本（如文档性提及）满足
         src = '\n'.join(line.split('#', 1)[0] for line in src.splitlines())
         # 必须有 groups 列表 + 3 个组名
         self.assertIn('工作区', src)
@@ -3645,19 +3650,19 @@ class TestNavGrouping(unittest.TestCase):
         import gui
         import inspect
         src = inspect.getsource(gui.App._build_ui)
-        # primary_row 按钮文字（批量/导入/识图/导出，用户拍板顺序）
+        # ① primary_row 按钮文字（批量/导入/识图/导出，用户拍板顺序）
         self.assertIn('"批量"', src)
         self.assertIn('"导入"', src)
         self.assertIn('"识图"', src)
         self.assertIn('"导出"', src)
-        # v1.5.6 的「截图」按钮已解散（拆为 识图=截窗口 + 导入菜单=选图片）
+        # ② v1.5.6 的「截图」按钮已解散（拆为 识图=截窗口 + 导入菜单=选图片）
         self.assertNotIn('"截图"', src)
-        # 识图直连实时截图（最小化→截 PDD 窗口→恢复→识别）
+        # ③ 识图直连实时截图（最小化→截 PDD 窗口→恢复→识别）
         self.assertIn("self._live_screenshot", src)
-        # 导入 = 文件统一入口（表格/图片菜单；菜单项分派函数存在）
+        # ④ 导入 = 文件统一入口（表格/图片菜单；菜单项分派函数存在）
         self.assertIn("self._open_import_menu", src)
         self.assertIn("self._export", src)
-        # 全部按钮统一宽度：BTN_WIDTH_HOME 常量已引入
+        # ⑤ 全部按钮统一宽度：BTN_WIDTH_HOME 常量已引入
         self.assertIn("btn_width_for", src)
         self.assertIn("home_actions", src)
         # 🛡双模型仍在 btn_row（second 行）
@@ -3691,7 +3696,7 @@ class TestNavGrouping(unittest.TestCase):
             self.assertGreater(pos, 0, f'_build_ui 内未找到 self.{name} 帧创建')
             page_positions.append(pos)
         max_page_pos = max(page_positions)
-        # 修 -F9：必须用 max（晚于【最后一个】帧创建）而非 min——
+        # t29 修 v4f-F9：必须用 max（晚于【最后一个】帧创建）而非 min——
         # 原断言只要求晚于最早的 page_home，_build_nav 挪到 8 帧中间也绿但启动必 AttributeError
         self.assertGreater(build_nav_pos, max_page_pos,
                           'self._build_nav() 必须晚于所有 8 个 page_* 帧创建（否则 AttributeError）')
@@ -3742,7 +3747,7 @@ class TestNavGrouping(unittest.TestCase):
                          'settings_ui 页标题残留旧 pady=(15,2)')
         self.assertIn('font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))', s,
                       'settings_ui 页标题未统一 16/(14,2)')
-        self.assertIn('padx=16, pady=(14, 2)', s,
+        self.assertIn('padx=16, pady=(14, 2))', s,
                       'API 页标题边距未归一到 16/(14,2)')
         st = inspect.getsource(stats_ui)
         self.assertGreaterEqual(st.count('padx=16, pady=(14, 2)'), 2,
@@ -3750,7 +3755,7 @@ class TestNavGrouping(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 历史页空态行为 + 版式参数源码断言
+# t28 GMI-3：UI 实施包 B · 历史页空态行为 + 版式参数源码断言
 # ══════════════════════════════════════════════════════════════════
 
 class TestHistoryEmptyState(unittest.TestCase):
@@ -3778,7 +3783,7 @@ class TestHistoryEmptyState(unittest.TestCase):
             tree = MagicMock()
             summary_lbl = MagicMock()
             reg_var = MagicMock(); reg_var.get.return_value = '全部'  # StringVar 替身
-            reg_combo = MagicMock()  # dict-style ['values'] = ...
+            reg_combo = MagicMock()                                  # dict-style ['values'] = ...
             days_var = MagicMock(); days_var.get.return_value = '90'  # StringVar 替身
 
             # 构造轻量 StatsPagesMixin 替身（只挂必要属性 + _history_page_refresh 方法）
@@ -3791,7 +3796,7 @@ class TestHistoryEmptyState(unittest.TestCase):
             stub._hist_reg_var = reg_var
             stub._hist_reg_combo = reg_combo
             stub._hist_days_var = days_var
-            stub._current_page = page  # 守门条件满足（否则 _history_page_refresh 直接 return）
+            stub._current_page = page   # 守门条件满足（否则 _history_page_refresh 直接 return）
             # 把方法 bind 到 stub
             stub._history_page_refresh = self.sui.StatsPagesMixin._history_page_refresh.__get__(stub, _Stub)
             # _lbl 静态方法（gui.py 类属性）需要正确解析——直接 patch 类方法
@@ -3867,12 +3872,27 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
             return f.read()
 
     def test_stats_ui_padx_aligned_to_16(self):
-        """stats_ui.py：用量页区域 padx 统一为 16，源码不应再有 padx=14 残留。"""
+        """stats_ui.py：用量页 8 个区域 padx 14→16（topbar / mid / cv / 说明 / 价格表标题 / ptree / 双击说明 / pbtns）。
+
+        8 处 padx=14→16 的修改都是带 # t28 (a-5) 注释的形式；源代码里的 padx=14 已被
+        padx=16 替换并加注释。断言：源码里没有任何【未带 t28 注释的】padx=14 残留。
+        """
         import re
         src = self._src('stats_ui.py')
+        # 匹配所有 padx=14 出现位置（t29 修 v4f-F8：切片长度必须等于目标串长度 7，
+        # 原 i:i+8 恒 False 导致断言空洞——永远绿，防回归承诺落空）
         hits = [(i, src[max(0, i-30):i+50]) for i in range(len(src)) if src[i:i+7] == 'padx=14']
-        self.assertEqual(hits, [],
-                         f'stats_ui.py 仍有 {len(hits)} 处 padx=14 残留：{hits}')
+        # 过滤掉被 t28 注释括起来的（注释里写"padx=14→16"是文档化变更）
+        real_residue = []
+        for pos, ctx in hits:
+            # 出现点若位于同行 '# t28' 尾随注释之内（前缀已含 '# t28'）则属文档化变更
+            line_start = src.rfind('\n', 0, pos) + 1
+            line_prefix = src[line_start:pos]
+            if True:  # 源码注释已清理，直接判定任何 padx=14 均为残留
+                real_residue.append(ctx)
+        self.assertEqual(real_residue, [],
+                         f'stats_ui.py 仍有 {len(real_residue)} 处 padx=14 真正残留（不在 t28 注释内）：{real_residue}')
+
     def test_stats_ui_history_hint_has_padx(self):
         """stats_ui.py：历史页 hint label 加了 padx=(0, 4) 离左缘 4px（t26 c-3）。"""
         src = self._src('stats_ui.py')
@@ -3897,7 +3917,7 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
         t8 A2 后：sec_row 包入 _sec_card C_BORDER 卡片，几何收紧 padx=16/pady=10/fill=x。
         """
         src = self._src('settings_ui.py')
-        # A2：sec_row 现在包在 _sec_card C_BORDER 卡片内；几何应改 padx=16/pady=10/fill='x'
+        # t8 A2：sec_row 现在包在 _sec_card C_BORDER 卡片内；几何应改 padx=16/pady=10/fill='x'
         self.assertIn("sec_row.pack(padx=16, pady=10, fill='x')", src,
                       '副模型行 t8 A2 后应 padx=16/pady=10/fill=x（包入 _sec_card 后收紧）')
         self.assertIn("textvariable=sec_var, state='normal', width=20,", src,
@@ -3989,7 +4009,7 @@ class TestLayoutRound1(unittest.TestCase):
         except ImportError:
             self.skipTest('settings_ui 不可导入')
         src = inspect.getsource(SettingsUIMixin._build_general_page)
-        # canvas 存 self（修正：build 时存，click 时实时算）
+        # canvas 存 self（v4f 修正：build 时存，click 时实时算）
         self.assertIn('self._general_canvas = canvas', src,
                       'canvas 未存为 self._general_canvas（实时算 y 缺基础）')
         # anchors 字典存在
@@ -3999,14 +4019,14 @@ class TestLayoutRound1(unittest.TestCase):
         jump_src = inspect.getsource(SettingsUIMixin._jump_to_general_anchor)
         self.assertIn('yview_moveto', jump_src,
                       '_jump_to_general_anchor 未调 yview_moveto（v4f 修正：实时 fraction 跳转）')
-        # 实时计算 y（修正：免 resize 重算）
+        # 实时计算 y（v4f 修正：免 resize 重算）
         self.assertIn('winfo_y', jump_src,
                       '_jump_to_general_anchor 未实时算 anchor.winfo_y（v4f 修正）')
 
     def test_usage_reset_btn_red_token(self):
         """t8 A8：用量页重置本月按钮·复用 _mk_btn 返回值 config(bg=C_RED_BG)。"""
         src = self._src('stats_ui.py')
-        # 重置按钮存在并配 bg=C_RED_BG（修正：不新建 _warn_btn）
+        # 重置按钮存在并配 bg=C_RED_BG（v4f 修正：不新建 _warn_btn）
         self.assertIn('_reset_btn.configure(bg=self.C_RED_BG)', src,
                       '重置本月按钮未走 C_RED_BG 视觉区分（v4f 修正：_warn_btn 不存在）')
         # 应仍调 reset_this_month 回调（业务逻辑零变化）
@@ -4095,7 +4115,7 @@ class TestAnimationsRound1(unittest.TestCase):
         # leave 也走插值
         self.assertIn('self.owner._animate_btn_hover(self, enter=False)', leave_src,
                       '_CanvasBtn._leave 未接 _animate_btn_hover 插值')
-        # disabled 态抢先落终态（修正）
+        # disabled 态抢先落终态（v4f 修正）
         self.assertIn("if self._state == 'disabled':",
                       hover_src + leave_src,
                       'disabled 态应抢先落终态不动画（v4f 修正）')
@@ -4112,13 +4132,13 @@ class TestAnimationsRound1(unittest.TestCase):
         # _cancel_after_jobs 工具函数
         self.assertIn('def _cancel_after_jobs', src,
                       '_cancel_after_jobs 工具函数缺失（按目标 widget 分键取消）')
-        # 最大漏项：先 snap 终态再 cancel——验证 _cancel_after_jobs 前有终态设置
+        # v4f 最大漏项：先 snap 终态再 cancel——验证 _cancel_after_jobs 前有终态设置
         # 简单模式：验证 _anim_jobs 在每个动效 _do 函数末尾置空
         # （即先 snap 到 _end/_b，再调 _cancel_after_jobs）
         self.assertIn('self._anim_jobs[_key] = []', src,
                       '动效终态 snap 时 _anim_jobs[_key] = [] 应先于 cancel')
 class TestAnimationsFixRound2(unittest.TestCase):
-    """动效兜底：③ 删 canvas gate + _highlight_nav 兜底 / ② disabled snap 禁用色 /
+    """t11 动效修复包：③ 删 canvas gate + _highlight_nav 兜底 / ② disabled snap 禁用色 /
     ⑤ 真熔断（_meltdown_animations 翻 ANIMATIONS_ENABLED）/ ⑧a 脉冲实时 self.tc /
     ⑧b 脉冲起拍捕获当前 fg。"""
 
@@ -4220,10 +4240,10 @@ class TestAnimationsFixRound2(unittest.TestCase):
         import gui
         import inspect
         src = inspect.getsource(gui.App._pulse_status)
-        # a：_do 内每步 / 终态用 self.tc 实时查
+        # ⑧a：_do 内每步 / 终态用 self.tc 实时查
         self.assertIn("self.tc('C_TEXT'", src,
                       '_pulse_status 终态必须 self.tc(\"C_TEXT\") 实时查（v4f 修正：200ms 内切主题不残留）')
-        # b：起拍捕获 _lbl.cget('fg')
+        # ⑧b：起拍捕获 _lbl.cget('fg')
         self.assertIn("_lbl.cget('fg')", src,
                       '_pulse_status 起拍必须捕获 label 当前 fg（v4f 修正：不硬编码 C_TEXT）')
 

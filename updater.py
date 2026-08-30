@@ -159,7 +159,7 @@ def download_asset(asset, dest, progress_stage: str = "download", expected_sha25
             req = Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ-Updater"})
             with urlopen(req, timeout=120) as resp:
                 _stream_to_file(resp, dest, size, name, progress_stage)
-            # v1.4.8 -fix：期望哈希给定 → 立即就地校验；不匹配则换源
+            # v1.4.8 P1-B-fix（t17）：期望哈希给定 → 立即就地校验；不匹配则换源
             if expected_sha256:
                 try:
                     if not _verify_sha256(dest, expected_sha256):
@@ -769,8 +769,8 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
 
         # 3) 收集待覆盖文件（仅变化的）
         # ⚠ 更新包 zip 顶层是 "PDD EZ/" 目录（_build_update_zip.py arcname 带目录名），
-        # 必须剥掉再拼 target_dir——否则覆盖到 target_dir/PDD EZ/ 子目录，更新不生效
-        # （auto 模式有剥目录逻辑，finalize 漏了，v1.4.1 修复）
+        #   必须剥掉再拼 target_dir——否则覆盖到 target_dir/PDD EZ/ 子目录，更新不生效
+        #   （auto 模式有剥目录逻辑，finalize 漏了，v1.4.1 修复）
         _write_progress("cover", "正在检测文件占用...")
         files = []
         for root, _, fnames in os.walk(extracted):
@@ -863,8 +863,8 @@ def main():
     ap.add_argument("--resume-update", action="store_true")
     ap.add_argument("--pid", type=int, default=0)
     ap.add_argument("--mode", choices=("auto", "finalize"), default="auto")
-    ap.add_argument("--file", default="")  # finalize: 已下载的更新包路径
-    ap.add_argument("--extract-dir", default="")  # finalize: 解压目录
+    ap.add_argument("--file", default="")          # finalize: 已下载的更新包路径
+    ap.add_argument("--extract-dir", default="")   # finalize: 解压目录
     ap.add_argument("--wait-pid", type=int, default=0)
     args = ap.parse_args()
 
@@ -1047,7 +1047,7 @@ def main():
     asset_name = os.path.basename(exe_asset["name"].replace('\\', '/'))
     new_exe = os.path.join(tmp, asset_name)
 
-    # v1.4.8 -fix：先把 .sha256 拉下来学期望哈希，
+    # v1.4.8 P1-B-fix（t17）：先把 .sha256 拉下来学期望哈希，
     # 再用 download_asset(expected_sha256=...) 走「下载+就地校验+不匹配换源」一条龙。
     # 旧流程：先下载包 → 失败也不换源（哈希失败发生在下游）→ 直接 return 1。
     # 新流程：先下载 .sha256 学期望 → 传期望进 download_asset → 任一源哈希不匹配自动换源。

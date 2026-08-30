@@ -32,11 +32,11 @@ def _get_sanitizer():
 class _ColoredFormatter(logging.Formatter):
     """控制台彩色 Formatter：INFO 绿 / WARNING 黄 / ERROR 红 / CRITICAL 红粗"""
     COLORS = {
-        'DEBUG': '\033[90m',  # 灰
-        'INFO': '\033[92m',  # 绿
-        'WARNING': '\033[93m',  # 黄
-        'ERROR': '\033[91m',  # 红
-        'CRITICAL': '\033[91;1m'  # 红粗
+        'DEBUG': '\033[90m',     # 灰
+        'INFO': '\033[92m',      # 绿
+        'WARNING': '\033[93m',   # 黄
+        'ERROR': '\033[91m',     # 红
+        'CRITICAL': '\033[91;1m' # 红粗
     }
     RESET = '\033[0m'
 
@@ -153,20 +153,48 @@ class Logger:
             pass
 
     # ── 级别方法 ───────────────────────────────────────────────────
+    # v1.5.11.1-hotfix：级别方法支持 %-args 格式化（logging 标准语义）。
+    # 旧实现只透传一个参数：log.info('...%s', x) 直接 TypeError 被上游 try 吞掉，
+    # 导致『日志诊断链路全程静默』——多轮"查不到报错"的根因（审查盲区）。
 
-    def debug(self, msg):
+    def debug(self, msg, *args):
+        try:
+            if args:
+                msg = msg % args
+        except Exception:
+            pass
         self.logger.debug(msg)
 
-    def info(self, msg):
+    def info(self, msg, *args):
+        try:
+            if args:
+                msg = msg % args
+        except Exception:
+            pass
         self.logger.info(msg)
 
-    def warning(self, msg):
+    def warning(self, msg, *args):
+        try:
+            if args:
+                msg = msg % args
+        except Exception:
+            pass
         self.logger.warning(msg)
 
-    def error(self, msg):
+    def error(self, msg, *args):
+        try:
+            if args:
+                msg = msg % args
+        except Exception:
+            pass
         self.logger.error(msg)
 
-    def critical(self, msg):
+    def critical(self, msg, *args):
+        try:
+            if args:
+                msg = msg % args
+        except Exception:
+            pass
         self.logger.critical(msg)
 
     # ── 标题分隔（抄 March7th hr：level 0 方框 / 1 等号 / 2 减号）──

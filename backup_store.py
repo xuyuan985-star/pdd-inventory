@@ -183,8 +183,8 @@ def export_settings_zip(zip_path, *, include_history_db: bool = False,
     Returns:
         dict 统计：
           {
-            'path': str,  # 实际写入的 zip 路径
-            'files': [str, ...],  # zip 内 entry 路径列表
+            'path': str,           # 实际写入的 zip 路径
+            'files': [str, ...],   # zip 内 entry 路径列表
             'size_bytes': int,
             'had_history_db': bool,
             'history_db_snapshot': str | None,  # 临时快照路径（已删；记录用）
@@ -323,12 +323,12 @@ def restore_settings_zip(zip_path, *, base_dir: Optional[str] = None,
     Returns:
         dict 统计：
           {
-            'restored': [str, ...],  # 实际写入的目标文件名
+            'restored': [str, ...],     # 实际写入的目标文件名
             'pre_restore': [str, ...],  # 现文件备份名（.pre_restore）
-            'skipped': [str, ...],  # 跳过写入的 entry（如非 backup 命名空间）
+            'skipped': [str, ...],      # 跳过写入的 entry（如非 backup 命名空间）
             'error': str | None,
-            'path': str,  # 源 zip 路径
-            'files_in_zip': [str, ...],  # 解出的所有文件（统计用）
+            'path': str,                # 源 zip 路径
+            'files_in_zip': [str, ...], # 解出的所有文件（统计用）
           }
         失败（zip 损坏 / 非法 JSON / 缺关键文件）→ 'error' 非空；'restored' 为空。
 
@@ -545,17 +545,20 @@ def _qstr_path(path: str) -> str:
     return f"'{p}'"
 
 
-# ═══════════════════════ 公开契约摘要（供 / 接线方查阅） ═══════════════════════
-# 失败语义
-# - export_settings_zip：异常路径 → 返回 None；非致命警告在 result['error'] 累积字符串。
-# - restore_settings_zip：任何异常 → 返回 dict 含 'error'；'restored' 为空（拒绝写）。
-# - snapshot_history_db：异常 / 库不存在 → None。
-# 与 utils.Config 的协作
-# - export 不调 Config.save（只读现有文件），保持导出=磁盘原始内容。
-# - restore 不调 Config.save（直接写文件原样 bytes）；这意味着恢复后 Config.load()
-# 仍会走模板合并 + 自愈——若 zip 内 settings.json 缺关键字段，Config 会用模板补；
-# 这是 Config 的设计契约，restore 任务范围内不动 Config 行为。
-# 路径注入（单测用）
-# - base_dir: 注入临时目录 → 模拟其他工作目录的 settings/regions。
-# - db_path: 直接传 history.db 路径；否则走 history_db.db_path()（单测用 set_db_path）。
+# ═══════════════════════ 公开契约摘要（供 t1 / t9 接线方查阅） ═══════════════════════
+#
+# 失败语义：
+#   - export_settings_zip：异常路径 → 返回 None；非致命警告在 result['error'] 累积字符串。
+#   - restore_settings_zip：任何异常 → 返回 dict 含 'error'；'restored' 为空（拒绝写）。
+#   - snapshot_history_db：异常 / 库不存在 → None。
+#
+# 与 utils.Config 的协作：
+#   - export 不调 Config.save（只读现有文件），保持导出=磁盘原始内容。
+#   - restore 不调 Config.save（直接写文件原样 bytes）；这意味着恢复后 Config.load()
+#     仍会走模板合并 + 自愈——若 zip 内 settings.json 缺关键字段，Config 会用模板补；
+#     这是 Config 的设计契约，restore 任务范围内不动 Config 行为。
+#
+# 路径注入（单测用）：
+#   - base_dir: 注入临时目录 → 模拟其他工作目录的 settings/regions。
+#   - db_path: 直接传 history.db 路径；否则走 history_db.db_path()（单测用 set_db_path）。
 # ═══════════════════════

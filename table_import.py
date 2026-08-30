@@ -319,11 +319,11 @@ def import_items(path: str, mapping: dict = None) -> tuple:
                 )
 
     # === 强制复用：rows 直接喂 ocr.parse_items_generic（PLAN §3.2 R7 强制验收项） ===
-    # parse_items_generic 内部已经完成
-    # - map_columns_to_fields（按 mapping 归一化/别名/编辑距离匹配 + _split_name_id 拆 name+sku_id）
-    # - _parse_num_text 数字解析
-    # - strip_region_suffix / strip_warehouse_noise 噪音剥离
-    # - 无商品名行自动跳过
+    # parse_items_generic 内部已经完成：
+    #   - map_columns_to_fields（按 mapping 归一化/别名/编辑距离匹配 + _split_name_id 拆 name+sku_id）
+    #   - _parse_num_text 数字解析
+    #   - strip_region_suffix / strip_warehouse_noise 噪音剥离
+    #   - 无商品名行自动跳过
     items = parse_items_generic(rows, mapping)
 
     # === 跟踪行级 issues（必须自己记行号，parse_items_generic 不返回行号） ===
@@ -453,7 +453,7 @@ def write_template(path: str) -> str:
 
     wb = openpyxl.Workbook()
 
-    # --- Shee数据样例 ---
+    # --- Sheet1: 数据样例 ---
     ws1 = wb.active
     ws1.title = '数据样例'
     headers1, example_rows = _build_template_rows(mapping)
@@ -473,7 +473,7 @@ def write_template(path: str) -> str:
     for ci, _ in enumerate(headers1, 1):
         ws1.column_dimensions[get_column_letter(ci)].width = 22
 
-    # --- Shee列名说明 ---
+    # --- Sheet2: 列名说明 ---
     ws2 = wb.create_sheet('列名说明')
     headers2, legend_rows = _build_template_legend(mapping)
     for ci, h in enumerate(headers2, 1):

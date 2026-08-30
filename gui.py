@@ -30,7 +30,7 @@ try:
 except Exception:
     import_memory = None
 
-# v1.4.8 ：EULA 文本常量（docs/EULA.md 的代码内嵌版，打包后无需读 docs/）
+# v1.4.8 P1-A：EULA 文本常量（docs/EULA.md 的代码内嵌版，打包后无需读 docs/）
 from eula_text import EULA_VERSION, EULA_TITLE, render_eula_text
 # F2 清理：self._tier 死状态删除后，_auth_get_tier 不再有调用方，一并删除 import
 # （未来若需要 get_tier 预热，按需重新 import）
@@ -270,7 +270,7 @@ class _CanvasBtn:
     def _hover(self, e):
         if self._state == 'disabled':
             return
-        # A：按钮 hover 5 步插值（每按钮独立 after job 句柄，disabled 态抢先落终态）
+        # A：按钮 hover 5 步插值（v4f：每按钮独立 after job 句柄，disabled 态抢先落终态）
         if ANIMATIONS_ENABLED and self.poly is not None and self.owner is not None and hasattr(self.owner, '_animate_btn_hover'):
             try:
                 self.owner._animate_btn_hover(self, enter=True)
@@ -304,7 +304,7 @@ class _CanvasBtn:
         self._apply()
 
 
-# ：模块级 helper（必须在 class App 之前定义，否则在类内引用失败）
+# P3-B：模块级 helper（必须在 class App 之前定义，否则在类内引用失败）
 def _to_float_safe(v, default=0.0):
     try:
         return float(v)
@@ -338,12 +338,71 @@ _NAME_ELIDE_LIMIT = 20
 # （live_btn 实际文案是「截图」，v1.4.5 起按钮文字压缩 2 字）。
 # v1.5.6：img_batch_btn 已并入 live_btn（截图主入口菜单化，见 _open_shot_menu）。
 # v1.5.7：布局定版 批量｜导入｜识图｜导出 / 刷新｜双模型——「识图」= _live_screenshot
-# （截当前窗口），live_btn 变量名沿用防引用漂移；导入按钮（含图片路径）不纳入忙禁表
-# （pick_images 内部自带互斥与忙状态管理，与批量采集共用队列语义）。
+# （截当前窗口），live_btn 变量名沿用防引用漂移。
+# v1.5.8（BUG_HUNT_V157 A2）：import_btn 纳入忙禁表——批量期禁用+「导入中…」，
+# 防忙态误点（其图片路径与批量共用队列语义；home_actions 'import' key 消费）。
 _BATCH_BUSY_BTNS = (
     ('export_btn', '导出', 'export'),
     ('live_btn', '识图', 'image'),
+    ('import_btn', '导入', 'import'),
 )
+
+# v1.5.9：识别前置 API 配置检查（用户反馈「点识别报错但没说清是 API 问题」）。
+# 纯函数可单测：读 settings 的 active provider，返回缺失项清单（绝不抛）。
+_PROVIDER_DISPLAY = {'doubao': '火山方舟/豆包', 'qwen': '阿里百炼', 'glm': '智谱'}
+
+
+def api_config_status() -> dict:
+    """识别前置 API 配置检查：{'ok': bool, 'provider': str, 'missing': [str,...]}。
+
+    missing 元素 ∈ {'api_key','model'}——api_key 空（含 dpapi 解密后空）或
+    model 为空白即视为缺失。配置读取失败 → ok=False + 双缺失（防识别静默失败）。
+    v1.5.11：附 secondary 诊断（不参与 ok 判定——副模型问题只是提示级）：
+    secondary: 副模型名；sec_issue: 'ocr_only'|'same_as_main'|'none'|None；sec_hint: 建议文案。
+    """
+    sec = ''
+    sec_issue = None
+    sec_hint = ''
+    try:
+        from utils import get_api_config, decrypt_secret, get_secondary_model
+        cfg = get_api_config()
+        active = str((cfg.get('active_provider') or 'doubao') or '')
+        provs = (cfg.get('providers') or {}) if isinstance(cfg.get('providers'), dict) else {}
+        p = provs.get(active) or {}
+        if not isinstance(p, dict):
+            p = {}
+    except Exception:
+        return {'ok': False, 'provider': 'unknown', 'missing': ['api_key', 'model'],
+                'secondary': sec, 'sec_issue': sec_issue, 'sec_hint': sec_hint}
+    missing = []
+    try:
+        k = p.get('api_key') or ''
+        if k.startswith('dpapi:v1:'):
+            k = decrypt_secret(k) or ''
+        if not k:
+            missing.append('api_key')
+    except Exception:
+        missing.append('api_key')
+    if not str(p.get('model') or '').strip():
+        missing.append('model')
+    # 副模型诊断（不参与 ok 判定——副模型问题只是提示级）
+    try:
+        from ocr import _is_qwen_ocr
+        sec = str(get_secondary_model() or '').strip()
+        if sec:
+            if _is_qwen_ocr(sec):
+                sec_issue = 'ocr_only'
+                sec_hint = ('副模型为 OCR 专用（文字/数字复核型），双模型表格交叉验证自动跳过'
+                            '——想启用请把主副模型都换为 VL 通用视觉模型')
+            elif str(p.get('model') or '').strip().lower() == sec.lower():
+                sec_issue = 'same_as_main'
+                sec_hint = '主副模型相同，双模型验证无意义——请配置不同的副模型'
+        else:
+            sec_issue = 'none'
+    except Exception:
+        sec_issue = None
+    return {'ok': not missing, 'provider': active, 'missing': missing,
+            'secondary': sec, 'sec_issue': sec_issue, 'sec_hint': sec_hint}
 
 # R1 布局优化B：复核弹窗列规格 (cid, 标题, 初始宽, 最小宽, 随窗拉伸)——
 # 商品名/异常原因拉伸跟随窗口加宽，字段/原文/解析值定宽；
@@ -910,7 +969,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.cache = {}  # {region: {'plans': [...], 'items': [...]}}
         self.active_region = None
 
-        # v1.4.8 ：首启 EULA 强弹窗（必须在 _build_ui 之前，否则用户先看到主界面再被强行打断更不友好）
+        # v1.4.8 P1-A：首启 EULA 强弹窗（必须在 _build_ui 之前，否则用户先看到主界面再被强行打断更不友好）
         # 拒绝则直接退出，符合"未同意不得使用"；模板自愈已加 eula_accepted_v1 字段。
         # 修复：弹窗必须阻塞（wait_window）才有效；仅当 _show_eula_dialog 返回 True 才继续。
         if not self._check_eula_accepted():
@@ -929,10 +988,10 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     pass
                 sys.exit(0)
 
-        # 删除 v1.5.0 死代码 self._tier 赋值块
+        # 删除 v1.5.0 P2-A 死代码 self._tier 赋值块
         # 根因：self._tier 只写不读；_auth_get_tier 调用结果无下游使用。
         # 实际授权门控路径（_live_screenshot → check_live_quota）每次现读 Config，
-        # 不依赖 self._tier 缓存。修复 问题 后 get_tier 自身带 300s TTL
+        # 不依赖 self._tier 缓存。 修复 问题 后 get_tier 自身带 300s TTL
         # 已足够覆盖 enforce 热切换场景，无需启动期预热。
         # （_auth_get_tier 的 import 在 L16 同批清理——若未来需要再 import）
 
@@ -1448,7 +1507,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 构建按钮内容，否则 nav_frame 展开是空壳（用户报告：启动时导航空白，点 ☰
         # 收起再展开按钮才出现）。_build_nav 引用 page_* 帧，必须在 8 个 page Frame
         # 全部创建之后、_current_page 赋值之后调用。
-        # 修正注释失实：_build_ui 预构建后 nav_buttons 恒非空，
+        # 修 v4f注释失实 注释失实：_build_ui 预构建后 nav_buttons 恒非空，
         # _toggle_nav 的懒构建守卫实际不再触发（仅作历史防御保留）。
         self._build_nav()
 
@@ -1648,12 +1707,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if self.nav_frame.winfo_ismapped():
             self.main_paned.forget(self.nav_frame)
         else:
-            self.main_paned.add(self.nav_frame, before=self.content_frame, minsize=int(176 * self.dpi_scale), stretch="never")  # 150→176（P3）再 DPI 联动（）
+            self.main_paned.add(self.nav_frame, before=self.content_frame, minsize=int(176 * self.dpi_scale), stretch="never")  # 150→176（v4f P3）再 DPI 联动（）
             if not self.nav_buttons:
                 self._build_nav()
 
     def _build_nav(self):
-        # 修复：幂等守卫——重复调用会重建按钮并泄漏旧 widget（旧
+        # 修 v4f幂等守卫：幂等守卫——重复调用会重建按钮并泄漏旧 widget（旧
         # command 仍可触发）。当前调用点均有外层守卫，此处兜底防御未来调用点。
         if self.nav_buttons:
             return
@@ -1684,7 +1743,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 _sep = tk.Frame(self.nav_frame, bg=self.C_BORDER, height=1)
                 _sep._skip_theme = True
                 _sep.pack(fill="x", padx=10, pady=6)
-                # （冻结的是 walk，
+                # （mmx-or A3 / gmi 共识）：_skip_theme 冻结的是 walk，
                 # 分隔线底色须挂重绘表跟主题走（与工具栏分隔线 gui.py:857 同模式），
                 # 否则切浅色主题后残留旧主题深色横杠。
                 self._register_redraw(lambda f=_sep: f.configure(bg=self.tc("decor.section.sep", "#E0E0E0")))
@@ -1787,6 +1846,13 @@ class App(SettingsUIMixin, StatsPagesMixin):
             _title = title or _def_title
         except Exception:
             _cat, _msg, _title = 'unknown', '识别或导入过程中出现异常，请重试或检查文件后重试', title or '出错'
+        # 报错原文入日志（用户反馈"报错但不知内容"——可从日志直接定位；
+        # 归类类别 + 原始异常摘要脱敏记录，方便远程诊断）
+        try:
+            from utils import _sanitize_for_log as _sfl
+            log.warn(f"[_friendly_error/{_cat}] {_sfl(str(exc))[:300]}")
+        except Exception:
+            pass
         try:
             self.status_text.set(f"❌ {_msg[:50]}")
         except Exception:
@@ -2494,7 +2560,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     return
             except Exception:
                 return
-            # 取消同 label 上挂着的旧 after job（先 snap 终态再 cancel）
+            # 取消同 label 上挂着的旧 after job（v4f：先 snap 终态再 cancel）
             _key = ('pulse_status', id(_lbl))
             _cancel_after_jobs(self.win, self._anim_jobs.get(_key, []))
             # 终态色 = 当前主题 C_TEXT（实时查，主题切换不偏色）
@@ -2565,7 +2631,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 except Exception:
                     continue
                 if busy:
-                    # 记录原文案供恢复（仅首次记录，避免重复 set 覆盖）
+                    # 记录原文案供恢复（v4f：仅首次记录，避免重复 set 覆盖）
                     if not hasattr(_b, '_orig_text'):
                         try:
                             _b._orig_text = _b.cget('text')
@@ -2703,7 +2769,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             if _a == _b:
                 return
             _key = ('btn_hover', id(btn))
-            # 取消旧 after job（先 snap 终态再 cancel）
+            # 取消旧 after job（v4f：先 snap 终态再 cancel）
             _cancel_after_jobs(self.win, self._anim_jobs.get(_key, []))
             _steps = 5
             def _do(step):
@@ -3110,7 +3176,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         except Exception:
             _off = 1
 
-        # ：补货模型分发（用户裁定：默认 classic，原公式一行不改）
+        # P3-A：补货模型分发（用户裁定：默认 classic，原公式一行不改）
         try:
             from utils import get_replenishment_cfg
             _rep_cfg = get_replenishment_cfg()
@@ -3151,7 +3217,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
             shipping = self._get_shipping(_it_region, name)  # 逐商品查运输时效
 
             if _rep_model == 'weighted':
-                # ：加权模式——走 utils.calc_replenishment_weighted（任何异常回退经典）
+                # P3-A：加权模式——走 utils.calc_replenishment_weighted（任何异常回退经典）
                 try:
                     from utils import calc_replenishment_weighted
                     _w = calc_replenishment_weighted(
@@ -3283,7 +3349,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 '_raw': item.get('_raw') or {},
                 '_sel_cols': _sel_cols,
                 '_sel_cols_map': _sel_cols_map,
-                # / F1：补货模型标注
+                # P3-A / F1：补货模型标注
                 # classic = 经典模式（默认）
                 # weighted = 加权模式（成功查到历史）
                 # advanced = 高级模式（季节/大促/滞销/超卖四因子）
@@ -3591,7 +3657,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
             stores = [{'id': 'default', 'name': '默认店铺'}]
         decision = store_ui_logic.resolve_store_switch(
             getattr(self, '_store_id', None), target_id, stores,
-            busy=bool(getattr(self, '_batch_running', False)))
+            # v1.5.8（BUG_HUNT_V157 A5）：busy 同时判批量图片运行态（v1.5.x R1 回归修复）
+            busy=bool(getattr(self, '_batch_running', False)
+                      or getattr(self, '_img_batch_running', False)))
         if not decision['ok']:
             self._refresh_store_combo()
             if decision['reason'] == 'rejected-busy':
@@ -3960,6 +4028,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
     
     def _batch_scan(self):
         """批量识别：对已知地区逐个引导截图识别"""
+        # v1.5.9：识别前置 API 预检（未配置 → 明确引导弹窗 + 可跳转设置页）
+        if not self._ensure_api_ready():
+            return
         # v1.4.6 bug hunt F24 重入守卫 + R1 效率互斥：批量识别/批量图片共用
         # _batch_stop 取消通道与识别队列，任一运行中禁止再开（防取消钩子互相覆盖）
         if getattr(self, '_batch_running', False) or getattr(self, '_img_batch_running', False):
@@ -3967,7 +4038,41 @@ class App(SettingsUIMixin, StatsPagesMixin):
             return
         known = sorted(self.regions.keys())
         if not known:
-            messagebox.showinfo("批量识别", "暂无知地区，请先手动「截图」识别一次")
+            # v1.5.9.3：首次使用引导——批量需要先有识别过的地区（用户反复误点批量被卡）
+            try:
+                log.warn('批量识别：暂无已识别地区（regions 为空），弹首次使用引导')
+            except Exception:
+                pass
+            try:
+                import webbrowser
+                _go = messagebox.askyesno(
+                    "还没有识别过任何地区",
+                    "「批量识别」需要先有至少一个识别过的地区（发货省/市）。\n\n"
+                    "第一次使用请这样开始：\n"
+                    "  1. 打开浏览器登录拼多多商家后台\n"
+                    "     （https://mms.pinduoduo.com → 订货管理页）\n"
+                    "  2. 回到本程序点第一排的「识图」按钮\n"
+                    "     ——它会自动最小化、截后台窗口、恢复并识别\n"
+                    "  3. 识别成功后本页就会记住该地区，之后「批量」就能用了\n\n"
+                    "也可以不走截图：点「导入」→「导入表格文件」\n"
+                    "  ——用模板导入已有数据同样会建立地区\n\n"
+                    "是否现在帮你打开商家后台？",
+                    parent=self.win)
+                if _go:
+                    _url = 'https://mms.pinduoduo.com/'
+                    try:
+                        from utils import Config as _CfgB
+                        _b = _CfgB.load().get('backend') or {}
+                        if isinstance(_b, dict) and str(_b.get('url') or '').startswith('http'):
+                            _url = str(_b['url'])
+                    except Exception:
+                        pass
+                    webbrowser.open(_url)
+            except Exception:
+                try:
+                    messagebox.showinfo("批量识别", "暂无知地区，请先手动「识图」识别一次")
+                except Exception:
+                    pass
             return
         
         # 选择地区对话框
@@ -4031,7 +4136,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 messagebox.showwarning("未选择", "请至少选择一个地区", parent=dlg)
                 return
 
-            # ：批量前成本预估确认（用户裁定：仅在前置弹窗确认，与 F9/_api_fatal/预算三态无关）
+            # P3-B：批量前成本预估确认（用户裁定：仅在前置弹窗确认，与 F9/_api_fatal/预算三态无关）
             # 估算失败不阻塞批量（静默跳过+log）；取消则干净退出，不置任何熔断标志
             try:
                 if not self._preview_batch_cost(len(selected), dual_verify=dual_var.get()):
@@ -5215,23 +5320,71 @@ class App(SettingsUIMixin, StatsPagesMixin):
             return True
 
 
+    def _ensure_api_ready(self):
+        """识别入口预检（v1.5.9）：API 未配置 → 标题明示「API 未配置」的引导弹窗。
+
+        用户反馈「点识别弹错但没说清是 API 问题」——此前靠 API 调用抛错后的
+        归类兜底（标题泛化为『识别失败』）。现在入口前置检查：缺失 key/模型时
+        直接告诉用户缺什么、去哪填，并提供一键跳转「API 管理」页。返回 False
+        表示未就绪（调用方直接 return，不启动识别）。
+        """
+        st = api_config_status()
+        if st.get('ok'):
+            # v1.5.11：主配置就绪时，副模型配置问题以状态栏建议呈现（不阻塞识别）
+            _sec_hint = st.get('sec_hint') or ''
+            if _sec_hint and st.get('sec_issue') in ('ocr_only', 'same_as_main'):
+                try:
+                    self.status_text.set(f"⚙ {_sec_hint}（不影响本次单模型识别）")
+                    try:
+                        log.info(f"副模型提示（{st.get('sec_issue')}）：{_sec_hint}")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            return True
+        prov = st.get('provider', 'unknown')
+        _disp = _PROVIDER_DISPLAY.get(prov, prov)
+        _mapping = {'api_key': 'API Key', 'model': '识别模型'}
+        _miss_names = '、'.join(_mapping.get(m, m) for m in (st.get('missing') or [])) or 'API 配置'
+        try:
+            from tkinter import messagebox as _mb
+            _go = _mb.askyesno(
+                "API 未配置",
+                f"当前识别通道（{_disp}）还没有配置：{_miss_names}。\n\n"
+                "识别功能需要先在「设置 → API 管理」填写：\n"
+                "  · API Key —— 在对应平台申请的密钥\n"
+                "  · 模型 —— 视觉模型（如 qwen3-vl-plus / glm-4.6v / Doubao-Seed）\n\n"
+                "是否现在打开「API 管理」页面？",
+                parent=self.win)
+        except Exception:
+            _go = False
+        if _go:
+            try:
+                self._show_page(self.page_api)
+            except Exception:
+                pass
+        return False
+
     def _open_import_menu(self):
         """v1.5.7 导入入口：点击弹菜单二选一（导入表格文件 / 选择图片文件）。
 
-        菜单数据来自 home_actions.IMPORT_MENU_ITEMS（单一事实源）：
-          - import_table → _import_table（CSV/XLSX 表格导入，列映射预览）
-          - pick_images  → _batch_images（本地选 1..N 张图片，TaskQueue 逐张）
-        菜单构建失败/被打断时兜底走表格导入（§4 显式不猜）。
+        菜单数据来自 home_actions.IMPORT_MENU_ITEMS（单一事实源，find_menu_item
+        消费，防契约漂移）。仅 tk.TclError（grab/widget 交互失败）兜底到表格导入
+        并显式提示；其他异常原样冒泡（DESIGN §4 显式失败，绝不静默跳转）。
+        v1.5.8（F2）：菜单用后即 destroy，防 widget 树累积与 grab 残留。
         """
         try:
-            from home_actions import IMPORT_MENU_ITEMS
-        except Exception:
+            from home_actions import IMPORT_MENU_ITEMS, menu_labels
+        except Exception as _e:
+            self.status_text.set(f"⚠ 导入菜单初始化失败，已回退表格导入：{str(_e)[:60]}")
             self._import_table()
             return
+        import tkinter.messagebox as _tkmsg
+        menu = None
         try:
             menu = tk.Menu(self.win, tearoff=0)
-            for _it in IMPORT_MENU_ITEMS:
-                _k, _label = _it['key'], _it['label']
+            for _label, _it in zip(menu_labels(), IMPORT_MENU_ITEMS):
+                _k = _it['key']
                 menu.add_command(label=_label,
                                  command=lambda k=_k: self._dispatch_import(k))
             try:
@@ -5241,20 +5394,46 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     menu.grab_release()
                 except Exception:
                     pass
-        except Exception:
-            self._import_table()
+        except tk.TclError as _e:
+            try:
+                self.status_text.set(f"⚠ 导入菜单弹出失败：{str(_e)[:60]}")
+                _tkmsg.showwarning("导入菜单", f"菜单弹出失败（{str(_e)[:80]}），已回退表格导入。",
+                                   parent=self.win)
+                self._import_table()
+            except Exception:
+                pass
+        finally:
+            # F2：menu 用后即毁（tk_popup 已返回；destroy 失败静默）
+            if menu is not None:
+                try:
+                    menu.destroy()
+                except Exception:
+                    pass
 
     def _dispatch_import(self, key):
-        """导入菜单项分派：pick_images → 批量图片路径；其余（含未知）→ 表格导入。"""
+        """导入菜单项分派：pick_images → 批量图片路径；import_table → 表格导入。
+
+        v1.5.8（BUG_HUNT_V157 ★条）：未知 key/路径异常**不再静默跳转表格导入**——
+        未知 key 记日志并显式提示（契约漂移早发现）；pick_images 业务异常原样冒泡
+        由调用方（async_queue/异常守卫）显式呈现（DESIGN §4）。
+        """
+        if key == 'pick_images':
+            self._batch_images()
+            return
+        if key == 'import_table':
+            self._import_table()
+            return
+        # 未知 key：契约漂移信号——显式留痕不猜（§4）
         try:
-            if key == 'pick_images':
-                self._batch_images()
-                return
+            from utils import _sanitize_for_log
+            log.warn(f"导入菜单未知 key：{_sanitize_for_log(str(key))[:40]}，已忽略")
         except Exception:
             pass
-        self._import_table()
 
     def _live_screenshot(self):
+        # v1.5.9：识别前置 API 预检（未配置 → 明确引导弹窗 + 可跳转设置页）
+        if not self._ensure_api_ready():
+            return
         # v1.4.7 WS-C：单次识别入口重置「本次」消耗口径
         try:
             import usage_store as _us
@@ -5262,7 +5441,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         except Exception:
             pass
 
-        # ：免费版每日 50 次实时截图识别门控（enforce=false 时跳过）
+        # P2-C：免费版每日 50 次实时截图识别门控（enforce=false 时跳过）
         # 用户裁定：表格导入/手动输入永不限制；批量识别/双模型/Excel 导出也不在门控范围
         try:
             from utils import Config
@@ -5316,7 +5495,14 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # 子线程启动前缓存 Tk 变量（_single_dual_var.get() 是 Tcl 调用，子线程读未定义行为）
         _dual_mode_cache = self._single_dual_var.get()
         
-        def task():
+        def task(_progress=None):
+            # v1.5.9.3：识别全流程步骤日志（远程诊断用：截图/OCR/结果每一步可见）
+            # v1.5.9.4-hotfix：修复致命签名 bug——TaskQueue 契约 fn(progress)，
+            # 旧版 def task() 无参导致 worker 一执行即 TypeError（识别从未开始）
+            try:
+                log.info('识图：任务开始（双模型=%s）', _dual_mode_cache)
+            except Exception:
+                pass
             # 异常由 TaskQueue 捕获并通过 on_error 回调
             self.win.after(0, self.win.iconify)
             time.sleep(0.5)
@@ -5327,6 +5513,10 @@ class App(SettingsUIMixin, StatsPagesMixin):
             # 与批量识别完全一致的截图逻辑
             from utils import capture_pdd_screenshot
             found_window = capture_pdd_screenshot(ss_path)
+            try:
+                log.info('识图：截图完成 found_window=%s path=%s', found_window, ss_path)
+            except Exception:
+                pass
             
             # 截图完成立即恢复窗口（OCR 可能耗时数秒，不必等）
             # 注意：win.state() 是 Tk 调用，必须放主线程（after）——子线程直接读 Tcl 未定义行为
@@ -5342,17 +5532,53 @@ class App(SettingsUIMixin, StatsPagesMixin):
             self.win.after(0, _restore_if_iconic)
             
             if not found_window:
-                self.win.after(0, lambda: (
-                    self.status_text.set('❌ 未找到浏览器窗口，请先打开 PDD 后台页面'),
-                    messagebox.showwarning('截图失败', '未找到拼多多或浏览器窗口。\n请先打开 PDD 商家后台 -> 订货管理页面。')))
+                # v1.5.9.2：未找到 PDD 窗口 → 日志留痕 + 明确引导（带「打开商家后台」跳转）
+                try:
+                    log.warn('识图：未找到拼多多/浏览器窗口，已提示用户打开商家后台')
+                except Exception:
+                    pass
+
+                def _no_window_hint():
+                    try:
+                        import webbrowser
+                        from tkinter import messagebox as _mb
+                        _backend_url = 'https://mms.pinduoduo.com/'
+                        try:
+                            from utils import Config as _Cfg2
+                            _b = (_Cfg2.load().get('backend') or {})
+                            if isinstance(_b, dict) and str(_b.get('url') or '').startswith('http'):
+                                _backend_url = str(_b['url'])
+                        except Exception:
+                            pass
+                        self.status_text.set('❌ 未找到浏览器窗口，请先打开 PDD 后台页面')
+                        _go = _mb.askyesno(
+                            '没有找到拼多多窗口',
+                            '没有在屏幕上找到拼多多商家后台窗口。\n\n'
+                            f'「识图」是截取当前屏幕上的后台页面，请先：\n'
+                            f'  1. 打开浏览器登录 {_backend_url}\n'
+                            f'  2. 进入「订货管理」页面（截图会截这个窗口）\n'
+                            f'  3. 再点一次「识图」\n\n'
+                            f'是否现在帮你打开商家后台？',
+                            parent=self.win)
+                        if _go:
+                            webbrowser.open(_backend_url)
+                    except Exception:
+                        pass
+                self.win.after(0, _no_window_hint)
                 return
             
             self.win.after(0, lambda: self.status_text.set('OCR识别中...'))
             
             items = self._ocr_generic_to_items(ss_path, dual_verify=_dual_mode_cache)
+            try:
+                log.info('识图：OCR 完成 items=%d', len(items or []))
+            except Exception:
+                pass
 
             if not items:
-                self.win.after(0, lambda: self.status_text.set('未识别到商品'))
+                # v1.5.11：空结果提示归一（不再裸「未识别到商品」）
+                self.win.after(0, lambda: self.status_text.set(
+                    '未识别到表格数据——请确认截图包含完整的订货管理表格后重试'))
                 return
 
             # 缓存最近一次截图源文件，供 _fill_from_ocr 模糊检测使用
@@ -5374,43 +5600,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
             on_error=lambda e: self.win.after(0, lambda exc=e: self._friendly_error(exc, popup=True)),
         )
     
-    def _ocr_fill(self):
-        # v1.4.7 WS-C：单次识别入口重置「本次」消耗口径
-        try:
-            import usage_store as _us
-            _us.session_reset()
-        except Exception:
-            pass
-        from tkinter import filedialog
-        path = filedialog.askopenfilename(
-            title="选择PDD后台截图",
-            filetypes=[("图片文件", "*.jpg *.jpeg *.png"), ("所有", "*.*")])
-        if not path:
-            return
-        
-        self.status_text.set("识别中...")
-        self.win.update()
-        # 子线程启动前缓存 Tk 变量（子线程读 Tcl 变量未定义行为）
-        _dual_mode_cache = self._single_dual_var.get()
-        
-        def task():
-            # 异常由 TaskQueue 捕获并通过 on_error 回调
-            items = self._ocr_generic_to_items(path, dual_verify=_dual_mode_cache)
-            def _fill():
-                try:
-                    self._last_ocr_image_path = path
-                except Exception:
-                    pass
-                self._fill_from_ocr(items, source='file')
-            self.win.after(0, _fill)
-        
-        # 使用 TaskQueue 执行任务
-        # on_error 用 _friendly_error 归类常见异常为用户可读中文
-        self._task_queue.submit(
-            "文件OCR",
-            task,
-            on_error=lambda e: self.win.after(0, lambda exc=e: self._friendly_error(exc, popup=True)),
-        )
+    # v1.5.8（BUG_HUNT_V157 A3）：_ocr_fill 已删除——v1.5.7 定版后为死代码
+    # （单张图片识别由「导入」菜单→选择图片文件 覆盖；识图按钮=_live_screenshot）。
     
     def _batch_images(self):
         """R1 流程效率：批量图片识别入口（「批量图片」按钮）。
@@ -5425,6 +5616,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
         依赖契约（t2）：ocr.batch_ocr_images(image_paths, mapping=None,
         recognizer=None, **kwargs) -> (results[{path,items,mapping}], errors[(path,reason)])。
         """
+        # v1.5.9：识别前置 API 预检（未配置 → 明确引导弹窗 + 可跳转设置页）
+        if not self._ensure_api_ready():
+            return
         # 重入/互斥守卫：与「批量识别」互斥（共用 _batch_stop 取消通道与 API 队列，
         # 双批并发会互相覆盖取消钩子——同 bug hunt F24 纪律）
         if getattr(self, '_batch_running', False) or getattr(self, '_img_batch_running', False):
@@ -5697,10 +5891,34 @@ class App(SettingsUIMixin, StatsPagesMixin):
             _act = _api.get('active_provider', '')
             _main = ((_api.get('providers') or {}).get(_act, {}) or {}).get('model', '')
             if _main and str(_main).strip().lower() == str(_sec).strip().lower():
-                from ocr import _ocr_dlog
-                _ocr_dlog(f"⚠ 主副模型相同（{_main}），双模型验证无意义，请更换副模型")
-                # v1.4.5（bug hunt F23）：worker 线程直写 status_text 违 Tk 主线程契约，包 after
-                self.win.after(0, lambda m=_main: self.status_text.set(f"⚠ 主副模型相同（{m}），双模型验证无意义，请更换副模型"))
+                from ocr import _ocr_dlog, USER_MSG_DUAL_MAIN_EQ_SEC
+                # v1.5.11：主副相同 → 不再空耗一次双模型 API，直接单模型识别 +
+                # 可行动的引导文案（用户曾把"相同提示"误读为识别失败）
+                _ocr_dlog(f"⚠ 主副模型相同（{_main}），双模型无意义——本次按单模型识别（省一次 API）")
+
+                def _hint_main_eq_sec(m=_main):
+                    try:
+                        self.status_text.set(
+                            f"⚠ 主副模型相同（{m}）已按单模型识别——双模型请配置不同副模型（设置→API 管理）")
+                    except Exception:
+                        pass
+                self.win.after(0, _hint_main_eq_sec)
+                # 相同则双验证无意义：降级走单模型表格识别路径
+                if row_bboxes:
+                    from ocr import ocr_table_row_split
+                    try:
+                        result = ocr_table_row_split(image_path, columns=None,
+                                                     table_bbox=table_bbox,
+                                                     row_bboxes=row_bboxes)
+                    except Exception:
+                        result = ocr_table(image_path, columns=None, table_bbox=table_bbox)
+                else:
+                    result = ocr_table(image_path, columns=None, table_bbox=table_bbox)
+                rows = result.get('rows') or []
+                items = parse_items_generic(rows, cfg.get('mapping') or {})
+                for _it in items:
+                    _it['_dual_skipped_ocr'] = True  # 复用"设计跳过"标记，UI 显示说明文案
+                return items
             return ocr_dual_verify_generic(image_path, columns=None,
                                            mapping=_mapping,
                                            table_bbox=table_bbox,
@@ -5753,7 +5971,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.win.update()
         
         if not items:
-            self.status_text.set("OCR未识别到任何数据")
+            self.status_text.set("未识别到表格数据——请确认截图包含完整的订货管理表格后重试")
             return
         # 按地区分组：多省份×多仓库批量时每个地区独立缓存（避免全混进第一个地区）
         from ocr import strip_region_suffix as _srs
@@ -5785,6 +6003,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
         low_conf_count = 0
         name_unmatched_count = 0
         dual_degraded = False
+        dual_skipped_ocr = False  # v1.5.11：副模型 OCR 专用/主副相同 → 设计跳过（非失败）
         verify_fixed_count = 0  # v1.4.2：二次识别补全行数（_verify_fixed 标记）
         for i, item in enumerate(_display):
             r = self.rows[i]
@@ -5794,6 +6013,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 name_unmatched_count += 1
             if item.get('_dual_degraded'):
                 dual_degraded = True
+            if item.get('_dual_skipped_ocr'):
+                dual_skipped_ocr = True
             name_disp = item.get('name', '')
             if low_conf:
                 low_conf_count += 1
@@ -5814,8 +6035,21 @@ class App(SettingsUIMixin, StatsPagesMixin):
             self.status_text.set(f"⚠ {low_conf_count} 个商品双模型结果不一致，已取保守值，请重点核对")
         elif name_unmatched_count:
             self.status_text.set(f"⚠ {name_unmatched_count} 个商品双模型识别名称不一致，已标记请复核")
+        elif dual_skipped_ocr:
+            # v1.5.11：设计跳过的场景（副模型 OCR 专用 / 主副相同）——明确"不是失败，是配置语义"
+            try:
+                from ocr import USER_MSG_DUAL_SEC_OCR, USER_MSG_DUAL_MAIN_EQ_SEC
+                self.status_text.set("⚠ " + USER_MSG_DUAL_MAIN_EQ_SEC)
+            except Exception:
+                self.status_text.set("⚠ 双模型未启用交叉验证（副模型配置为 OCR 专用或与主模型相同）")
+            # 附诊断日志，避免用户误读为失败
+            try:
+                log.info('双模型：本次为设计跳过（_dual_skipped_ocr），非识别失败')
+            except Exception:
+                pass
         elif dual_degraded:
-            self.status_text.set("⚠ 双模型副模型识别失败，本次为单模型结果，请留意准确性")
+            self.status_text.set(
+                "⚠ 副模型本次调用失败，已按单模型识别（主结果不受影响）——若模型名无效请到「设置→API 管理」更换副模型")
         elif verify_fixed_count:
             # v1.4.2：二次识别补全提示（ID/数字经择优补全）
             self.status_text.set(f"✓ {verify_fixed_count} 个商品经二次识别补全（ID/数字），数据已完善")
@@ -6196,6 +6430,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
         流程（T-B2）：线程内不碰 Tk；结果经 win.after 回主线程；name/region/warehouse
         过 export_xlsx._sanitize_cell（强制复用点②）后 _fill_from_ocr(source='import') 收口。
         """
+        # v1.5.8（BUG_HUNT_V157 A1）：批量互斥守卫——批量识别/批量图片运行中禁止导入表格
+        # （导入也走 TaskQueue/识别队列，双批并发会串台状态；与 _batch_images 同款提示）
+        if getattr(self, '_batch_running', False) or getattr(self, '_img_batch_running', False):
+            messagebox.showinfo("导入", "批量任务正在进行中，请先等待完成或停止后再试",
+                                parent=self.win)
+            return
         import table_import
         from tkinter import filedialog
         path = filedialog.askopenfilename(
@@ -6226,7 +6466,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.status_text.set("导入中...")
         self.win.update()
 
-        def task():
+        def task(_progress=None):
+            # v1.5.9.4-hotfix：TaskQueue 契约 fn(progress)——旧 def task() 无参
+            # 导致表格导入任务一执行即 TypeError（导入一直静默失败的真凶）
             # 异常由 TaskQueue 捕获并通过 on_error 回调
             items, issues = table_import.import_items(path, mapping=mapping)
             self.win.after(0, lambda i=items, s=issues: self._import_done(i, s, has_region))

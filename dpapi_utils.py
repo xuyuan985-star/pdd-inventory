@@ -47,23 +47,23 @@ if _IS_WINDOWS:
         # 显式 restype/argtypes 防 64 位句柄截断（与 updater.py 同样教训）
         _crypt32.CryptProtectData.restype = wintypes.BOOL
         _crypt32.CryptProtectData.argtypes = [
-            ctypes.c_void_p,  # pDataIn (DATA_BLOB*)
-            wintypes.LPCWSTR,  # szDataDescr
-            ctypes.c_void_p,  # pOptionalEntropy
-            ctypes.c_void_p,  # pvReserved
-            ctypes.c_void_p,  # pPromptStruct
-            wintypes.DWORD,  # dwFlags
-            ctypes.c_void_p,  # pDataOut (DATA_BLOB*)
+            ctypes.c_void_p,                     # pDataIn (DATA_BLOB*)
+            wintypes.LPCWSTR,                    # szDataDescr
+            ctypes.c_void_p,                     # pOptionalEntropy
+            ctypes.c_void_p,                     # pvReserved
+            ctypes.c_void_p,                     # pPromptStruct
+            wintypes.DWORD,                      # dwFlags
+            ctypes.c_void_p,                     # pDataOut (DATA_BLOB*)
         ]
         _crypt32.CryptUnprotectData.restype = wintypes.BOOL
         _crypt32.CryptUnprotectData.argtypes = [
-            ctypes.c_void_p,  # pDataIn (DATA_BLOB*)
-            ctypes.POINTER(wintypes.LPWSTR),  # ppszDataDescr (out)
-            ctypes.c_void_p,  # pOptionalEntropy
-            ctypes.c_void_p,  # pvReserved
-            ctypes.c_void_p,  # pPromptStruct
-            wintypes.DWORD,  # dwFlags
-            ctypes.c_void_p,  # pDataOut (DATA_BLOB*)
+            ctypes.c_void_p,                     # pDataIn (DATA_BLOB*)
+            ctypes.POINTER(wintypes.LPWSTR),     # ppszDataDescr (out)
+            ctypes.c_void_p,                     # pOptionalEntropy
+            ctypes.c_void_p,                     # pvReserved
+            ctypes.c_void_p,                     # pPromptStruct
+            wintypes.DWORD,                      # dwFlags
+            ctypes.c_void_p,                     # pDataOut (DATA_BLOB*)
         ]
         # 实际调用一次空数据以确认 dll 入口可解析（部分 Wine/沙盒会报 127 找不到入口）
         _AVAILABLE = True
@@ -122,12 +122,12 @@ def enc(plaintext: str) -> str:
         # dwFlags=0 = 当前用户作用域（默认）；
         # UI_FORBIDDEN 不需要（CRYPTPROTECT_UI_FORBIDDEN=0x1 我们也不设——后台无 UI）
         ok = _crypt32.CryptProtectData(
-            ctypes.byref(in_blob),  # pDataIn
-            None,  # szDataDescr（描述字符串）
-            None,  # pOptionalEntropy
-            None,  # pvReserved
-            None,  # pPromptStruct（无 UI 弹窗）
-            0,  # dwFlags
+            ctypes.byref(in_blob),   # pDataIn
+            None,                    # szDataDescr（描述字符串）
+            None,                    # pOptionalEntropy
+            None,                    # pvReserved
+            None,                    # pPromptStruct（无 UI 弹窗）
+            0,                       # dwFlags
             ctypes.byref(out_blob),  # pDataOut
         )
         if not ok:

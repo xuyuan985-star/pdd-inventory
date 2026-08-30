@@ -666,7 +666,7 @@ def query_daily(days=30, region=None, store=None) -> list:
     用户裁定：默认全免（enforce=false），所有用户不受限；Pro 也不受限。
     """
     try:
-        # ：免费版历史趋势窗口钳制（仅 enforce=true 时生效）
+        # P2-C：免费版历史趋势窗口钳制（仅 enforce=true 时生效）
         try:
             from auth.license import get_history_days_limit, is_pro
             # 默认 enforce=false，所有人 unlimited；显式 enforce=true 才钳制
