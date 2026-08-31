@@ -6,7 +6,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('ocr.py', '.'), ('vision.py', '.'), ('utils.py', '.'), ('config.py', '.'), ('export_xlsx.py', '.'), ('settings_ui.py', '.'), ('stats_ui.py', '.'), ('settings_template.json', '.'), ('icon.ico', '.'), ('templates', 'templates'), ('regions.json', '.'), ('使用说明.txt', '.'), ('history_db.py', '.'), ('usage_extractor.py', '.'), ('usage_store.py', '.'), ('table_import.py', '.')],
+    datas=[('ocr.py', '.'), ('vision.py', '.'), ('utils.py', '.'), ('config.py', '.'), ('export_xlsx.py', '.'), ('settings_ui.py', '.'), ('stats_ui.py', '.'), ('settings_template.json', '.'), ('icon.ico', '.'), ('templates', 'templates'), ('regions.json', '.'), ('使用说明.txt', '.'), ('history_db.py', '.'), ('usage_extractor.py', '.'), ('usage_store.py', '.'), ('table_import.py', '.'), ('prompts', 'prompts')],
     hiddenimports=['pyautogui', 'openpyxl', 'PIL', 'requests', 'cv2', 'numpy', 'pyperclip', 'history_db', 'usage_extractor', 'usage_store', 'table_import', 'stats_ui', 'async_queue', 'store_registry', 'store_ui_logic', 'algorithm_ui', 'ocr_review'],
     hookspath=[],
     hooksconfig={},

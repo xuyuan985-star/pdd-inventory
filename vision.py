@@ -248,7 +248,15 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
       - usage - 6 步降级链抽取结果；None 时调用方应继续走主流程（不报错）。
         抽取失败走 §3 兜底估算（is_estimate=True）。
     call_site 仅作审计标签，调用方传入（定位/读总数/读省份/状态机/异常检测/表格定位）。
+
+    v1.6.0 TC-A2：transport 注入缝入口检查——若 _TRANSPORT_OVERRIDE 已设置，
+    直接走 stub（TC-Q1 评估器 + 单测）；生产路径（None）仍走下方网络段。
     """
+    # v1.6.0 TC-A2：transport 注入点
+    _stub = _call_with_transport(img_b64, prompt, max_tokens, call_site, timeout)
+    if _stub is not None:
+        return _stub
+
     active, provider, endpoint, key, mdl, use_responses = _pick_vision_model()
     if not key:
         raise RuntimeError('API Key 未设置')
@@ -359,9 +367,16 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
             # v1.5.12：前缀回退取价（快照模型名命中基础名价目，修"计价瘫痪"）
             _u_entry = _usage_extractor.resolve_pricing(_u_pricing, active, mdl)
             _u_cost = _usage_extractor.compute_cost(_usage, _u_entry)
+            # v1.6.0 TC-Q4：batch_id=当前 Run ID（run_context 相位 2；无活动 run
+            # → ''，行保持 v1 形状）。懒导入防环。
+            try:
+                from run_context import current_run_id as _cur_run_id
+                _rid = _cur_run_id()
+            except Exception:
+                _rid = ''
             _usage_store.record(active, _api_type, mdl, endpoint, _usage, _u_cost,
                                 str(_usage.get('source') or '').startswith('fallback'),
-                                call_site=(call_site or 'vision'), batch_id='')
+                                call_site=(call_site or 'vision'), batch_id=_rid)
     except Exception:
         pass
     return text, mdl, _usage
@@ -470,10 +485,9 @@ def _locate_elements_once(screenshot_path: str = None) -> dict:
     img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
     if not img_b64:
         return None
-    prompt = """识别这张PDD商家后台截图中的两个UI元素坐标（相对于整张截图的像素比例）：
-1. 省份/地区下拉选择框的中心点
-2. "查询"按钮的中心点
-输出严格JSON: {"dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY},"confidence":0.XX}"""
+    # v1.6.0 TC-Q5：prompt 从 prompts/locate_v1.txt (full 变体) 加载，与原内联串逐字节一致
+    from prompts import load_prompt as _load_prompt
+    prompt = _load_prompt('locate_v1', 'full')
     # v1.4.5（bug hunt F9）：定位链读取超时对齐 180s（大表/4K 图模型处理可 >30s，30s 必误判）
     # v1.4.7 WS-C：vision 三元组 (text, mdl, usage)，_usage 可弃用但解构必须三值
     content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180,
@@ -556,9 +570,9 @@ def ai_read_total_count(screenshot_path: str = None) -> int:
         img_b64, _, _ = _load_screenshot_b64(screenshot_path)  # fallback 整屏
         if not img_b64:
             return None
-    prompt = ('识别这张截图右下角分页栏中的商品总条数。格式如 "共有 9 条" → 9、'
-              '"共 128 条" → 128、"总共 5 条" → 5。忽略每页条数下拉框（如"每页10条"）。'
-              '只输出数字，找不到输出 0。')
+    # v1.6.0 TC-Q5：prompt 从 prompts/status_v1.txt (full 变体) 加载，与原内联串逐字节一致
+    from prompts import load_prompt as _load_prompt
+    prompt = _load_prompt('status_v1', 'full')
     try:
         # v1.4.7 WS-C：vision 三元组
         content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=16, timeout=180,
@@ -602,17 +616,17 @@ def ai_read_selected_province(screenshot_path: str = None, region=None) -> str:
         buf = _io.BytesIO()
         img.save(buf, format='JPEG', quality=95)
         img_b64 = _b64.b64encode(buf.getvalue()).decode()
-        prompt = ('识别这张图片中当前显示的文本内容（是省份/地区筛选框的特写图）。'
-                  '只输出文本本身，如 "云南" "云南省" "广东" "全部" 等；'
-                  '没有任何文字或无法辨认时，输出空字符串。')
+        # v1.6.0 TC-Q5：prompt 从 prompts/status_v1.txt (province_closeup 变体) 加载
+        from prompts import load_prompt as _load_prompt
+        prompt = _load_prompt('status_v1', 'province_closeup')
     else:
         # 原路径：整图缩放压缩
         img_b64, _, _ = _load_screenshot_b64(screenshot_path)
         if not img_b64:
             return None
-        prompt = ('识别这张PDD商家后台「订货管理」页面顶部筛选栏的省份/地区下拉框'
-                  '当前显示的省份名。只输出省份名（如 "云南" "广东省"），'
-                  '如果显示 "全部"/"所有地区" 或无法识别，输出空字符串。')
+        # v1.6.0 TC-Q5：prompt 从 prompts/status_v1.txt (province_fullpage 变体) 加载
+        from prompts import load_prompt as _load_prompt
+        prompt = _load_prompt('status_v1', 'province_fullpage')
     try:
         # v1.4.7 WS-C：vision 三元组
         content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=32, timeout=15,
@@ -641,13 +655,9 @@ def ai_check_page_state(screenshot_path: str = None) -> dict:
     img_b64, _, _ = _load_screenshot_b64(screenshot_path)
     if not img_b64:
         return {'state': 'unknown', 'hint': None}
-    prompt = ('判断这张PDD商家后台页面截图当前处于什么状态，只选一个：\n'
-              '1. normal：正常显示订货管理页面（有筛选栏和商品表格）\n'
-              '2. login：登录页 / 会话过期 / 需要重新登录\n'
-              '3. captcha：验证码或安全验证弹窗\n'
-              '4. modal：模态弹窗遮挡（居中弹窗无法点击操作）\n'
-              '5. empty：页面空白或加载失败\n'
-              '输出严格JSON: {"state": "normal", "hint": "一句话简述"}')
+    # v1.6.0 TC-Q5：prompt 从 prompts/status_v1.txt (page_state 变体) 加载
+    from prompts import load_prompt as _load_prompt
+    prompt = _load_prompt('status_v1', 'page_state')
     try:
         # v1.4.7 WS-C：vision 三元组
         content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15,
@@ -683,12 +693,9 @@ def ai_detect_anomaly(screenshot_path: str = None) -> dict:
     img_b64, _, _ = _load_screenshot_b64(screenshot_path)
     if not img_b64:
         return {'anomaly': False, 'type': None, 'hint': None}
-    prompt = ('判断这张PDD商家后台截图是否有**阻断操作的异常**：验证码/安全验证弹窗、'
-              '模态弹窗（居中遮挡导致无法点击操作）。'
-              '注意：页面顶部的常驻提示横幅（如预约警告、系统公告、红色提示条）**不算异常**，'
-              '它们不影响点击操作。'
-              '输出严格JSON: {"anomaly": true或false, "type": "验证码"或"弹窗"或null, '
-              '"hint": "一句话说明，无异常填null"}')
+    # v1.6.0 TC-Q5：prompt 从 prompts/status_v1.txt (anomaly 变体) 加载
+    from prompts import load_prompt as _load_prompt
+    prompt = _load_prompt('status_v1', 'anomaly')
     try:
         # v1.4.7 WS-C：vision 三元组
         content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=128, timeout=15,
@@ -783,14 +790,9 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
     img_b64, screen_w, screen_h = _load_screenshot_b64(screenshot_path)
     if not img_b64:
         return None
-    prompt = """识别这张PDD商家后台「订货管理」页面截图中的 UI 元素（坐标均为相对整张截图的像素比例 0~1）：
-1. table：商品表格区域的边界框（left/top/right/bottom，表格主体含表头，不含底部工具栏）
-2. has_more：表格底部是否被截断——即页面还有更多商品需要滚动才能看到（看表格最后一行是否被切掉一半、或底部有滚动条未到底/加载更多提示）
-3. dropdown：省份/地区下拉选择框的中心点
-4. query："查询"按钮的中心点
-5. total_count：页面统计信息里显示的商品总条数（如 "共 3 条" / "共 128 条"），找不到则填 null
-6. rows：表格内容行的垂直边界（相对整图比例 top/bottom），按从上到下顺序，含表头行。格式：[{"top": 0.XX, "bottom": 0.YY}, ...]，最多返回 20 行；识别不了填 []
-输出严格JSON: {"table": {"left": 0.XX, "top": 0.YY, "right": 0.XX, "bottom": 0.YY}, "has_more": true, "dropdown": {"x": 0.XX, "y": 0.YY}, "query": {"x": 0.XX, "y": 0.YY}, "total_count": 3 或 null, "rows": [{"top": 0.XX, "bottom": 0.YY}], "confidence": 0.XX}"""
+    # v1.6.0 TC-Q5：prompt 从 prompts/locate_v1.txt (table 变体) 加载
+    from prompts import load_prompt as _load_prompt
+    prompt = _load_prompt('locate_v1', 'table')
     # v1.4.5（bug hunt F9）：表格定位（滚动轮每轮）读取超时对齐 180s
     # v1.4.7 WS-C：vision 三元组
     content, _mdl, _usage = _call_vision_api(img_b64, prompt, max_tokens=2048, timeout=180,
@@ -859,3 +861,246 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
         else:
             out[key] = None
     return out
+
+
+# ════════════════════════════════════════════════════════════════════════
+# v1.6.0 TC-A2 / §5.2 P0b：VisionProvider 抽象 + transport 注入缝
+# 宪法引用
+# - §1 全列识别：Provider 层绝不加 columns 参数——任何包装层都不能破坏 columns=None 全列语义。
+# - §2 模型分型：cascade 第三段必抛 RuntimeError，绝不静默回退硬编码模型。
+# - §4 失败哲学：每级切换写 _ocr_dlog；GUI 状态栏按 v1.5.11 文案规范提示。
+# 设计要点（外部契约零变化）
+# - _pick_vision_model() 仍返回 6 元组 (active, provider, endpoint, key, mdl, use_responses)
+# - _call_vision_api() 仍返回 (text, mdl, usage) 三元组
+# - _ocr_api_call() 仍返回 (content, mdl, usage) 三元组（_TRANSPORT_OVERRIDE 检查点放入口）
+# - 模块级 _TRANSPORT_OVERRIDE + set_transport/clear_transport：默认 None 走原路径
+# （生产路径零感知；评估器 TC-Q1 可注入 stub 避免真实 API）
+# ════════════════════════════════════════════════════════════════════════
+
+
+from dataclasses import dataclass
+from typing import Protocol as _Protocol
+
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    """v1.6.0 TC-A2：Provider 配置快照（不可变）。
+
+    字段含义对齐 _pick_vision_model 原 6 元组：
+      active        - 当前 provider 名（doubao/qwen/glm/...）
+      provider      - settings.providers[active] 子字典（透传给 provider-aware 调用方）
+      endpoint      - HTTP 端点 URL
+      key           - 解密后的 API Key
+      model         - 模型名
+      use_responses - 是否走 Responses API 协议（doubao responses）
+      source        - 'main' | 'secondary' | 'override'(cascade 来源标识，供 _ocr_dlog 审计)
+    """
+    active: str
+    provider: dict
+    endpoint: str
+    key: str
+    model: str
+    use_responses: bool
+    source: str = 'main'
+
+
+class VisionProvider(_Protocol):
+    """v1.6.0 TC-A2：视觉 Provider 接口契约。
+
+    任何实现必须返回 (text, model_used, usage) 三元组——与 §1.4.7 WS-C 三元组一致。
+    transport 注入点：set_transport(fn) 后，入口检查 _TRANSPORT_OVERRIDE 直接
+    调用 fn() 返回的三元组（绕过网络段；供 TC-Q1 评估器按 GT 渲染 JSON）。
+    """
+    def call(self, img_b64: str, prompt: str, *,
+             max_tokens: int, task_type: str, timeout: int) -> tuple:
+        ...
+
+
+class VisionRouter:
+    """v1.6.0 TC-A2：Provider 路由选择器。
+
+    设计：
+    - route(task_type, prefer_general=False) -> ProviderConfig：单步选择（main→main；
+      主模型是 OCR 型且 prefer_general=True 时切到副模型——与 _pick_vision_model 同款规则）。
+    - cascade() -> list[ProviderConfig]：返回完整降级链 [main, secondary_or_none]，
+      调用方按顺序尝试；链尾为空时由调用方抛 RuntimeError（绝不静默回退硬编码）。
+
+    默认三家 Provider：doubao / qwen / glm——与 _pick_vision_model 同款 endpoint 默认值。
+    """
+
+    PROVIDER_DEFAULTS = {
+        'doubao': ('https://ark.cn-beijing.volces.com/api/v3/chat/completions', 'Doubao-Seed-2.1-pro'),
+        'qwen':   ('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', 'qwen3.5-omni-flash'),
+        'glm':    ('https://open.bigmodel.cn/api/paas/v4/chat/completions', 'glm-4v-flash'),
+    }
+
+    def __init__(self):
+        pass  # 单例状态在 _pick_vision_model 内临时持有；本类仅作门面
+
+    def route(self, task_type: str = 'vision', prefer_general: bool = False) -> ProviderConfig:
+        """单步选择（薄壳委托 _pick_vision_model 已有规则）。"""
+        active, provider, endpoint, key, mdl, use_responses = _pick_vision_model()
+        return ProviderConfig(
+            active=active,
+            provider=provider if isinstance(provider, dict) else {},
+            endpoint=endpoint,
+            key=key,
+            model=mdl,
+            use_responses=bool(use_responses),
+            source='main',
+        )
+
+    def cascade(self, task_type: str = 'vision') -> list:
+        """完整降级链：[主配置]（主模型 OCR 型时含副配置）。
+
+        返回 [] 当主副都不可用——调用方负责抛 RuntimeError（§2 绝不静默回退）。
+        当前实现：主模型非 OCR 型 → [main]；主模型 OCR 型且副模型可用 → [main(OCR), secondary]；
+        都不可用 → []。
+        """
+        from ocr import _is_qwen_ocr as _qocr
+        # 用 `import utils` 而非 `from utils import`——后者是名字绑定一次，
+        # 通过 _swap_active_provider monkey-patch 后不会重新解析。`_utils.get_api_config()`
+        # 在每次调用时从 utils 模块属性读取最新值（与 _swap_active_provider 配套）。
+        import utils as _utils
+
+        api_cfg = _utils.get_api_config()
+        active = api_cfg.get('active_provider', 'doubao')
+        providers = api_cfg.get('providers', {}) if isinstance(api_cfg, dict) else {}
+        providers = providers if isinstance(providers, dict) else {}
+        main_mdl = providers.get(active, {}).get('model', '') if isinstance(providers.get(active), dict) else ''
+        chain = []
+        if not _qocr(main_mdl):
+            # 主模型能定位 → 单元素链
+            chain.append(self.route(task_type, prefer_general=False))
+            return chain
+        # 主模型是 OCR 型 → 尝试副模型
+        try:
+            _sec = str(_utils.get_secondary_model() or '').strip()
+        except Exception:
+            _sec = ''
+        # 总是先把主模型（OCR 型）加入链尾 source='main_ocr_skip'——供 cascade
+        # 事件日志写「主模型 OCR 不可定位 → 尝试副」；即便副模型也缺失，链仍含 1 项
+        # （外部可据此抛 RuntimeError，不静默回退 §2）。直接构造 ProviderConfig，
+        # 不调 _pick_vision_model（OCR 主模型调用它会直接抛 RuntimeError）。
+        try:
+            _main_prov = providers.get(active, {}) or {}
+            _main_endpoint = (_main_prov.get('endpoint', '') or
+                              self.PROVIDER_DEFAULTS.get(active, ('', ''))[0])
+            _main_key = _main_prov.get('api_key', '') or os.environ.get(
+                {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY',
+                 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
+            try:
+                from utils import decrypt_secret
+                _main_key = decrypt_secret(_main_key)
+            except Exception:
+                pass
+            _use_resp = 'responses' in (_main_endpoint or '').lower()
+            chain.append(ProviderConfig(
+                active=active,
+                provider=_main_prov if isinstance(_main_prov, dict) else {},
+                endpoint=_main_endpoint,
+                key=_main_key,
+                model=main_mdl,
+                use_responses=_use_resp,
+                source='main_ocr_skip',
+            ))
+        except Exception:
+            pass
+        if not _sec:
+            return chain  # 副模型未配置 → 链只含 main_ocr_skip（调用方决定报错）
+        for pn, pp in providers.items():
+            if not isinstance(pp, dict):
+                continue
+            pm = str(pp.get('model', '') or '').strip()
+            if pm.lower() != _sec.lower():
+                continue
+            # 副模型也是 OCR 型 → 视为不可定位（§2 绝不静默回退：跳过 secondary）
+            if _qocr(pm):
+                break
+            # 找到副模型所在 provider
+            try:
+                _sec_prov = pp
+                _sec_endpoint = (_sec_prov.get('endpoint', '') or
+                                 self.PROVIDER_DEFAULTS.get(pn, ('', ''))[0])
+                _sec_key = _sec_prov.get('api_key', '') or os.environ.get(
+                    {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY',
+                     'glm': 'ZHIPU_API_KEY'}.get(pn, ''), '')
+                try:
+                    from utils import decrypt_secret
+                    _sec_key = decrypt_secret(_sec_key)
+                except Exception:
+                    pass
+                _use_resp2 = 'responses' in (_sec_endpoint or '').lower()
+                chain.append(ProviderConfig(
+                    active=pn,
+                    provider=_sec_prov if isinstance(_sec_prov, dict) else {},
+                    endpoint=_sec_endpoint,
+                    key=_sec_key,
+                    model=pm,
+                    use_responses=_use_resp2,
+                    source='secondary',
+                ))
+            except RuntimeError:
+                continue
+            break
+        return chain
+
+
+import contextlib as _ctxlib
+
+
+@_ctxlib.contextmanager
+def _swap_active_provider(api_cfg):
+    """临时把 get_api_config 切到指定 active_provider（VisionRouter.cascade 内部用）。
+
+    通过 monkey-patch utils.get_api_config 实现——闭包结束后自动还原。
+    与宪法 §5 一致：仅 monkey-patch 临时切换；不修改 settings.json。
+    """
+    import utils as _utils
+    orig = _utils.get_api_config
+    _utils.get_api_config = lambda: api_cfg
+    try:
+        yield
+    finally:
+        _utils.get_api_config = orig
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 模块级 transport 注入缝（TC-Q1 评估器 / TC-A2 测试可注入 stub）
+# ─────────────────────────────────────────────────────────────────────
+# 默认 None → 走原路径（生产零感知）。
+# 注入函数签名：fn(img_b64, prompt, *, max_tokens, task_type, timeout) -> tuple
+# 返回 (text, model_used, usage)。
+# 设置后 _ocr_api_call / _call_vision_api 入口检查
+# _TRANSPORT_OVERRIDE(img_b64, prompt, max_tokens=..., task_type=..., timeout=...)
+# → 直接返回注入的三元组，跳过网络段、usage 落账、_ocr_dlog。
+_TRANSPORT_OVERRIDE = None
+
+
+def set_transport(fn):
+    """设置 transport 注入（供测试 / TC-Q1 评估器）。
+
+    fn(img_b64, prompt, *, max_tokens, task_type, timeout) -> (text, model_used, usage)
+    设置后 _ocr_api_call / _call_vision_api 入口优先调用 fn，
+    不走网络段、不写 usage 落账、不写 _ocr_dlog（纯 stub 模式）。
+    """
+    global _TRANSPORT_OVERRIDE
+    _TRANSPORT_OVERRIDE = fn
+
+
+def clear_transport():
+    """清除 transport 注入，恢复原路径。"""
+    global _TRANSPORT_OVERRIDE
+    _TRANSPORT_OVERRIDE = None
+
+
+def _call_with_transport(img_b64, prompt, max_tokens, task_type, timeout):
+    """入口检查：_TRANSPORT_OVERRIDE 若设置则直接走 stub。"""
+    fn = _TRANSPORT_OVERRIDE
+    if fn is None:
+        return None  # 走原路径
+    try:
+        return fn(img_b64, prompt, max_tokens=max_tokens, task_type=task_type, timeout=timeout)
+    except Exception:
+        # 注入函数抛错时记录但不静默吃——向上抛由调用方决定
+        raise

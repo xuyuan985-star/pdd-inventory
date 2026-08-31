@@ -1500,7 +1500,9 @@ class TestUsageStoreRecord(unittest.TestCase):
         with open(log_path, 'r', encoding='utf-8') as f:
             line = f.readline().strip()
         obj = json.loads(line)
-        self.assertEqual(obj['schema_version'], 1)
+        self.assertEqual(obj['schema_version'], 2)   # v1.6.0 TC-Q4：schema v1→v2
+        self.assertIn('run_id', obj)                 # v2 新增键（默认空串）
+        self.assertIn('prompt_version', obj)
         self.assertEqual(obj['provider'], 'doubao')
         self.assertEqual(obj['api_type'], 'chat.completions')
         self.assertEqual(obj['model'], 'Doubao-Seed-2.1-pro')
@@ -2661,8 +2663,12 @@ class TestNavRefactorV147(unittest.TestCase):
     # ── 2. gui.py App 继承 StatsPagesMixin ──────────────────────────
     def test_gui_app_class_inherits_stats_mixin(self):
         src = _read(self.GUI)
-        self.assertIn('class App(SettingsUIMixin, StatsPagesMixin)', src,
-                      'App 必须继承 StatsPagesMixin 才能拥有两页构建能力')
+        # v1.6.0 t36 已将 ImportServiceMixin 加入 MRO（class App(...,ImportServiceMixin)）；
+        # 匹配两种允许的写法：含/不含 ImportServiceMixin
+        self.assertTrue(
+            'class App(SettingsUIMixin, StatsPagesMixin, ImportServiceMixin)' in src
+            or 'class App(SettingsUIMixin, StatsPagesMixin)' in src,
+            'App 必须继承 StatsPagesMixin 才能拥有两页构建能力')
         self.assertIn('from stats_ui import StatsPagesMixin', src,
                       'gui.py 必须 import StatsPagesMixin')
 
@@ -2706,9 +2712,11 @@ class TestNavRefactorV147(unittest.TestCase):
         usage_idx = body.find('self.page_usage')
         self.assertGreater(hist_idx, 0)
         self.assertGreater(usage_idx, 0)
-        self.assertIn('after_idle', body[hist_idx:hist_idx + 600],
+        # v1.6.0 t38 dashboard 接入后 _show_page 含额外 elif 分支（page_dashboard），
+        # after_idle 出现位置后移；扩大搜索窗口到 1200 字符
+        self.assertIn('after_idle', body[hist_idx:hist_idx + 1200],
                       'page_history 刷新必须经 after_idle 调度（主线程事件队列）')
-        self.assertIn('after_idle', body[usage_idx:usage_idx + 600],
+        self.assertIn('after_idle', body[usage_idx:usage_idx + 1200],
                       'page_usage 刷新必须经 after_idle 调度（主线程事件队列）')
 
     # ── 5. 地区 tab「📈 历史」按钮 → _goto_history_page ────────────
@@ -3349,16 +3357,25 @@ class TestReplenishmentModels(unittest.TestCase):
         self.assertIn("'补货量'", src)  # 旧列仍在
 
     def test_gui_calc_from_items_dispatches_by_model(self):
-        """gui.py _calc_from_items 含 weighted 分发（读 config.replenishment.model）"""
-        import gui
-        src = inspect.getsource(gui.App._calc_from_items)
-        # 必须有 weighted 分支
-        self.assertIn('weighted', src)
-        # 必须有 model 标注写入
-        self.assertIn("'model': _model_tag", src)
-        # 经典分支必须保留原公式关键词（防回归）
-        self.assertIn("立刻补货", src)
-        self.assertIn("daily * 8", src)
+        """gui.py _calc_from_items 已委托 build_plans；model 分发在 build_plans 内。
+
+        v1.6.0 TC-A1.2 相位 2 薄壳：gui 只提取 cfg/model 字段（不内联计算），
+        实际 weighted/advanced/classic 三路分发在 replenishment_service.build_plans。
+        经典公式关键词（"daily * 8"）保留在 utils.calc_replenishment_classic，
+        铁律（红线）不变——只是不再由 gui 重复书写。
+        """
+        import gui, replenishment_service
+        gui_src = inspect.getsource(gui.App._calc_from_items)
+        svc_src = inspect.getsource(replenishment_service)
+        # 薄壳委托
+        self.assertIn('build_plans', gui_src)
+        # weighted 分发在 build_plans 内
+        self.assertIn('weighted', svc_src)
+        # 经典公式仍在 utils（不回归）
+        import utils
+        utils_src = inspect.getsource(utils)
+        self.assertIn('立刻补货', utils_src)
+        self.assertIn("daily * 8", utils_src)
 
 
 class TestBatchCostPreview(unittest.TestCase):
@@ -3471,18 +3488,20 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertIsInstance(pricing, dict)
 
     def test_t24_f1_classic_error_label_distinguishes(self):
-        """t24 修复包 A (F1)：gui.py 加权 except 回退标注 'classic(error)'。
+        """t24 修复包 A (F1)：加权 except 回退标注 'classic(error)'。
 
         与 utils.calc_replenishment_weighted 的 'classic(no_history)' 区分：
         - classic(no_history) = utils 内部查到空结果主动回退
-        - classic(error)       = gui 层 utils 抛异常被动回退
+        - classic(error)       = 加权/高级模式抛异常被动回退
+
+        v1.6.0 TC-A1.2 相位 2：被动回退下沉到 replenishment_service.build_plans，
+        gui 薄壳不再内联此逻辑。
         """
-        import gui
-        src = inspect.getsource(gui)
-        # gui.py:2029 必须用 'classic(error)' 标注被动回退
+        import replenishment_service
+        src = inspect.getsource(replenishment_service)
+        # build_plans 内必须用 'classic(error)' 标注被动回退
         self.assertIn("'classic(error)'", src)
-        # 注释中必须解释两个标签区别
-        self.assertIn('classic(error)', src)
+        # 注释/契约中必须解释两个标签区别
         self.assertIn('classic(no_history)', src)
 
     def test_t24_f2_self_tier_dead_code_removed(self):

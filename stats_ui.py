@@ -45,6 +45,98 @@ except Exception:
 class StatsPagesMixin:
     """混入 App 类：历史趋势 / 用量明细 两个导航数据页的构建与刷新。"""
 
+    # ─────────────── TC-D 仪表盘：纯逻辑装配（无 Tk 依赖，便于单测） ───────────────
+
+    @staticmethod
+    def dashboard_assemble_cards(daily_rows, usage_panel, health_state,
+                                 trust_summary, now_ts=0.0):
+        """TC-D：一次性装配仪表盘全部卡片数据（纯函数，零 Tk / 零 DB 访问）。
+
+        入参：
+          daily_rows: history_db.query_daily(days=7) 行 [{day,region,items,alerts,stock_total}]
+          usage_panel: usage_store.usage_panel_summary()（4 档聚合 + month_label）
+          health_state: t18 startup_health() -> list[HealthItem(item, level, detail)]
+          trust_summary: t20 _last_trust_summary {total,green,yellow,red,no_data}
+          now_ts: 缓存时间戳（测试注入；生产由 refresh 传 time.time()）
+        返回扁平 dict（全部原子字段，UI 层只读渲染；任何缺失键兜底，绝不抛）：
+          stock_total / alerts_total / items_7d / trend(近7日升序 [{day,items,alerts}])
+          today_cost / month_cost / month_label
+          health_items [(item, level, detail)] / health_ok_count / health_warn_count
+          trust (dict 原样兜底)
+        """
+        try:
+            rows = [r for r in (daily_rows or []) if isinstance(r, dict)]
+            stock_total = 0
+            alerts_total = 0
+            items_7d = 0
+            per_day = {}
+            for r in rows:
+                try:
+                    it = int(r.get('items') or 0)
+                    al = int(r.get('alerts') or 0)
+                except Exception:
+                    it = al = 0
+                st = r.get('stock_total')
+                day = str(r.get('day') or '')
+                items_7d += it
+                alerts_total += al
+                if isinstance(st, (int, float)):
+                    stock_total += int(st)
+                pd_ = per_day.setdefault(day, {'items': 0, 'alerts': 0})
+                pd_['items'] += it
+                pd_['alerts'] += al
+            trend = [{'day': d, 'items': v['items'], 'alerts': v['alerts']}
+                     for d, v in sorted(per_day.items())]
+            panel = usage_panel if isinstance(usage_panel, dict) else {}
+            today = panel.get('today') or {}
+            month = panel.get('month') or {}
+            hitems = []
+            ok_n = warn_n = 0
+            for h in (health_state or []):
+                try:
+                    item = str(getattr(h, 'item', '') or '')
+                    level = str(getattr(h, 'level', '') or '')
+                    detail = str(getattr(h, 'detail', '') or '')[:26]
+                except Exception:
+                    item, level, detail = '?', 'RED', '健康项读取失败'
+                hitems.append((item, level, detail))
+                if level == 'GREEN':
+                    ok_n += 1
+                else:
+                    warn_n += 1
+            trust = trust_summary if isinstance(trust_summary, dict) else {}
+            return {
+                'stock_total': stock_total,
+                'alerts_total': alerts_total,
+                'items_7d': items_7d,
+                'trend': trend,
+                'today_cost': float(today.get('cost_cny') or 0.0),
+                'month_cost': float(month.get('cost_cny') or 0.0),
+                'month_label': str(panel.get('month_label') or ''),
+                'health_items': hitems,
+                'health_ok_count': ok_n,
+                'health_warn_count': warn_n,
+                'trust': trust,
+                'ts': float(now_ts or 0.0),
+            }
+        except Exception:
+            return {'stock_total': 0, 'alerts_total': 0, 'items_7d': 0,
+                    'trend': [], 'today_cost': 0.0, 'month_cost': 0.0,
+                    'month_label': '', 'health_items': [], 'health_ok_count': 0,
+                    'health_warn_count': 0, 'trust': {}, 'ts': 0.0}
+
+    @staticmethod
+    def dashboard_trust_line(trust):
+        """TC-D：可信度汇总条文案（t20 _last_trust_summary → 一行中文）。"""
+        t = trust if isinstance(trust, dict) else {}
+        total = int(t.get('total') or 0)
+        if total <= 0:
+            return '本轮无识别数据（识别/导入后自动更新）'
+        return (f"可信 {int(t.get('green') or 0)} ｜ 复核 {int(t.get('yellow') or 0)}"
+                f" ｜ 高风险 {int(t.get('red') or 0)}"
+                f" ｜ 数据不足 {int(t.get('no_data') or 0)}（共 {total} 行）")
+
+
     # ─────────────── R1 布局优化：纯逻辑助手（无 Tk 依赖，便于单测） ───────────────
 
     @staticmethod
@@ -428,6 +520,22 @@ class StatsPagesMixin:
                   fg=self.C_TEXT, bg=self.C_BG).pack(anchor='w')
         self._usage_site_tree = self._make_usage_tree(right)
 
+        # ── v1.6.0 TC-Q4 相位 2：「最近运行」区（run_context.recent_runs 数据源）──
+        # 四列树：Run ID / 耗时 / 行数（ok/低）/ 费用。行统计与费用同 run 维度
+        # 贯通（usage 行 batch_id=run_id）；usage.enabled=False → 空表+提示行。
+        self._lbl(content, text="最近运行（Run ID 诊断 · 最近 20 次）",
+                  font=(self.FONT[0], 9, 'bold'), fg=self.C_TEXT,
+                  bg=self.C_BG).pack(anchor='w', padx=16, pady=(10, 4))
+        _rcols = ('run_id', 'duration', 'rows', 'cost')
+        _rheads = (('run_id', 'Run ID', 210), ('duration', '耗时', 80),
+                   ('rows', '行数(ok/低)', 110), ('cost', '费用', 90))
+        self._usage_runs_tree = ttk.Treeview(content, columns=_rcols,
+                                             show='headings', height=4)
+        for cid, text, w in _rheads:
+            self._usage_runs_tree.heading(cid, text=text)
+            self._usage_runs_tree.column(cid, width=w, anchor='center')
+        self._usage_runs_tree.pack(fill='x', padx=16, pady=(0, 4))
+
         # ── 模型分布 Canvas 条图（本版新增；手绘零图表库依赖，同 _history_sku_chart 风格）──
         cv = tk.Canvas(content, height=120, bg=self.C_BG, highlightthickness=0)
         cv._skip_theme = True  # 画布项颜色由重绘回调管理，walk 不碰
@@ -767,6 +875,25 @@ class StatsPagesMixin:
             _sites_zh = panel.get('by_call_site') or {}
         self._refill_usage_tree(self._usage_site_tree, _sites_zh)
         self._usage_chart_redraw()
+        # v1.6.0 TC-Q4 相位 2：「最近运行」区刷新
+        self._usage_runs_refresh()
+
+    def _usage_runs_refresh(self):
+        """「最近运行」四列树刷新（run_context.recent_runs；失败留空不炸页面）。"""
+        tree = getattr(self, '_usage_runs_tree', None)
+        if tree is None:
+            return
+        try:
+            tree.delete(*tree.get_children())
+            import run_context as _rc
+            for r in (_rc.recent_runs(20) or []):
+                dur = f"{(r.get('duration_ms') or 0) / 1000:.1f}s"
+                rows = f"{r.get('rows_ok', 0)}/{r.get('rows_low', 0)}"
+                tree.insert('', 'end', iid=r.get('run_id') or None, values=(
+                    r.get('run_id', ''), dur, rows,
+                    f"¥{float(r.get('cost_cny') or 0.0):.4f}"))
+        except Exception:
+            pass
 
     def _usage_chart_on_resize(self, event):
         """条图容器宽度变化时重画（高度变化不重画，防 Configure 循环）。"""
@@ -839,3 +966,214 @@ class StatsPagesMixin:
             label = f"¥{cost:.2f}" if cost > 0 else '?'
             cv.create_text(w - mR + 8, y, text=label, anchor='w',
                            font=(self.FONT[0], 8), fill=self.C_MUTED)
+
+    # ─────────────── v1.6.0 TC-D：📊 首页仪表盘 ───────────────
+
+    def _build_dashboard_page(self, page):
+        """📊 仪表盘页（懒构建，_show_page 首切触发）。
+
+        布局：顶部 4 数据卡（库存合计/预警数/今日费用/本月费用）→ 可信度汇总条
+        （复用 t20 _last_trust_summary）→ 健康卡（复用 t18 _health_state 六项）
+        → 近 7 日识别量趋势小图（Canvas 手绘零依赖）。数据渲染只读
+        self._dash_cache（由 _dashboard_page_refresh 装配），构建期零查询。
+        """
+        import tkinter as tk2  # 局部别名，页内控件统一走它（与文件头 import 等价）
+        page.configure(bg=self.C_BG)
+
+        # 顶部 4 数据卡
+        top = tk2.Frame(page, bg=self.C_BG)
+        top.pack(fill='x', padx=16, pady=(12, 4))
+        self._dash_card_labels = {}
+        for key, title in (('stock_total', '库存合计（近7日）'),
+                           ('alerts_total', '预警行数（近7日）'),
+                           ('today_cost', '今日费用'),
+                           ('month_cost', '本月费用')):
+            cell = tk2.Frame(top, bg=self.C_BG, highlightthickness=1,
+                             highlightbackground="#EAEAEA")
+            cell.pack(side='left', expand=True, fill='x', padx=6)
+            self._lbl(cell, text=title, font=(self.FONT[0], 8),
+                      fg=self.C_MUTED, bg=self.C_BG).pack(pady=(8, 0))
+            val = self._lbl(cell, text='--', font=(self.FONT[0], 13, 'bold'),
+                            fg=self.C_TEXT, bg=self.C_BG)
+            val.pack()
+            self._lbl(cell, text=' ', font=(self.FONT[0], 7),
+                      fg=self.C_MUTED, bg=self.C_BG).pack(pady=(0, 6))
+            self._dash_card_labels[key] = val
+
+        # 可信度汇总条+ 健康卡
+        self._dash_trust_lbl = self._lbl(
+            page, text='本轮无识别数据（识别/导入后自动更新）',
+            font=(self.FONT[0], 9), fg=self.C_TEXT, bg=self.C_BG)
+        self._dash_trust_lbl.pack(anchor='w', padx=16, pady=(8, 2))
+        self._lbl(page, text='启动健康（六项）', font=(self.FONT[0], 9, 'bold'),
+                  fg=self.C_TEXT, bg=self.C_BG).pack(anchor='w', padx=16,
+                                                     pady=(8, 2))
+        self._dash_health_lbl = self._lbl(page, text='尚未运行健康检查',
+                                          font=(self.FONT[0], 8),
+                                          fg=self.C_MUTED, bg=self.C_BG)
+        self._dash_health_lbl.pack(anchor='w', padx=16, pady=(0, 2))
+
+        # 近 7 日趋势小图（Canvas 手绘）
+        self._lbl(page, text='近 7 日识别量', font=(self.FONT[0], 9, 'bold'),
+                  fg=self.C_TEXT, bg=self.C_BG).pack(anchor='w', padx=16,
+                                                     pady=(10, 2))
+        cv = tk2.Canvas(page, height=90, bg=self.C_BG, highlightthickness=0)
+        cv._skip_theme = True
+        cv.pack(fill='x', padx=16, pady=(0, 2))
+        self._dash_chart_canvas = cv
+        self._dash_chart_w = 0
+        cv.bind('<Configure>', self._dash_chart_on_resize)
+        self._register_redraw(self._dash_chart_redraw)
+
+        # 刷新时间戳
+        self._dash_ts_lbl = self._lbl(page, text=' ', font=(self.FONT[0], 7),
+                                      fg=self.C_MUTED, bg=self.C_BG)
+        self._dash_ts_lbl.pack(anchor='w', padx=16, pady=(2, 12))
+        self._dash_page = page
+
+    def _dashboard_page_refresh(self, force=False, now=None):
+        """TC-D：仪表盘刷新——一次性拉取 + TTL 60s 缓存 + 迟到守门。
+
+        数据源：history_db.query_daily(7) + usage_store.usage_panel_summary()
+        + self._health_state（t18）+ self._last_trust_summary（t20）。
+        缓存 self._dash_cache = {'data': dict, 'ts': float}；TTL 内（force=False）
+        直接用缓存重绘；过期才重新拉取（**不引入定时轮询**——事件驱动：
+        _fill_from_ocr/_import_done 收尾 + 切页 after_idle）。
+        迟到守门（stats_ui:268 模式）：after_idle 触发时若已切走页面则自杀。
+        全程守卫，绝不抛（宪法 §4：仪表盘只展示既有数据，不重新识别）。
+        """
+        import time as _time
+        page = getattr(self, '_dash_page', None)
+        if page is None:
+            return
+        try:
+            if not page.winfo_exists():
+                return
+        except Exception:
+            return
+        if getattr(self, '_current_page', None) is not page:
+            return  # 迟到回调自杀（切页后旧 after_idle 不再动控件）
+        try:
+            now = _time.time() if now is None else float(now)
+            cache = getattr(self, '_dash_cache', None)
+            if not isinstance(cache, dict):
+                cache = {}
+                self._dash_cache = cache
+            data = cache.get('data')
+            ts = float(cache.get('ts') or 0.0)
+            ttl = float(getattr(self, '_dash_ttl', 60) or 60)
+            if force or data is None or (now - ts) > ttl:
+                daily = []
+                panel = {}
+                try:
+                    if history_db is not None:
+                        daily = history_db.query_daily(7) or []
+                except Exception:
+                    daily = []
+                try:
+                    import usage_store as _us
+                    panel = _us.usage_panel_summary() or {}
+                except Exception:
+                    panel = {}
+                data = self.dashboard_assemble_cards(
+                    daily, panel, getattr(self, '_health_state', []) or [],
+                    getattr(self, '_last_trust_summary', {}) or {}, now_ts=now)
+                cache['data'] = data
+                cache['ts'] = now
+            self._dash_render(data, now)
+        except Exception:
+            pass
+
+    def _dash_render(self, data, now):
+        """按装配数据渲染仪表盘控件（只读 data，不查询）。"""
+        data = data if isinstance(data, dict) else {}
+        lbls = getattr(self, '_dash_card_labels', {}) or {}
+        stock = data.get('stock_total', 0)
+        alerts = data.get('alerts_total', 0)
+        if (c := lbls.get('stock_total')) is not None:
+            c.config(text=f"{int(stock or 0)} 件")
+        if (c := lbls.get('alerts_total')) is not None:
+            c.config(text=f"{int(alerts or 0)} 行"
+                     + (" ⚠" if int(alerts or 0) > 0 else ""))
+        if (c := lbls.get('today_cost')) is not None:
+            c.config(text=f"¥{float(data.get('today_cost') or 0.0):.2f}")
+        ml = str(data.get('month_label') or '')
+        if (c := lbls.get('month_cost')) is not None:
+            c.config(text=f"¥{float(data.get('month_cost') or 0.0):.2f}")
+        try:
+            self._dash_trust_lbl.config(text=self.dashboard_trust_line(
+                data.get('trust') or {}))
+        except Exception:
+            pass
+        try:
+            items = data.get('health_items') or []
+            if items:
+                icon = {'GREEN': '✅', 'YELLOW': '⚠', 'RED': '⛔'}
+                text = ' ｜ '.join(
+                    f"{icon.get(lv, '•')} {nm}" for nm, lv, _d in items)
+                warn = int(data.get('health_warn_count') or 0)
+                self._dash_health_lbl.config(
+                    text=text + (f"（{warn} 项待关注）" if warn else '（全部正常）'),
+                    fg=(self.C_TEXT if warn else self.C_MUTED))
+            else:
+                self._dash_health_lbl.config(text='尚未运行健康检查',
+                                             fg=self.C_MUTED)
+        except Exception:
+            pass
+        try:
+            ts = float(data.get('ts') or now or 0.0)
+            import datetime as _dt
+            stamp = _dt.datetime.fromtimestamp(ts).strftime('%H:%M:%S') if ts else '--'
+            ml2 = str(data.get('month_label') or '')
+            self._dash_ts_lbl.config(
+                text=f"数据时间 {stamp}" + (f" ｜ 费用统计：{ml2}" if ml2 else ''))
+        except Exception:
+            pass
+        self._dash_chart_redraw()
+
+    def _dash_chart_on_resize(self, event):
+        if abs(event.width - getattr(self, '_dash_chart_w', 0)) < 10:
+            return
+        self._dash_chart_w = event.width
+        self._dash_chart_redraw()
+
+    def _dash_chart_redraw(self):
+        """近 7 日识别量柱状小图（Canvas 手绘零依赖；空数据显示引导文案）。"""
+        cv = getattr(self, '_dash_chart_canvas', None)
+        if cv is None:
+            return
+        try:
+            cv.delete('all')
+            try:
+                w = max(int(cv.winfo_width()), 40)
+            except Exception:
+                w = 400
+            try:
+                cv.configure(bg=self.C_BG)
+            except Exception:
+                pass
+            cache = getattr(self, '_dash_cache', None) or {}
+            data = cache.get('data') if isinstance(cache, dict) else None
+            trend = (data or {}).get('trend') or []
+            if not trend:
+                cv.create_text(w // 2, 45, text='暂无识别数据 — 识别或导入后出现',
+                               font=(self.FONT[0], 8), fill=self.C_MUTED)
+                return
+            max_it = max(int(t.get('items') or 0) for t in trend) or 1
+            n = len(trend)
+            bw = max(int((w - 24) / n) - 8, 6)
+            x = 12
+            for t in trend:
+                it = int(t.get('items') or 0)
+                al = int(t.get('alerts') or 0)
+                h = int(56 * it / max_it) if it else 0
+                color = self.C_RED_BG if (al and it) else self.C_ACCENT
+                if h:
+                    cv.create_rectangle(x, 70 - h, x + bw, 70,
+                                        fill=color, outline='')
+                label = str(t.get('day') or '')[-5:]
+                cv.create_text(x + bw // 2, 80, text=label,
+                               font=(self.FONT[0], 7), fill=self.C_MUTED)
+                x += bw + 8
+        except Exception:
+            pass

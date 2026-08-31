@@ -1,10 +1,10 @@
-﻿"""
+"""
 PDD EZ — 公共工具函数
 提供数据目录路径和设置读取，消除 main/ocr/gui 中的重复定义。
 """
 import os, re, sys, json, threading
 
-VERSION = "v1.5.13"
+VERSION = "v1.6.0"
 
 
 # ── v1.4.8 P1-C：日志/调试脱敏（logger.py / ocr.py 共用）─────────
@@ -203,9 +203,15 @@ def filter_result_cols(calc_cols, cfg=None) -> list:
 
     按字段 key 过滤（gui 的 'rmodel' 与 export 的 'model' 同视为「模型」列）：
       forecast → 预测列；warning → 预警列；model/rmodel → 模型列。
-    缺省/非法 cfg → 全开（原列表）；绝不抛。
+    cfg=None → 全开（原列表），**不读持久化配置**——「未传 cfg」必须语义为"原样"，
+      避免单测/早期绑定时拿到持久化的关闭态。需要按持久化配置过滤的调用方
+      显式传入 get_result_cols_cfg()（gui 已在 _build_ui 时赋值 self._result_cols；
+      export_xlsx 已在调用前显式取 get_result_cols_cfg()）。
+    cfg 非 dict（字符串/列表等非法值） → 全开，绝不抛。
+    cfg 是 dict 但缺某 key → 该 key 视为开启（按 RESULT_COL_DEFAULTS 兜底）。
     """
-    cfg = cfg if isinstance(cfg, dict) else get_result_cols_cfg()
+    if not isinstance(cfg, dict):
+        return list(calc_cols)
     hide = set()
     if not cfg.get('forecast', True):
         hide.add('forecast')
@@ -823,6 +829,13 @@ def calc_replenishment_advanced(item: dict, region: str, shipping: int,
     }
 
 
+# v1.6.0 TC-Q2：NO_DATA 信号常量——补货计算侧"无历史数据"的稳定信号名。
+# 消费方：ocr_review.apply_safety_gate（NO_DATA → status 前缀「⚠数据不足」）、
+# gui._calc_from_items（_last_trust_summary 计数）。注意：NO_DATA ≠ RED，
+# 数据不足只降级提醒，绝不替用户清零补货量（宪法 §4/§7）。
+NO_DATA_SIGNAL = 'no_history'
+
+
 def calc_replenishment(items, region, model, safety_days, in_transit_qty,
                        shipping_lookup, history_lookup, offset=1,
                        cfg: dict = None) -> list:
@@ -883,6 +896,16 @@ def calc_replenishment(items, region, model, safety_days, in_transit_qty,
                     'ratio': 0.0, 'reorder': 0.0, 'daily': 0, 'stock': 0,
                     'model': 'classic(error)',
                 }
+        # v1.6.0 TC-Q2：signal 字段（'ok'|'no_history'|'fallback_error'）——
+        # 从 model 标注派生（'classic(no_history)' / 'classic(error)' 是三模式共用
+        # 的回退语义源），**经典公式函数内部零接触**（闸门是算后标注，红线 §7）。
+        _mtag = str(plan.get('model') or '')
+        if 'no_history' in _mtag:
+            plan['signal'] = NO_DATA_SIGNAL
+        elif 'error' in _mtag:
+            plan['signal'] = 'fallback_error'
+        else:
+            plan['signal'] = 'ok'
         out.append(plan)
     return out
 

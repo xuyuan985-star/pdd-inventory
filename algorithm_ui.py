@@ -28,6 +28,7 @@ __all__ = [
     'dispatch_plan',
     # R2 预测升级
     'recommend_safety_days', 'forecast_next_period',
+    'forecast_value', 'sanitize_series',
     'parse_bulk_promo_dates',
     'save_recommendation_cache', 'load_recommendation_cache',
     'clear_recommendation_cache',
@@ -416,6 +417,350 @@ def _history_to_daily_series(history_rows, days_window: int = 30):
         return []
 
 
+# ============================================================
+# v1.6.0 TC-B3 预测增强 V3/V4（PLAN §1.9 WS-B2）
+# ============================================================
+# 纯逻辑 / 失败安全 / 可单测 —— 不依赖 Tk、不连真实 DB。
+# V3 增强 = sanitize_series：IQR/winsorize 去极值 + 促销日反向缩放 +
+# 连续零销剔除；30 天窗口下推荐轻量阈值；任何异常 → 原序列返回 + 标记
+# `fallback=True`（绝不静默丢点）。
+# V4 增强 = 尾部 N 日线性回归趋势叠加：forecast = base + slope × horizon；
+# 缺数据 / 斜率不稳定 / 样本 < 14 → 显式回退 V3 + fallback_reason。
+# V5 季节性明确不在本版（需 ≥8 周数据，留 §5.4 文档门槛）。
+# ============================================================
+
+# V3 清洗参数（v1.6.0 拍板）
+_SANITIZE_IQR_K = 1.5  # IQR 倍数（标准 Tukey fence）
+_SANITIZE_WINSOR_LOWER = 0.05  # winsorize 下分位
+_SANITIZE_WINSOR_UPPER = 0.95  # winsorize 上分位
+_SANITIZE_MAX_ZERO_STREAK = 7  # 连续零销 > 该值 → 剔除（保窗口完整）
+_SANITIZE_PROMO_DOWNSHIFT = 0.7  # 促销日反向缩放系数（销量 1.4× → 还原 1.0）
+_SANITIZE_PROMO_FACTOR = 1.4  # 判定促销日的倍率阈值（销量 > 中位数 × 该值）
+
+
+def sanitize_series(series, cfg=None):
+    """V3 日销序列清洗（IQR/winsorize 去极值 + 促销日反向缩放 + 连续零销剔除）。
+
+    纯函数；输入 list[float] → 输出 (cleaned_series, meta)：
+    - cleaned_series: list[float]，按原序，长度==输入（**保窗口完整**——剔除位补
+      中位数；这是与"截断丢弃"的关键区别，_history_to_daily_series 后调用
+      不可改索引语义）。
+    - meta: dict，含 keys：
+        - removed_outliers: int，IQR 标记并 winsorize 替换的点数
+        - downshifted_promo: int，反向缩放的促销日数
+        - zero_streaks_trimmed: int，连续零销剔除的点数
+        - fallback: bool，是否回退原序列（异常路径）
+        - fallback_reason: str|None，回退原因（异常时填写）
+        - cfg: dict，本函数看到的实际参数（供测试断言）
+
+    cfg 字段（缺省走常量 _SANITIZE_*）：
+        - iqr_k: float,  IQR 倍数
+        - winsor_lower: float, 下分位（0~1）
+        - winsor_upper: float, 上分位（0~1，且 > winsor_lower）
+        - max_zero_streak: int, 连续零销剔除阈值
+        - promo_downshift: float, 促销日反向缩放系数
+        - promo_factor: float, 判定促销日倍率阈值
+        - disabled: bool, True → 原样返回（便于 A/B 关闭）
+    """
+    import statistics as _st
+    empty_meta = {
+        'removed_outliers': 0, 'downshifted_promo': 0,
+        'zero_streaks_trimmed': 0, 'fallback': False,
+        'fallback_reason': None, 'cfg': {},
+    }
+    if not isinstance(series, list) or len(series) == 0:
+        return list(series) if isinstance(series, list) else [], {**empty_meta, 'fallback': True,
+                                                                  'fallback_reason': 'empty_input'}
+
+    # cfg 解析（缺键默认 / 非法值兜底）
+    cfg = cfg if isinstance(cfg, dict) else {}
+    try:
+        iqr_k = float(cfg.get('iqr_k', _SANITIZE_IQR_K))
+    except Exception:
+        iqr_k = _SANITIZE_IQR_K
+    try:
+        wl = float(cfg.get('winsor_lower', _SANITIZE_WINSOR_LOWER))
+    except Exception:
+        wl = _SANITIZE_WINSOR_LOWER
+    try:
+        wu = float(cfg.get('winsor_upper', _SANITIZE_WINSOR_UPPER))
+    except Exception:
+        wu = _SANITIZE_WINSOR_UPPER
+    try:
+        mzs = int(cfg.get('max_zero_streak', _SANITIZE_MAX_ZERO_STREAK))
+    except Exception:
+        mzs = _SANITIZE_MAX_ZERO_STREAK
+    try:
+        pds = float(cfg.get('promo_downshift', _SANITIZE_PROMO_DOWNSHIFT))
+    except Exception:
+        pds = _SANITIZE_PROMO_DOWNSHIFT
+    try:
+        pf = float(cfg.get('promo_factor', _SANITIZE_PROMO_FACTOR))
+    except Exception:
+        pf = _SANITIZE_PROMO_FACTOR
+    if wl < 0 or wl > 1 or wu <= wl or wu > 1:
+        wl, wu = _SANITIZE_WINSOR_LOWER, _SANITIZE_WINSOR_UPPER
+    if mzs < 0:
+        mzs = _SANITIZE_MAX_ZERO_STREAK
+    if pf <= 1.0:
+        pf = _SANITIZE_PROMO_FACTOR
+    if pds <= 0 or pds >= 1:
+        pds = _SANITIZE_PROMO_DOWNSHIFT
+
+    meta = {
+        'removed_outliers': 0, 'downshifted_promo': 0,
+        'zero_streaks_trimmed': 0, 'fallback': False,
+        'fallback_reason': None,
+        'cfg': {'iqr_k': iqr_k, 'winsor_lower': wl, 'winsor_upper': wu,
+                'max_zero_streak': mzs, 'promo_downshift': pds, 'promo_factor': pf},
+    }
+    if cfg.get('disabled'):
+        return list(series), {**meta, 'fallback': True, 'fallback_reason': 'disabled_by_cfg'}
+
+    try:
+        # 1) 数值规整（None / 非数值 → 0；负数钳 0）
+        norm = []
+        for x in series:
+            try:
+                xv = float(x)
+            except Exception:
+                xv = 0.0
+            if xv < 0:
+                xv = 0.0
+            norm.append(xv)
+
+        n = len(norm)
+        if n == 0:
+            return [], {**meta, 'fallback': True, 'fallback_reason': 'all_invalid'}
+
+        # 2) IQR / winsorize 去极值（基于非零分位；全部为零直接跳过）
+        nonzero = [x for x in norm if x > 0]
+        if nonzero:
+            try:
+                if len(nonzero) >= 4:
+                    qs = _st.quantiles(nonzero, n=4, method='inclusive')
+                    q1, q3 = qs[0], qs[2]
+                else:
+                    q1, q3 = min(nonzero), max(nonzero)
+            except Exception:
+                q1, q3 = min(nonzero), max(nonzero)
+            iqr = max(0.0, q3 - q1)
+            upper_cap = q3 + iqr_k * iqr
+            sorted_nz = sorted(nonzero)
+            def _percentile(seq, p):
+                if not seq:
+                    return 0.0
+                k = max(0, min(len(seq) - 1, int(round(p * (len(seq) - 1)))))
+                return seq[k]
+            wl_v = _percentile(sorted_nz, wl)
+            wu_v = _percentile(sorted_nz, wu)
+            winsorized = []
+            for x in norm:
+                if x == 0:
+                    winsorized.append(0.0)
+                    continue
+                if x > upper_cap or x > wu_v:
+                    winsorized.append(wu_v)
+                    meta['removed_outliers'] += 1
+                elif x < wl_v:
+                    winsorized.append(wl_v)
+                    meta['removed_outliers'] += 1
+                else:
+                    winsorized.append(x)
+        else:
+            winsorized = list(norm)
+
+        # 3) 促销日反向缩放（销量 > 中位数 × promo_factor → 视为促销日）
+        sorted_for_med = sorted([x for x in winsorized if x > 0])
+        if sorted_for_med:
+            median_v = sorted_for_med[len(sorted_for_med) // 2]
+            threshold = median_v * pf
+            if threshold > 0:
+                for i, x in enumerate(winsorized):
+                    if x >= threshold and pds != 1.0:
+                        winsorized[i] = x * pds
+                        meta['downshifted_promo'] += 1
+
+        # 4) 连续零销剔除（保窗口完整——剔除位补中位数）
+        if mzs > 0:
+            sorted_pos = sorted([x for x in winsorized if x > 0])
+            fill_v = sorted_pos[len(sorted_pos) // 2] if sorted_pos else 0.0
+            i = 0
+            cleaned = list(winsorized)
+            while i < n:
+                if cleaned[i] == 0:
+                    j = i
+                    while j < n and cleaned[j] == 0:
+                        j += 1
+                    streak_len = j - i
+                    if streak_len > mzs:
+                        for k in range(i + mzs, j):
+                            cleaned[k] = fill_v
+                            meta['zero_streaks_trimmed'] += 1
+                    i = j
+                else:
+                    i += 1
+            return cleaned, meta
+        return winsorized, meta
+    except Exception as e:
+        return list(series), {**meta, 'fallback': True, 'fallback_reason': f'sanitize_error:{type(e).__name__}'}
+
+
+def forecast_value(result):
+    """向后兼容辅助函数（v1.6.0 TC-B3 配套）—— 把 dict 契约折叠成 float。
+
+    用途：旧调用方（export_xlsx.py / 既有单元测试）只需一个标量预测值，
+    调 forecast_value(v) 即可拿到 v['base']。**不影响新增 dict 字段**。
+    - dict → 返回 result.get('base')（None 时 0.0）
+    - 非 dict（理论上不会出现；防御性兜底）→ 视作 float 返回
+    """
+    if isinstance(result, dict):
+        b = result.get('base')
+        try:
+            return float(b) if b is not None else 0.0
+        except Exception:
+            return 0.0
+    try:
+        return float(result)
+    except Exception:
+        return 0.0
+
+
+# V4 趋势参数（v1.6.0 拍板）
+_TREND_TAIL_N = 14  # 取尾部 N 日做线性回归
+_TREND_MIN_SAMPLES = 14  # V4 启用最小样本数
+_TREND_SLOPE_NORM_CAP = 0.5  # 斜率 / base 比例上限（超过视为回归不稳定，回退 V3）
+
+
+def _linear_trend(tail):
+    """尾部 N 日线性回归 → (base_at_t0, slope_per_step)。
+
+    纯函数；输入 list[float] 长度 N → (float, float)：
+    - base = t=0 处的回归值（首日基线）
+    - slope = 每步增量
+    缺数据 / N<2 → 返 (0.0, 0.0)；斜率异常大 → 仍计算（上层做 norm 兜底回退）。
+    """
+    try:
+        if not isinstance(tail, list) or len(tail) < 2:
+            return (0.0, 0.0)
+        ys = [float(y) for y in tail]
+        n = len(ys)
+        x_mean = (n - 1) / 2.0
+        y_mean = sum(ys) / n
+        num = sum((i - x_mean) * (y - y_mean) for i, y in enumerate(ys))
+        den = sum((i - x_mean) ** 2 for i in range(n))
+        if den <= 0:
+            return (y_mean, 0.0)
+        slope = num / den
+        base = y_mean - slope * x_mean
+        return (float(base), float(slope))
+    except Exception:
+        return (0.0, 0.0)
+
+
+def forecast_next_period(history_rows, alpha: float = DEFAULT_FORECAST_ALPHA,
+                         version: str = '', sanitize_cfg=None, as_dict: bool = False):
+    """v1.6.0 增强预测：可选 dict 契约（as_dict=True）。
+
+    契约（v1.5.13 → v1.6.0）：
+    - 默认（as_dict=False）→ 返 float | None（与 v1.5.13 完全一致；gui.py / 旧调用零改动）
+    - as_dict=True → 返 dict：
+        {
+          'base': float,  # 下一期预测日销（>=0；与旧契约同语义）
+          'trend': float,  # 尾部线性回归斜率（每日增量；V4 用）
+          'version': 'v3'|'v4',  # 实际启用的版本
+          'fallback': bool,  # 是否回退
+          'fallback_reason': str|None,  # 回退原因
+        }
+    - 旧调用方拿标量可用 `forecast_value(v)` 折叠。
+    失败哲学：缺数据 / 异常 / V4 不稳定 → 显式回退 V3 + 填 fallback_reason
+    （绝不静默，符合 §4 失败哲学 + 宪法 R8）。
+
+    version 行为（缺省从 settings 读：replenishment.forecast_version）：
+    - 'v3'：sanitize_series + SES（默认保守）
+    - 'v4'：sanitize_series + SES + 尾部 N 日线性回归（base + slope×1）
+    - 其他 / 缺省 → 'v3'（拍板：保守先）
+    V5 季节性明确不在本版（需 ≥8 周数据，留 §5.4 文档门槛）。
+    """
+    # 0) 解析 version（缺省走 v3 保守）
+    if not version:
+        try:
+            from utils import Config
+            cfg = Config.load()
+            version = str(((cfg.get('replenishment') or {}).get('forecast_version') or 'v3')).strip().lower() or 'v3'
+        except Exception:
+            version = 'v3'
+    if version not in ('v3', 'v4'):
+        version = 'v3'
+
+    # 1) α 钳制（与 v1.5.13 同款）
+    try:
+        a = float(alpha)
+    except Exception:
+        a = DEFAULT_FORECAST_ALPHA
+    if a < 0:
+        a = 0.0
+    elif a > 1:
+        a = 1.0
+
+    # 2) 取日销序列 + 清洗
+    series = _history_to_daily_series(history_rows, days_window=30)
+    if len(series) < MIN_FORECAST_SAMPLES:
+        # 缺数据：实际启用版本回退到 v3（与 V4 内部的 insufficient_samples_for_v4 对齐）
+        result = {
+            'base': None, 'trend': 0.0, 'version': 'v3',
+            'fallback': True, 'fallback_reason': 'insufficient_samples',
+        }
+        return result if as_dict else None
+    cleaned, s_meta = sanitize_series(series, cfg=sanitize_cfg)
+
+    # 3) SES 递推
+    s = cleaned[0]
+    for x in cleaned[1:]:
+        s = a * x + (1.0 - a) * s
+    if s < 0:
+        s = 0.0
+    if s > 1e9:
+        s = 1e9
+    base = round(s, 4)
+
+    # 4) V4 趋势叠加
+    trend = 0.0
+    final = base
+    final_version = version
+    fallback = False
+    fallback_reason = None
+    if version == 'v4':
+        if len(cleaned) < _TREND_MIN_SAMPLES:
+            final_version = 'v3'
+            fallback = True
+            fallback_reason = 'insufficient_samples_for_v4'
+        else:
+            tail = cleaned[-_TREND_TAIL_N:] if len(cleaned) >= _TREND_TAIL_N else cleaned
+            t_base, t_slope = _linear_trend(tail)
+            if base > 0 and abs(t_slope) / base > _TREND_SLOPE_NORM_CAP:
+                final_version = 'v3'
+                trend = 0.0
+                fallback = True
+                fallback_reason = 'v4_unstable'
+            else:
+                trend = round(t_slope, 4)
+                final = round(base + t_slope, 4)
+                if final < 0:
+                    final = 0.0
+
+    if not as_dict:
+        # 默认契约：浮点标量（与 v1.5.13 一致）—— None 仍表示数据不足
+        return final if not (fallback or s_meta.get('fallback', False)) else None
+    return {
+        'base': final,
+        'trend': trend,
+        'version': final_version,
+        'fallback': fallback or s_meta.get('fallback', False),
+        'fallback_reason': fallback_reason if fallback else s_meta.get('fallback_reason'),
+    }
+
+
 def recommend_safety_days(history_rows, lead_days: int, z: float = DEFAULT_SAFETY_Z):
     """推荐安全库存天数（基于近期日销波动）。
 
@@ -473,61 +818,6 @@ def recommend_safety_days(history_rows, lead_days: int, z: float = DEFAULT_SAFET
         return None
     recommended = max(1, min(30, int(math.ceil(raw))))
     return recommended
-
-
-def forecast_next_period(history_rows, alpha: float = DEFAULT_FORECAST_ALPHA):
-    """简单指数平滑预测下一期日销。
-
-    公式：S_0 = x_0（第一个观测）
-          S_t = α·x_t + (1−α)·S_{t−1},  t=1..n-1
-          forecast = S_{n-1}（最新平滑值作为下一期预测）
-
-    Returns:
-        float: 下一期预测日销（>=0）。None = 数据不足 / 输入异常。
-    Raises:
-        无。
-
-    契约：
-        - history_rows：list[dict]，每行 {captured_at, sales}。
-        - alpha：默认 0.5；钳到 [0, 1]。
-    """
-    # 1) 输入守卫
-    try:
-        a = float(alpha)
-    except Exception:
-        a = DEFAULT_FORECAST_ALPHA
-    if a < 0:
-        a = 0.0
-    elif a > 1:
-        a = 1.0
-
-    # 2) 取日销序列（30 天窗口）
-    series = _history_to_daily_series(history_rows, days_window=30)
-    if len(series) < MIN_FORECAST_SAMPLES:
-        return None
-
-    # 3) 清洗：负值钳 0、坏值丢弃
-    cleaned = []
-    for x in series:
-        try:
-            xv = float(x)
-        except Exception:
-            continue
-        if xv < 0:
-            xv = 0.0
-        cleaned.append(xv)
-    if len(cleaned) < MIN_FORECAST_SAMPLES:
-        return None
-
-    # 4) SES 递推：S_0 = cleaned[0]；S_t = a·x_t + (1−a)·S_{t−1}
-    s = cleaned[0]
-    for x in cleaned[1:]:
-        s = a * x + (1.0 - a) * s
-    if s < 0:
-        return 0.0
-    if s > 1e9:
-        return 1e9
-    return round(s, 4)
 
 
 def parse_bulk_promo_dates(text: str):

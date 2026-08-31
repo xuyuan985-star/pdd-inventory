@@ -178,7 +178,17 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = 
                 _fc = ''
             if _has_fc:
                 vals.append(_fc)
-            vals += [_sanitize_cell(p['status']), p['qty']]
+            # v1.6.0 TC-Q2：RED 行导出安全闸（纵深防御）——补货量列强制写 0 +
+            # 状态加 ⛔ 标注（gui 闸门已做过一次；这里兜住未经 gui 闸的 plan 来源，
+            # 如 calc_replenishment 直调/旧缓存回放）。不阻止导出本身——
+            # 宪法 §7：闸门拦的是"自动建议值"，不是用户的导出动作。
+            _exp_status = str(p.get('status', '') or '')
+            _exp_qty = p.get('qty', 0)
+            if p.get('trust') == 'RED':
+                _exp_qty = 0
+                if not _exp_status.startswith('⛔'):
+                    _exp_status = '⛔' + _exp_status
+            vals += [_sanitize_cell(_exp_status), _exp_qty]
             if _has_model:
                 # P3-A：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
                 vals.append(_sanitize_cell(p.get('model', 'classic')))

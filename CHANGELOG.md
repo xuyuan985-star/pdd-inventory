@@ -1,5 +1,39 @@
 # PDD EZ 更新日志
 
+## v1.6.0（质量基建版：数据可信体系 + 诊断系统 + 架构优化）
+
+**本版目标：从"工程扎实的 AI 工具"进入"有数据闭环的 AI 产品"。全量测试 1543+ 项全绿（基线 1061）。**
+
+### P0 质量基建
+- **Golden Dataset 评估体系**：`data/synthetic/` 合成数据集（12 case × 181 行 GT，覆盖库存 0/1/9/10/99/100/999/1000、销量 0/10/110/1109、多分辨率/DPI/多页变体）+ `tools/eval_accuracy.py` 评估器（行召回/字段/完整行/补货误差率 KPI，报告绝不含业务原文）+ **端到端 mock 评估**（`--use-transport` 经 `vision.set_transport` 注入，12 case 实测 100%）；3 张真实截图 GT（18 行）已标注且**严格留仓外**（`F:\dsh workspace\测试截图（禁止泄露）\`，绝不入 git）
+- **三色闸门 + 补货安全闸**（GREEN/YELLOW/RED/NO_DATA 四态）：RED 行强制补货量=0 +「⛔高风险·建议人工核对」前缀，NO_DATA「⚠数据不足」；导出同步 ⛔ 标注（不阻止导出）；**经典补货公式零改动**（算后覆盖红线 + 常驻回归断言）
+- **AI 自检报告**：结果表上方汇总条「可信 N｜需复核 N｜高风险 N｜数据不足 N」+「查看复核」入口
+- **Run ID 诊断系统**：每次识别生成 `RUN-YYYYMMDD-HHMMSS-XXXX`，贯通 usage 日志/历史库/用量页「最近运行」（最近 20 次）
+
+### P1 架构
+- **VisionProvider 抽象**：`VisionRouter`/`ProviderConfig`/cascade 降级链 + `set_transport` mock 注入缝（外部契约零变化）
+- **GUI 渐进解耦**：ImportServiceMixin 抽取（6 方法 287 行迁出 gui.py）、ReplenishmentService.build_plans 纯函数（25 字段对齐）
+- **用量成本分解**：用量页「按用途」分布树（by_call_site，汉化映射）
+- Prompt 文件化：12 处内联 prompt → `prompts/` 目录（table/locate/ocr/status_v1）+ `prompt_version='v160'` 贯通 Run ID（渲染快照逐字节一致）
+
+### P2 算法与数据资产
+- **补货回测器** `tools/backtest.py`：MAE/MAPE/RMSE/Bias + walk-forward（≥14 期门禁，只读不写历史库）
+- **预测增强 V3/V4**：sanitize_series（IQR/winsorize/促销反向缩放/零销剔除）+ V4 尾部线性回归趋势（缺数据显式回退）
+- **历史库升级数据资产**：capture_sessions/history_rows 新增 8 列（forecast/confidence/trust_level/run_id/prompt_version…）+ `query_snapshot` 回放通道（旧库 ALTER 零丢失迁移）
+- **首页仪表盘**：库存/预警/趋势/用量/健康卡，一次性拉取 + TTL 60s 缓存 + 事件驱动刷新（不轮询）
+
+### P3 产品化
+- **依赖锁定**：`requirements.lock`（14 包精确 ==，含升降级禁区说明）+ `tools/check_lock.py` CI 哨兵
+- **启动健康检查**：5+1 项异步聚合（配置/DB/模型/License/更新器），状态栏徽章
+- **更新器自动回滚**：`update_health.json` 状态机（pending→ok/rolled_back/rollback_failed），启动失败 ≥3 次自动回滚（仅一次，绝不 rmtree 程序目录）
+- **License Server 准备件** `docs/LICENSE_SERVER_PREP_v160.md`（5 表 DDL/签发/验签流程，本版维持离线验签）
+- **多平台/云同步预留** `docs/SYNC_DESIGN.md` + `sync_transport.py` Protocol 空壳（零网络代码）
+
+### 其他
+- 宪法修订：DESIGN.md §5 措辞对齐实现（`.old_upd`/`.old`）、§8 回归记录补行
+- 基线红点修复：`filter_result_cols(None)` 全开语义（1061→1069）
+- 代码卫生：async_queue 双 TaskQueue 事实澄清（docstring 误判不硬删）、孤儿脚本清理、测试隔离修复（Config.load/save 成对还原）
+
 ## v1.5.13（结果列开关：预警/预测/模型可关，列表与导出联动）
 
 **用户反馈：不想看预警/预测列，导出的 Excel 也被迫带上。**

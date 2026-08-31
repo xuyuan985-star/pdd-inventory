@@ -458,12 +458,44 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
     """
     通用视觉 API 调用：按 settings 提供商配置选端点/模型。
     识别失败如实抛出错误，不偷偷 fallback 到其他模型（v1.3：一切如实）。
-    返回 (content_text, model_used)；失败抛 RuntimeError。
+    返回 (content_text, model_used, usage)；失败抛 RuntimeError。
     prefer_general=True：探测列/列名汇总等任务必须用通用视觉模型——
     Qwen OCR 专用模型（qwen*-ocr）只做文字提取，不做"列名汇总/结构理解"，
     会返回文字定位结果而非表格结构（v1.4 修复）。此时复用 vision._pick_vision_model
     的规则：主模型通用→用主模型；主模型 OCR→用副模型；都不可用→报错。
+
+    v1.6.0 TC-A2：transport 注入缝入口——若 vision._TRANSPORT_OVERRIDE 已设置，
+    直接走 stub（TC-Q1 评估器 + 单测）；生产路径（None）仍走下方网络段。
     """
+    # v1.6.0 TC-A2：transport 注入点（先于 provider 解析；评估器只关心三元组）
+    # v1.6.0 CROSS#3 修复（发布前修复批次）：当 _TRANSPORT_OVERRIDE 已设置且
+    # 注入函数抛错时，绝不静默回落真实 API 路径（会真实计费 + 违反 §4 失败哲学）。
+    # 显式记日志 + 向上抛 RuntimeError（由调用方 _friendly_error 归类）。
+    from vision import _TRANSPORT_OVERRIDE as _t_over, _call_with_transport as _vcwt
+    if _t_over is not None:
+        try:
+            _stub = _vcwt(img_b64, prompt, max_tokens=max_tok, task_type='ocr', timeout=180)
+        except Exception as _te:
+            try:
+                from utils import _sanitize_for_log as _sfl
+                _ocr_dlog(f"[ocr] transport stub 抛错，绝不回落真实 API（{_sfl(str(_te))[:120]}）")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"OCR transport stub 抛错（已设置 _TRANSPORT_OVERRIDE）：{type(_te).__name__}: {str(_te)[:120]}"
+            ) from _te
+        if _stub is not None:
+            return _stub
+        # _TRANSPORT_OVERRIDE 已设置但 _call_with_transport 返 None
+        # —— 显式视作 stub 配置错误，绝不静默走真实 API（避免真实计费）
+        try:
+            _ocr_dlog("[ocr] _TRANSPORT_OVERRIDE 已设置但 stub 返回 None——拒绝回落真实 API")
+        except Exception:
+            pass
+        raise RuntimeError(
+            "OCR transport stub 已注入但返回 None（请检查 set_transport 实现）"
+        )
+
     api_cfg = get_api_config()
     active = api_cfg.get('active_provider', 'doubao')
     providers = api_cfg.get('providers', {})
@@ -748,9 +780,16 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                         # v1.5.12：前缀回退取价（快照模型名命中基础名价目，修"计价瘫痪"）
                         _u_entry = _usage_extractor.resolve_pricing(_u_pricing, active, mdl)
                         _u_cost = _usage_extractor.compute_cost(_usage, _u_entry)
+                        # v1.6.0 TC-Q4：batch_id=当前 Run ID（run_context 相位 2；
+                        # 无活动 run → ''，行保持 v1 形状）。懒导入防环。
+                        try:
+                            from run_context import current_run_id as _cur_run_id
+                            _rid = _cur_run_id()
+                        except Exception:
+                            _rid = ''
                         _usage_store.record(active, _api_type, mdl, cur_endpoint, _usage, _u_cost,
                                             str(_usage.get('source') or '').startswith('fallback'),
-                                            call_site='OCR 识别', batch_id='')
+                                            call_site='OCR 识别', batch_id=_rid)
                 except Exception:
                     pass
                 return content, mdl, _usage
@@ -1219,21 +1258,11 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
         _ex_col2 = columns[1] if len(columns) > 1 else '库存'
         _example_json = json.dumps({_ex_col1: "示例商品B500g", _ex_col2: "128份"},
                                    ensure_ascii=False)
-        prompt = f"""你是数据录入员，识别图中 PDD 后台表格。表格为竖向列表，每行一条数据。
-
-只识别以下列（严格按这些列名作为 JSON key，列名原样）：{cols_txt}
-
-输出要求：
-1. 严格按表格从上到下顺序逐行输出，一行不漏、不重复、不合并
-2. 每行输出一个 JSON 对象，key 用上面给的列名原样（缺某列的值填 null，不要编造）
-3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）。**数字类列（库存/销量）只抄第一个数值，数值后如果还有其他数字串/时间，一律不要抄**（如"102份 12345"只抄"102份"）。**如果数字看起来异常多位（如 1109、100000），要核对是否把其他文字/格式读进去了，数字通常是简洁的整数**；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
-4. 值为 0 是真实业务数据，该行必须保留，绝不能跳过
-5. 商品信息类列（如「商品信息」「商品名称」）包含商品名和商品ID（如"示例商品A500g/袋 ID:12345678901"），必须完整原样抄写，不得去掉 ID 部分——商品ID用于区分重名商品。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null。**ID 是纯数字串（ID: 后跟一串数字），必须逐位核对，数字识别不清时宁可省略 ID 也不要编造/改位**
-6. 整张截图没有有效表格时只输出 []
-7. 只输出 JSON 数组，不要任何解释文字
-
-示例（仅示意格式）：
-[{_example_json}]"""
+        # v1.6.0 TC-Q5：prompt 从 prompts/table_v1.txt (cols 变体) 加载，与原内联串逐字节一致
+        from prompts import load_prompt as _load_prompt
+        prompt = _load_prompt('table_v1', 'cols').format(
+            cols_txt=cols_txt, example_json=_example_json,
+        )
         # 列多时按列数放大 token，但设 8192 上限防止过度消耗 API 额度；
         # Qwen OCR 专用模型默认支持 4096+，直接吃满输出预算（表格识别更长更稳）
         if _is_ocr:
@@ -1241,23 +1270,9 @@ def ocr_table(image_path: str, columns: list = None, forced_model: str = None,
         else:
             max_tok = min(max(1024, 512 * max(1, len(columns))), 8192)
     else:
-        prompt = """你是数据录入员，识别图中 PDD 后台表格。表格为竖向列表，每行一条数据。
-
-请识别：
-1. 表格的所有列名（表头），保持从左到右顺序，列名原样抄写（如"商品名称""仓库总库存"）
-2. 每一行的所有单元格值，按列对应
-
-输出严格 JSON（只输出 JSON，不要解释）：
-{"columns": ["列名1", "列名2", ...], "rows": [{"列名1": "值", "列名2": "值", ...}, ...]}
-
-要求：
-- columns 与表头完全一致（顺序、文字原样）
-- rows 每行一个对象，key 必须与 columns 完全一致
-- 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄。**数字类列（库存/销量）只抄第一个数值，数值后如果还有其他数字串/时间，一律不要抄**（如"102份 12345"只抄"102份"）。**如果数字看起来异常多位（如 1109、100000），要核对是否把其他文字/格式读进去了，数字通常是简洁的整数**；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
-- 商品信息类列（如「商品信息」）含商品名和商品ID（如"示例商品A500g/袋 ID:12345678901"），必须完整原样抄写，不得去掉 ID 部分。商品名**逐字原样抄写**，禁止用形近字/同音字替换（如"结"写成"丝"、"己"写成"已"），看不清的宁可填 null。**ID 是纯数字串，必须逐位核对，数字识别不清时宁可省略 ID 也不要编造/改位**
-- 值为 0 是真实业务数据，必须保留该行
-- 无法识别的单元格填 null，不要编造
-- 表格为空或无有效数据时输出 {"columns": [], "rows": []}"""
+        # v1.6.0 TC-Q5：prompt 从 prompts/table_v1.txt (full 变体) 加载，与原内联串逐字节一致
+        from prompts import load_prompt as _load_prompt
+        prompt = _load_prompt('table_v1', 'full')
         max_tok = 4096  # v1.4.2：全列大表（9行14列≈2500token）1024/2048 必截断（客户实测 JSON 断尾）；
         # desired 4096 由 _ocr_api_call_do 按模型分档钳制——qwen 系/OCR 系 4096、
         # glm-4v-flash 1024、未知模型 2048，弱模型不会 400。
@@ -1349,14 +1364,9 @@ def ocr_table_verify(image_path: str, table_bbox: dict = None,
     """
     img_b64 = _prep_image_b64(image_path, table_bbox=table_bbox,
                               max_side=2560 if _is_qwen_ocr(forced_model) else 1920)
-    prompt = """你是数据录入员，识别图中 PDD 后台表格的每一行数据（竖向列表）。
-识别每一行的所有列：JSON key 用图中表头列名原样（如"商品信息""仓库总库存""仓库预估总销售数""仓库信息"）。
-输出严格 JSON：{"rows": [{"商品信息": "值", "仓库总库存": "值", ...}, ...]}
-重点要求（本识别用于补全首轮缺漏）：
-1. **商品信息列必须完整抄写商品名 + ID 数字串**（如"示例商品A500g/袋 ID:12345678901"），ID 是纯数字串，必须逐位核对输出；看不清宁可填 null 也不要编造/改位
-2. **数字类列（库存/销量）完整输出，末位 0 必须保留（如 1230 不能写成 123），禁止丢位/截断/省略**
-3. 按图中从上到下顺序逐行输出，一行不漏；某列缺值填 null，不要编造
-4. 只输出 JSON，不要解释"""
+    # v1.6.0 TC-Q5：prompt 从 prompts/ocr_v1.txt (full 变体) 加载，与原内联串逐字节一致
+    from prompts import load_prompt as _load_prompt
+    prompt = _load_prompt('ocr_v1', 'full')
     try:
         content, _, _usage = _ocr_api_call(img_b64, prompt, max_tok=4096, forced_model=forced_model)
         return _parse_ocr_response(content)
@@ -1543,25 +1553,15 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
         # Qwen OCR 专用模型：行切分每组小图，同样吃满 4096 token（输出更长更稳）
         # （_is_ocr 已在函数开头按 forced_model + 当前 provider 判定）
         _row_max_tok = 4096 if _is_ocr else 2048
+        # v1.6.0 TC-Q5：prompt 从 prompts/ocr_v1.txt 加载，与原内联串逐字节一致
+        from prompts import load_prompt as _load_prompt
         if columns:
-            _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
-只识别以下列（严格按这些列名作为 JSON key，列名原样）：{_cols_txt}
-输出严格 JSON：{{"rows": [{{"{_ex_col}": "值", ...}}, ...]}}
-要求：
-1. 按图中从上到下顺序逐行输出，一行不漏、不重复、不合并
-2. 每行 key 用上面列名原样；缺某列的值填 null，**不要编造图中没有的内容**
-3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
-4. 只输出 JSON，不要解释"""
+            _prompt = _load_prompt('ocr_v1', 'split_cols').format(
+                n_rows=len(_grp), cols_txt=_cols_txt, example_col=_ex_col,
+            )
         else:
             # 全列模式：模型识别所有列，key 用表头列名原样（程序端按 mapping 筛选）
-            _prompt = f"""你是数据录入员，识别图中 PDD 后台表格的一个片段（共 {len(_grp)} 行，含表头）。
-识别每一行的**所有列**：JSON key 用图中表头列名原样（如"商品信息""仓库总库存""仓库预估总销售数""仓库信息"）。
-输出严格 JSON：{{"rows": [{{"商品信息": "值", "仓库总库存": "值", ...}}, ...]}}
-要求：
-1. 按图中从上到下顺序逐行输出，一行不漏、不重复、不合并
-2. 每行 key 用表头列名原样；某列缺值填 null，**不要编造图中没有的内容**
-3. 单元格值原样抄写，不要转换数字、不要去掉单位；数字后的日期时间不抄（如"258份 08-02"只抄"258份"）；**数字必须完整输出——末位 0 必须保留（如 1230 不能写成 123）、禁止丢位/截断/省略（v1.4.2 数字完整性强化）**
-4. 只输出 JSON，不要解释"""
+            _prompt = _load_prompt('ocr_v1', 'split_full').format(n_rows=len(_grp))
         try:
             content, _, _usage = _ocr_api_call(_b64, _prompt, max_tok=_row_max_tok, forced_model=forced_model)
         except Exception as e:

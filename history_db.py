@@ -78,7 +78,8 @@ DEFAULT_STORE_ID = 'default'
 __all__ = [
     'DB_NAME', 'db_path', 'set_db_path', 'reset_db_path', 'DEFAULT_STORE_ID',
     'record_capture', 'query_daily', 'query_sku_history', 'query_region_days',
-    'query_regions', 'prune', 'delete_region', 'delete_store', 'clear_all',
+    'query_regions', 'query_snapshot', 'prune', 'delete_region', 'delete_store',
+    'clear_all',
 ]
 
 DB_NAME = 'history.db'
@@ -95,11 +96,15 @@ _WRITE_LOCK = threading.RLock()  # 写操作全局串行（record/prune/delete/c
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS capture_sessions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT NOT NULL,              -- ISO 本地时间 'YYYY-MM-DD HH:MM:SS'
-    region      TEXT NOT NULL DEFAULT '',   -- session 首地区
-    source      TEXT NOT NULL,              -- 'live' | 'batch' | 'file' | 'import'
-    item_count  INTEGER NOT NULL DEFAULT 0
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT NOT NULL,              -- ISO 本地时间 'YYYY-MM-DD HH:MM:SS'
+    region        TEXT NOT NULL DEFAULT '',   -- session 首地区
+    source        TEXT NOT NULL,              -- 'live' | 'batch' | 'file' | 'import'
+    item_count    INTEGER NOT NULL DEFAULT 0,
+    -- v1.6.0 数据资产扩展（TC-B1 + TC-Q4 协作；旧库 ALTER 兼容）：
+    run_id        TEXT NOT NULL DEFAULT '',   -- RUN-YYYYMMDD-HHMMSS-XXXX；空 = 旧 session
+    prompt_version TEXT NOT NULL DEFAULT '',  -- prompts.prompt_version()；空 = 旧 session
+    trust_level   TEXT NOT NULL DEFAULT ''    -- ''|'GREEN'|'YELLOW'|'RED'（session 级闸门汇总）
 );
 CREATE TABLE IF NOT EXISTS history_rows (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +119,13 @@ CREATE TABLE IF NOT EXISTS history_rows (
     days_left   REAL,
     status      TEXT NOT NULL DEFAULT '',
     qty         INTEGER NOT NULL DEFAULT 0,
-    warehouse   TEXT NOT NULL DEFAULT ''
+    warehouse   TEXT NOT NULL DEFAULT '',
+    -- v1.6.0 数据资产扩展（TC-B1 + WS-Q2 协作；旧库 ALTER 兼容）：
+    forecast          REAL,                      -- SES/V4/V5 预测值；NULL = 未预测或回退经典
+    replenishment_qty INTEGER NOT NULL DEFAULT 0, -- 闸门 RED 时强制 0 覆盖后的最终补货量
+    confidence        TEXT NOT NULL DEFAULT '',   -- ''|'GREEN'|'YELLOW'|'RED'（行级闸门）
+    trust_level       TEXT NOT NULL DEFAULT '',   -- 同 confidence；保留字段供回测溯源
+    model_tag         TEXT NOT NULL DEFAULT 'classic'  -- 'classic'|'weighted'|'ses'|'v3'|'v4'|'v5'
     -- _raw 全列原文不持久化（§2.1.3：只存业务字段控体积）
 );
 CREATE INDEX IF NOT EXISTS idx_rows_sku  ON history_rows(sku_id, captured_at DESC) WHERE sku_id != '';
@@ -307,6 +318,60 @@ def _migrate_store_column(conn):
         _dlog('[history] 老库迁移完成：history_rows 补 store 列（旧行归 default 店铺语义）')
 
 
+# v1.6.0 数据资产扩展（TC-B1 + TC-Q4 协作）
+# 旧库可能缺这些列——ALTER TABLE 兼容补列（与 _migrate_store_column 同模式）。
+# 所有新列都带 DEFAULT，旧行 NULL/0/'' 自动兼容；不丢任何老数据。
+_V16_HISTORY_ROW_COLS = (
+    # (column_name, sql_type, default_sql_literal)
+    ('forecast',          'REAL',                         None),  # NULL 容忍：未预测/回退经典
+    ('replenishment_qty', 'INTEGER',                      'NOT NULL DEFAULT 0'),
+    ('confidence',        'TEXT',                         "NOT NULL DEFAULT ''"),
+    ('trust_level',       'TEXT',                         "NOT NULL DEFAULT ''"),
+    ('model_tag',         'TEXT',                         "NOT NULL DEFAULT 'classic'"),
+)
+_V16_CAPTURE_SESSION_COLS = (
+    ('run_id',         'TEXT', "NOT NULL DEFAULT ''"),
+    ('prompt_version', 'TEXT', "NOT NULL DEFAULT ''"),
+    ('trust_level',    'TEXT', "NOT NULL DEFAULT ''"),
+)
+
+
+def _migrate_v16_columns(conn):
+    """v1.6.0 老库迁移：补 forecast/replenishment_qty/confidence/trust_level/
+    model_tag（history_rows）+ run_id/prompt_version/trust_level（capture_sessions）。
+
+    失败安全：每条 ALTER 独立 try（与现有 _migrate_store_column 同模式）；
+    单条失败不阻断后续。**绝不丢老数据**：仅 ADD COLUMN，默认值覆盖旧行。
+    """
+    # history_rows
+    try:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(history_rows)')}
+        for col_name, sql_type, default_sql in _V16_HISTORY_ROW_COLS:
+            if col_name not in cols:
+                if default_sql is None:
+                    # forecast: NULL 容忍（旧行视为未预测）
+                    conn.execute(f"ALTER TABLE history_rows ADD COLUMN {col_name} {sql_type}")
+                else:
+                    conn.execute(
+                        f"ALTER TABLE history_rows ADD COLUMN {col_name} {sql_type} {default_sql}")
+        _dlog('[history] v1.6.0 迁移完成：history_rows 新增 forecast/replenishment_qty/'
+              'confidence/trust_level/model_tag（缺失列才补）')
+    except Exception as e:
+        _dlog(f'[history] history_rows v1.6.0 迁移失败（旧库可继续用）: {e}')
+
+    # capture_sessions
+    try:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(capture_sessions)')}
+        for col_name, sql_type, default_sql in _V16_CAPTURE_SESSION_COLS:
+            if col_name not in cols:
+                conn.execute(
+                    f"ALTER TABLE capture_sessions ADD COLUMN {col_name} {sql_type} {default_sql}")
+        _dlog('[history] v1.6.0 迁移完成：capture_sessions 新增 run_id/prompt_version/'
+              'trust_level（缺失列才补）')
+    except Exception as e:
+        _dlog(f'[history] capture_sessions v1.6.0 迁移失败（旧库可继续用）: {e}')
+
+
 def _ensure_ready() -> bool:
     """确保库目录存在、损坏库已隔离重建、schema 就绪（含 t1 store 列迁移）；
     失败返回 False（不外抛）。
@@ -348,6 +413,7 @@ def _ensure_ready() -> bool:
                     pass  # 只读库等场景不阻塞初始化（后续写入会显式失败并被吞）
                 conn.executescript(_SCHEMA)
                 _migrate_store_column(conn)  # 老库 ALTER 补 store 列（新库 no-op）
+                _migrate_v16_columns(conn)  # v1.6.0：补 forecast/confidence/run_id 等
                 conn.executescript(_SCHEMA_EXTRA)  # store 列就绪后才能建店铺索引
             finally:
                 conn.close()
@@ -385,7 +451,8 @@ def _run_db(fn, default):
 
 
 _ROW_COLS = ('id', 'session_id', 'captured_at', 'region', 'sku_id', 'name', 'stock',
-             'sales', 'days_left', 'status', 'qty', 'warehouse', 'store')
+             'sales', 'days_left', 'status', 'qty', 'warehouse', 'store',
+             'forecast', 'replenishment_qty', 'confidence', 'trust_level', 'model_tag')
 
 
 def _row_dicts(cur) -> list:
@@ -393,6 +460,8 @@ def _row_dicts(cur) -> list:
 
     t1：store='' 旧行出口归一化为 'default'（与"''≡default"查询语义一致，
     GUI/统计层拿到的 store 永远是可显示的店铺 id）。
+    v1.6.0：新列 forecast/replenishment_qty/confidence/trust_level/model_tag 出口
+    类型规整（forecast 浮点容忍 NULL；replenishment_qty 整数；其他文本 ''）。
     """
     out = []
     for r in cur:
@@ -400,7 +469,9 @@ def _row_dicts(cur) -> list:
         row['stock'] = _to_int(row.get('stock'))
         row['sales'] = _to_int(row.get('sales'))
         row['qty'] = _to_int(row.get('qty'))
+        row['replenishment_qty'] = _to_int(row.get('replenishment_qty'))
         row['days_left'] = _to_float(row.get('days_left'))
+        row['forecast'] = _to_float(row.get('forecast'))
         if not _to_str(row.get('store')):
             row['store'] = DEFAULT_STORE_ID
         out.append(row)
@@ -428,12 +499,24 @@ def _store_where(store, params) -> str:
 
 # ── 写入 ──────────────────────────────────────────────────────────────
 
-def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID) -> int:
+def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID,
+                   run_id='', prompt_version='', trust_level='') -> int:
     """记录一次识别/导入 = 一个 session（详见模块 docstring 输入契约）。
 
     t1 店铺维度：入参支持单层 {region: [plans]}（store_id 参数，缺省 default）
     或双层 {store_id: {region: [plans]}}（按顶层值类型逐项判别，旧调用零改动）。
     store_id='' /None 落库归一化为 'default'。
+
+    v1.6.0 新增可选入参（与现有缺键容忍模式一致——旧调用方零改动）：
+    - run_id: WS-Q4 生成的 RUN-YYYYMMDD-HHMMSS-XXXX；缺省 ''（旧 session）
+    - prompt_version: prompts.prompt_version() 输出；缺省 ''
+    - trust_level: WS-Q2 session 级闸门汇总（''|'GREEN'|'YELLOW'|'RED'）；缺省 ''
+
+    plans 单条新字段（v1.6.0 同样缺键容忍）：
+    - forecast: float | None  → REAL 列（NULL 容忍）
+    - replenishment_qty: int | None → INTEGER 列（缺省 0）
+    - confidence / trust_level: str → TEXT 列（缺省 ''）
+    - model_tag: str → TEXT 列（缺省 'classic'）
 
     executemany 批量 INSERT + BEGIN IMMEDIATE 单事务；返回 session_id；
     **任何异常仅记日志并返回 -1，绝不外抛（R8 铁律）**。
@@ -449,7 +532,13 @@ def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID) ->
         # 死分支。_to_str(store_id) or DEFAULT_STORE_ID 已经把空值（None/''）兜底
         # 成 'default'，下面的 == '' 永远 False，是无副作用的死代码。
         default_store = _to_str(store_id) or DEFAULT_STORE_ID
-        rows = []  # (store, region, sku_id, name, stock, sales, days_left, status, qty, warehouse)
+        # v1.6.0 session 级扩展字段（run_id/prompt_version/trust_level 整体归一化）
+        rid = _to_str(run_id)[:64]
+        pver = _to_str(prompt_version)[:32]
+        stl = _to_str(trust_level)[:16]
+        if stl and stl not in ('GREEN', 'YELLOW', 'RED'):
+            stl = ''  # 非法值静默归零（不外抛）
+        rows = []  # (store, region, sku_id, name, stock, sales, days_left, status, qty, warehouse, forecast, replenishment_qty, confidence, trust_level, model_tag)
         first_region = ''  # session 首地区（取第一个非空地区，跨店铺按入参顺序）
 
         def _collect(store, region, plans):
@@ -463,6 +552,15 @@ def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID) ->
             for p in plans:
                 if not isinstance(p, dict):
                     continue  # 单条脏数据跳过，不影响其余行
+                # v1.6.0 行级扩展字段缺键容忍
+                _fc = p.get('forecast', None)
+                _fc_val = _to_float(_fc, default=None)  # NULL 容忍
+                _rq = _to_int(p.get('replenishment_qty', p.get('qty', 0)), 0)
+                _conf = _to_str(p.get('confidence', ''))[:16]
+                _tl = _to_str(p.get('trust_level', ''))[:16]
+                if _tl and _tl not in ('GREEN', 'YELLOW', 'RED'):
+                    _tl = ''
+                _mt = _to_str(p.get('model_tag', 'classic'))[:32] or 'classic'
                 rows.append((
                     _to_str(store) or DEFAULT_STORE_ID,
                     reg,
@@ -474,6 +572,11 @@ def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID) ->
                     _to_str(p.get('status')),
                     _to_int(p.get('qty', 0)),
                     _to_str(p.get('warehouse')),
+                    _fc_val,
+                    _rq,
+                    _conf,
+                    _tl,
+                    _mt,
                 ))
 
         for top_key, sub in plans_by_region.items():
@@ -492,13 +595,15 @@ def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID) ->
             conn.execute('BEGIN IMMEDIATE')
             try:
                 cur = conn.execute(
-                    'INSERT INTO capture_sessions (ts, region, source, item_count) VALUES (?,?,?,?)',
-                    (ts, first_region, src, len(rows)))
+                    'INSERT INTO capture_sessions (ts, region, source, item_count,'
+                    ' run_id, prompt_version, trust_level) VALUES (?,?,?,?,?,?,?)',
+                    (ts, first_region, src, len(rows), rid, pver, stl))
                 sid = int(cur.lastrowid)
                 conn.executemany(
                     'INSERT INTO history_rows (session_id, captured_at, store, region, sku_id,'
-                    ' name, stock, sales, days_left, status, qty, warehouse)'
-                    ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                    ' name, stock, sales, days_left, status, qty, warehouse,'
+                    ' forecast, replenishment_qty, confidence, trust_level, model_tag)'
+                    ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     [(sid, ts) + r for r in rows])
                 conn.execute('COMMIT')
                 return sid
@@ -736,7 +841,9 @@ def query_sku_history(sku_key='', days=90, region='', name='', store=None) -> li
 
         def op(conn):
             sql = ('SELECT id, session_id, captured_at, region, sku_id, name, stock, sales,'
-                   ' days_left, status, qty, warehouse, store FROM history_rows WHERE ')
+                   ' days_left, status, qty, warehouse, store,'
+                   ' forecast, replenishment_qty, confidence, trust_level, model_tag'
+                   ' FROM history_rows WHERE ')
             params = []
             if sku:
                 sql += 'sku_id = ?'
@@ -771,7 +878,9 @@ def query_region_days(region, day, store=None) -> list:
         def op(conn):
             params = [reg, d]
             sql = ('SELECT id, session_id, captured_at, region, sku_id, name, stock, sales,'
-                   ' days_left, status, qty, warehouse, store FROM history_rows'
+                   ' days_left, status, qty, warehouse, store,'
+                   ' forecast, replenishment_qty, confidence, trust_level, model_tag'
+                   ' FROM history_rows'
                    " WHERE region = ? AND captured_at LIKE ? || '%' ")
             sql += _store_where(store, params).rstrip()
             return _row_dicts(conn.execute(
@@ -780,6 +889,67 @@ def query_region_days(region, day, store=None) -> list:
         return _run_db(op, [])
     except Exception as e:
         _dlog(f'[history] query_region_days 失败：{e}')
+        return []
+
+
+def query_snapshot(sku_key='', days=90, region='', name='', store=None) -> list:
+    """回测数据通道（v1.6.0 TC-B1 配套，WS-B2 回测读列）。
+
+    输入与 query_sku_history 同契约；输出精简为回测需要的列对：
+    [{captured_at, region, sku_id, name, store, forecast, sales, model_tag}, ...]
+    - forecast: 预测值（旧行或经典模式 → None）
+    - sales: 实际日销量
+    - model_tag: 标记预测来源（classic/ses/v3/v4/v5），便于按版本分桶计算 Bias
+    - captured_at: 'YYYY-MM-DD HH:MM:SS'，升序
+
+    关联键二选一（与 query_sku_history 同语义）：
+    - sku_key 非空 → WHERE sku_id = ?（走 idx_rows_sku）
+    - 否则 region+name 均非空 → WHERE region = ? AND name = ?（走 idx_rows_rn）
+    - 两者皆无 → 返回 []（不给全表）
+    store：None/'' 全部店铺，'default' 含 '' 旧行，其他精确匹配。
+    """
+    try:
+        sku = _to_str(sku_key)
+        reg = _to_str(region)
+        nm = _to_str(name)
+        if not sku and not (reg and nm):
+            return []
+        floor = _day_floor(days)
+
+        def op(conn):
+            sql = ('SELECT captured_at, region, sku_id, name, store,'
+                   ' forecast, sales, model_tag'
+                   ' FROM history_rows WHERE ')
+            params = []
+            if sku:
+                sql += 'sku_id = ?'
+                params.append(sku)
+            else:
+                sql += 'region = ? AND name = ?'
+                params.extend([reg, nm])
+            if floor:
+                sql += ' AND captured_at >= ?'
+                params.append(floor)
+            sql += _store_where(store, params).rstrip()
+            sql += ' ORDER BY captured_at ASC, id ASC'
+            out = []
+            for r in conn.execute(sql, params):
+                cap, r_, sk, nm_, st_, fc, sa, mt = r
+                out.append({
+                    'captured_at': _to_str(cap),
+                    'region': _to_str(r_),
+                    'sku_id': _to_str(sk),
+                    'name': _to_str(nm_),
+                    'store': _to_str(st_) or DEFAULT_STORE_ID,
+                    'forecast': _to_float(fc, default=None),
+                    'sales': _to_int(sa),
+                    'model_tag': _to_str(mt) or 'classic',
+                })
+            return out
+
+        return _run_db(op, [])
+    except Exception as e:
+        _dlog(f'[history] query_snapshot 失败：{e}')
         return []
 
 

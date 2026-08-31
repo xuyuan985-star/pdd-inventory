@@ -60,6 +60,150 @@ def _clear_progress():
     except Exception:
         pass
 
+
+# ── v1.6.0 TC-C3：更新健康状态与自动回滚（docs/PLAN_v160.md §5.5 TC-C3）──────
+# update_health.json 状态机：pending（finalize 落盘，待新版本自证可用）
+# → ok（主程序首帧渲染成功，mark_update_ok；同时清空启动计数与回滚池）
+# → rolled_back（启动失败 ≥3 次触发 rollback_to_old 成功）
+# → rollback_failed（自动回滚失败——显式报错引导人工，绝不重试，§4 防自我锁死）
+# 宪法 §5 红线：update_health.json 在程序目录只由 updater（本模块函数）写入，
+# 不进 git；_rollback_pool/ 是 updater 自建资产，清理绝不越出该目录、绝不 rmtree
+# 用户程序目录本身。
+UPDATE_HEALTH_FILE = "update_health.json"
+ROLLBACK_POOL_DIR = "_rollback_pool"
+ROLLBACK_POOL_MAX_AGE = 14 * 24 * 3600  # 回滚份过期阈值：14 天
+ROLLBACK_FAIL_THRESHOLD = 3  # 启动失败计数 ≥3 → 触发自动回滚（gui 消费）
+
+
+def _version_of(utils_py_path: str) -> str:
+    """从 utils.py 源码提取 VERSION 常量（正则）；取不到 → ''（守卫，绝不抛）。"""
+    try:
+        with open(utils_py_path, 'r', encoding='utf-8', errors='replace') as f:
+            m = re.search(r"^VERSION\s*=\s*['\"]([^'\"]+)['\"]", f.read(65536), re.M)
+        return m.group(1) if m else ''
+    except Exception:
+        return ''
+
+
+def _app_dir() -> str:
+    """程序目录（update_health.json / _rollback_pool 所在）：源码形态=脚本目录，
+    打包形态=exe 所在目录。健康检查与 GUI 默认走这里。"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _update_health_path(target_dir: str = "") -> str:
+    base = target_dir if target_dir else _app_dir()
+    return os.path.join(base, UPDATE_HEALTH_FILE)
+
+
+def _read_update_health(target_dir: str = "") -> dict:
+    """守卫式读取 update_health.json：缺失/损坏/非 dict → {}（绝不抛）。"""
+    try:
+        with open(_update_health_path(target_dir), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_update_health(target_dir: str, state: str, new_ver: str = "",
+                         old_ver: str = "", extra: dict = None) -> bool:
+    """原子写 update_health.json（tmp→os.replace）。失败不影响更新主流程，绝不抛。
+
+    仅 updater 模块函数可调用本函数（宪法 §5：程序目录中该文件只由 updater 写入）。
+    """
+    try:
+        data = {"state": state, "new_ver": new_ver, "old_ver": old_ver,
+                "ts": time.time(), "launch_count": 0}
+        if isinstance(extra, dict) and extra:
+            data.update(extra)
+        sf = _update_health_path(target_dir)
+        tmp = sf + ".tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, sf)
+        return True
+    except Exception:
+        return False
+
+
+def mark_update_ok(target_dir: str = "") -> bool:
+    """主程序首帧渲染成功 → 新版本自证可用。仅在 state=='pending' 时写 'ok'
+    （幂等保护：rolled_back/rollback_failed 终态不被覆盖）。"""
+    try:
+        st = _read_update_health(target_dir)
+        if str(st.get('state') or '') != 'pending':
+            return False
+        ok = _write_update_health(target_dir, 'ok',
+                                  new_ver=str(st.get('new_ver') or ''),
+                                  old_ver=str(st.get('old_ver') or ''))
+        if ok:
+            _prune_rollback_pool(_rollback_pool_dir(target_dir), remove_all=True)
+        return ok
+    except Exception:
+        return False
+
+
+def bump_launch_count(target_dir: str = "") -> int:
+    """pending 期间每次启动计数 +1（渲染失败即崩溃的版本靠它累积证据）。
+    写者仍是 updater 模块（宪法 §5 边界内）。返回新计数；异常返回 0。"""
+    try:
+        st = _read_update_health(target_dir)
+        if str(st.get('state') or '') != 'pending':
+            return 0
+        n = int(st.get('launch_count') or 0) + 1
+        extra = {k: v for k, v in st.items() if k not in (
+            'state', 'new_ver', 'old_ver', 'ts', 'launch_count')}
+        _write_update_health(target_dir, 'pending',
+                             new_ver=str(st.get('new_ver') or ''),
+                             old_ver=str(st.get('old_ver') or ''),
+                             extra=dict(extra, launch_count=n))
+        return n
+    except Exception:
+        return 0
+
+
+def _rollback_pool_dir(target_dir: str = "") -> str:
+    base = target_dir if target_dir else _app_dir()
+    return os.path.join(base, ROLLBACK_POOL_DIR)
+
+
+def _prune_rollback_pool(pool_dir: str, max_age: int = ROLLBACK_POOL_MAX_AGE,
+                         remove_all: bool = False) -> int:
+    """回滚池过期清理：删 mtime 早于 max_age 的池内文件（remove_all=True 全清）。
+    只碰 pool_dir 内部，绝不越出（宪法 §5）；返回删除文件数。"""
+    try:
+        if not pool_dir or not os.path.isdir(pool_dir):
+            return 0
+        pool_real = os.path.realpath(pool_dir) + os.sep
+        now = time.time()
+        removed = 0
+        for name in os.listdir(pool_dir):
+            p = os.path.join(pool_dir, name)
+            if not os.path.isfile(p):
+                continue
+            if not (os.path.realpath(p) + os.sep).startswith(pool_real):
+                continue  # 防 symlink 逃逸
+            try:
+                if remove_all or (now - os.path.getmtime(p)) > max_age:
+                    os.remove(p)
+                    removed += 1
+            except Exception:
+                pass
+        try:
+            # 仅终态清池（remove_all）才移除空目录；finalize 入口的常规过期
+            # 清理不得删除刚创建的空池（否则随后的备份 os.replace 会 WinError 3）
+            if remove_all and not os.listdir(pool_dir):
+                os.rmdir(pool_dir)
+        except Exception:
+            pass
+        return removed
+    except Exception:
+        return 0
+
+
 def _pause():
     """等待按键退出；无 stdin（被 GUI 拉起）时直接通过，不抛 EOFError"""
     try:
@@ -159,7 +303,7 @@ def download_asset(asset, dest, progress_stage: str = "download", expected_sha25
             req = Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ-Updater"})
             with urlopen(req, timeout=120) as resp:
                 _stream_to_file(resp, dest, size, name, progress_stage)
-            # v1.4.8 P1-B-fix（t17）：期望哈希给定 → 立即就地校验；不匹配则换源
+            # v1.4.8 P1-B-fix：期望哈希给定 → 立即就地校验；不匹配则换源
             if expected_sha256:
                 try:
                     if not _verify_sha256(dest, expected_sha256):
@@ -425,15 +569,22 @@ def _needs_overwrite(src: str, dest: str) -> bool:
     except OSError:
         return True
 
-def _overwrite_files(files, progress_stage: str = "cover"):
+def _overwrite_files(files, progress_stage: str = "cover",
+                     backup_pool: str = "", entries_out: list = None):
     """逐文件覆盖：os.replace 备份旧文件 + copy2 落新文件；失败逆序回滚并中断
     （v1.4.5 bug hunt F6：旧实现逐文件覆盖失败不回滚，程序目录留新旧混合版本）。
-    返回 (ok, skipped_files)。"""
+    返回 (ok, skipped_files)。
+
+    v1.6.0 TC-C3：backup_pool 非空时（do_finalize 路径），旧文件备份集中到该池目录
+    （文件名 = 目标相对路径扁平化 + 内容防撞后缀），成功后**保留**作为自动回滚份，
+    并把 [{dest_rel, backup}] 追加到 entries_out；pool 为空时保持 v1.4 行为：
+    备份散落 dest+'.old_upd'、成功即删。"""
     total = len(files)
     completed = 0
     skipped = []
     created_dirs = set()
     backed_up = []  # [(dest, backup)]
+    _ent_base = len(entries_out) if entries_out is not None else 0
 
     def _rollback(backups):
         for dest, backup in reversed(backups):
@@ -459,7 +610,16 @@ def _overwrite_files(files, progress_stage: str = "cover"):
         try:
             backup = None
             if os.path.exists(dest):
-                backup = dest + '.old_upd'
+                if backup_pool:
+                    # TC-C3：备份集中到 _rollback_pool/，扁平名防子目录缺失
+                    _rel = os.path.relpath(dest, os.path.dirname(
+                        os.path.abspath(backup_pool)))
+                    _flat = _rel.replace('..', '__up__').replace(
+                        ':', '_').replace(os.sep, '__')
+                    backup = os.path.join(
+                        backup_pool, f"{_flat}.{completed}.old_upd")
+                else:
+                    backup = dest + '.old_upd'
                 if os.path.exists(backup):
                     try:
                         os.remove(backup)
@@ -467,6 +627,11 @@ def _overwrite_files(files, progress_stage: str = "cover"):
                         pass
                 os.replace(dest, backup)  # 原子挪走旧文件，留作回滚
                 backed_up.append((dest, backup))
+                if entries_out is not None:
+                    entries_out.append({
+                        'dest_rel': os.path.relpath(
+                            dest, os.path.dirname(os.path.abspath(backup_pool))),
+                        'backup': os.path.basename(backup)})
             shutil.copy2(src, dest)
             completed += 1
             _emit_cover_progress(progress_stage, completed, total)
@@ -477,10 +642,15 @@ def _overwrite_files(files, progress_stage: str = "cover"):
             _rollback(backed_up)
             skipped.extend(d for d, _ in backed_up)
             backed_up.clear()
+            if entries_out is not None:
+                del entries_out[_ent_base:]  # 失败轮次的池条目已消费，作废
             skipped.append(dest)
             break  # 事务失败，中断整批覆盖
-    # 全部成功：清理旧文件备份
+    # 全部成功：pool 模式保留备份（= 自动回滚份，由 mark_update_ok/过期清理回收）；
+    # 散落模式维持旧行为成功即删（防 .old_upd 残留）
     for dest, backup in backed_up:
+        if backup_pool:
+            continue
         try:
             os.remove(backup)
         except Exception:
@@ -652,10 +822,11 @@ def _restore_self(backup: str) -> bool:
         return False
 
 
-def _cover_with_self_handling(files) -> tuple[bool, list]:
+def _cover_with_self_handling(files, backup_pool: str = "",
+                              entries_out: list = None) -> tuple[bool, list]:
     """逐文件覆盖（March7th 顺序）：先覆盖其他文件 → 再自身改名让位 → 最后覆盖自身。
     中途失败时 updater 自身始终完好；自身覆盖失败时恢复 .old 备份。
-    返回 (ok, skipped_files)。"""
+    返回 (ok, skipped_files)。backup_pool/entries_out 透传 _overwrite_files（TC-C3）。"""
     self_renamed_to = ""
     _self_abs = os.path.abspath(sys.argv[0])
     others = []
@@ -668,7 +839,8 @@ def _cover_with_self_handling(files) -> tuple[bool, list]:
             others.append((src, dest))
 
     # 1) 先覆盖其他文件（不动 updater 自身）
-    ok, skipped = _overwrite_files(others)
+    ok, skipped = _overwrite_files(others, backup_pool=backup_pool,
+                                   entries_out=entries_out)
     if skipped:
         return False, skipped
 
@@ -682,7 +854,8 @@ def _cover_with_self_handling(files) -> tuple[bool, list]:
             self_renamed_to = _bak
 
     # 3) 最后覆盖自身文件
-    ok, skipped = _overwrite_files(self_items)
+    ok, skipped = _overwrite_files(self_items, backup_pool=backup_pool,
+                                   entries_out=entries_out)
     if skipped:
         # 恢复自身备份（覆盖失败，不让 updater 残留在 .old 名）
         if self_renamed_to:
@@ -767,10 +940,20 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             _write_progress("error", msg, error=msg)
             return 1
 
+        # 2.5) TC-C3：回滚池入口（创建 + 过期清理）+ 旧版本号采集（必须在覆盖前读！）
+        pool = _rollback_pool_dir(target_dir)
+        try:
+            os.makedirs(pool, exist_ok=True)
+        except Exception:
+            pool = ""  # 池不可建 → 退回散落 .old_upd 模式（自动回滚降级为不可用）
+        _prune_rollback_pool(pool)
+        _old_ver = _version_of(os.path.join(target_dir, 'utils.py'))
+        pool_entries: list = []
+
         # 3) 收集待覆盖文件（仅变化的）
         # ⚠ 更新包 zip 顶层是 "PDD EZ/" 目录（_build_update_zip.py arcname 带目录名），
-        #   必须剥掉再拼 target_dir——否则覆盖到 target_dir/PDD EZ/ 子目录，更新不生效
-        #   （auto 模式有剥目录逻辑，finalize 漏了，v1.4.1 修复）
+        # 必须剥掉再拼 target_dir——否则覆盖到 target_dir/PDD EZ/ 子目录，更新不生效
+        # （auto 模式有剥目录逻辑，finalize 漏了，v1.4.1 修复）
         _write_progress("cover", "正在检测文件占用...")
         files = []
         for root, _, fnames in os.walk(extracted):
@@ -797,8 +980,10 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             return 1
 
         # 5) 覆盖（March7th 顺序：先覆盖其他文件 → 再自身改名让位 → 最后覆盖自身，
-        # 中途失败 updater 自身始终完好）
-        ok, skipped = _cover_with_self_handling(files)
+        # 中途失败 updater 自身始终完好）。TC-C3：备份集中 _rollback_pool/，
+        # 成功后保留为自动回滚份（manifest 记录 dest_rel ↔ 池内文件名）
+        ok, skipped = _cover_with_self_handling(files, backup_pool=pool,
+                                                entries_out=pool_entries)
         if skipped:
             _names = "、".join(os.path.basename(p) for p in skipped[:10])
             msg = f"{len(skipped)} 个文件覆盖失败：{_names}"
@@ -807,10 +992,27 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             _write_progress("error", msg, error=msg)
             return 1
 
+        # 5.5) TC-C3：回滚清单落池（pending 状态的回滚依据；失败不阻断更新本身）
+        try:
+            if pool and pool_entries:
+                with open(os.path.join(pool, 'manifest.json'), 'w',
+                          encoding='utf-8') as _mf:
+                    json.dump(pool_entries, _mf, ensure_ascii=False)
+        except Exception as _e:
+            print(f"[更新器] 警告: 回滚清单写入失败（自动回滚将不可用）: {_e}")
+
         # 3.5 删除清单（v1.4.5 bug hunt F15，R1:置于覆盖成功之后）：包内 deleted-files.txt =
         # 自上版本起删除的运行时资源/模板/文档，目标端同步删除，防旧 dll/旧模板/旧文档永久残留。
         # 覆盖成功后再删，避免覆盖失败时旧模板/资源已被删、更新又不生效的中间态半损坏。
-        _apply_deleted_files(extracted, target_dir)
+        _deleted_n = _apply_deleted_files(extracted, target_dir)
+
+        # 6) TC-C3：落 update_health.json（state='pending'，待新版本首帧自证）。
+        # 宪法 §5：该文件只由 updater 写入；new_ver 取覆盖后的目标端 utils.py。
+        _write_update_health(target_dir, 'pending',
+                             new_ver=_version_of(os.path.join(target_dir, 'utils.py')),
+                             old_ver=_old_ver,
+                             extra={'deleted': _deleted_n,
+                                    'rollback_pool': os.path.basename(pool) if pool else ''})
 
         # 清理：删除更新包 + 解压目录（失败不阻断，下次启动自动清）
         try:
@@ -862,11 +1064,19 @@ def main():
     ap.add_argument("--restart", action="store_true")
     ap.add_argument("--resume-update", action="store_true")
     ap.add_argument("--pid", type=int, default=0)
-    ap.add_argument("--mode", choices=("auto", "finalize"), default="auto")
-    ap.add_argument("--file", default="")          # finalize: 已下载的更新包路径
-    ap.add_argument("--extract-dir", default="")   # finalize: 解压目录
+    ap.add_argument("--mode", choices=("auto", "finalize", "rollback"), default="auto")
+    ap.add_argument("--file", default="")  # finalize: 已下载的更新包路径
+    ap.add_argument("--extract-dir", default="")  # finalize: 解压目录
     ap.add_argument("--wait-pid", type=int, default=0)
     args = ap.parse_args()
+
+    # ── rollback 模式（TC-C3）：恢复 _rollback_pool/ 内旧文件集，状态机终态落盘 ──
+    if args.mode == "rollback":
+        me = sys.executable if getattr(sys, 'frozen', False) else __file__
+        target = args.target or os.path.join(os.path.dirname(os.path.abspath(me)), EXE_NAME)
+        rc = rollback_to_old(target, target_dir=os.path.dirname(target))
+        _clear_progress()
+        return rc
 
     # ── finalize 模式：只做覆盖安装（下载已由 GUI 完成）──
     if args.mode == "finalize":
@@ -1047,7 +1257,7 @@ def main():
     asset_name = os.path.basename(exe_asset["name"].replace('\\', '/'))
     new_exe = os.path.join(tmp, asset_name)
 
-    # v1.4.8 P1-B-fix（t17）：先把 .sha256 拉下来学期望哈希，
+    # v1.4.8 P1-B-fix：先把 .sha256 拉下来学期望哈希，
     # 再用 download_asset(expected_sha256=...) 走「下载+就地校验+不匹配换源」一条龙。
     # 旧流程：先下载包 → 失败也不换源（哈希失败发生在下游）→ 直接 return 1。
     # 新流程：先下载 .sha256 学期望 → 传期望进 download_asset → 任一源哈希不匹配自动换源。
@@ -1296,6 +1506,114 @@ def _do_replace(src, target):
             ok = ctypes.windll.kernel32.MoveFileExW(target + ".old", None, 4)
             if not ok:
                 print(f"[更新器] 警告: 旧文件 {target}.old 待重启后自动清理")
+
+
+def rollback_to_old(updater_cli_path: str, target_dir: str = "") -> int:
+    """TC-C3 自动回滚入口（GUI 调用 / CLI --rollback 共用）：把 _rollback_pool/
+    内的最后一份旧文件集恢复回程序目录。
+
+    语义（宪法 §4/§5）：
+    - 仅当 update_health.json state=='pending' 时动作；其余状态一律非 0 拒绝
+      （幂等——防自我锁死：回滚后终态落盘，再调不重复动作）；
+    - **仅尝试一次**：任何一步失败立即落 'rollback_failed' 终态并返回非 0，
+      绝不重试、绝不循环；再失败由调用方显式报错引导人工恢复；
+    - 恢复目标必须 realpath 落在程序目录内（拒绝 '..'/绝对路径/越界）；
+      只逐文件 os.replace 回原位，绝不 rmtree 用户程序目录；
+    - 返回 0=成功（state 落 'rolled_back'，池清空）。
+
+    Args:
+        updater_cli_path: 程序目录内 updater 自身路径（exe 或 py），用于定位程序目录；
+        target_dir: 显式指定程序目录（测试/特殊布局用），空则取 updater_cli_path 同目录。
+    """
+    try:
+        base = target_dir if target_dir else os.path.dirname(
+            os.path.abspath(updater_cli_path or ''))
+        if not base or not os.path.isdir(base):
+            print("[更新器] [回滚] 程序目录无效，拒绝回滚")
+            return 2
+        # CROSS#4（v1.6.0 发布前修复批次）：源码形态（未打包，getattr(sys,'frozen',None) is None）
+        # 下的回滚 base 锚到工作区路径，可能覆盖未提交改动。加一行警告日志（不
+        # 改行为 —— 真实开发态/打包态下的行为不变，但日志能让操作者确认回滚目标）。
+        try:
+            if not getattr(sys, 'frozen', False):
+                # 粗略探针：若 base 下含 vcs 标记（.git/.hg/.svn）→ 更可疑
+                _vcs_marks = tuple(os.path.join(base, m) for m in ('.git', '.hg', '.svn'))
+                _has_vcs = any(os.path.exists(p) for p in _vcs_marks)
+                _vcs_tag = '（含 VCS 标记）' if _has_vcs else ''
+                print(
+                    f"[更新器] [回滚] 警告：当前为源码形态（未打包）{_vcs_tag}，"
+                    f"回滚目标 = {base}。请确认目标目录正确，回滚将就地覆盖。"
+                )
+        except Exception:
+            pass
+        st = _read_update_health(base)
+        if str(st.get('state') or '') != 'pending':
+            print(f"[更新器] [回滚] 无待验证更新（state={st.get('state')!r}），不动作")
+            return 3
+        pool = _rollback_pool_dir(base)
+        manifest_path = os.path.join(pool, 'manifest.json')
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                entries = json.load(f)
+        except Exception:
+            entries = []
+        if not isinstance(entries, list) or not entries:
+            print("[更新器] [回滚] 回滚清单缺失或为空，无法自动回滚")
+            _write_update_health(base, 'rollback_failed',
+                                 new_ver=str(st.get('new_ver') or ''),
+                                 old_ver=str(st.get('old_ver') or ''),
+                                 extra={'reason': 'manifest_missing'})
+            return 4
+        base_real = os.path.realpath(base) + os.sep
+        restored = 0
+        for ent in reversed(entries):  # 逆序：后覆盖的先恢复
+            if not isinstance(ent, dict):
+                continue
+            rel = str(ent.get('dest_rel') or '')
+            bak_name = str(ent.get('backup') or '')
+            if not rel or not bak_name:
+                continue
+            dest = os.path.normpath(os.path.join(base, rel))
+            src_bak = os.path.join(pool, bak_name)
+            try:
+                if not (os.path.realpath(dest) + os.sep).startswith(base_real):
+                    print(f"[更新器] [回滚] 拒绝越界恢复: {rel}")
+                    _write_update_health(base, 'rollback_failed',
+                                         new_ver=str(st.get('new_ver') or ''),
+                                         old_ver=str(st.get('old_ver') or ''),
+                                         extra={'reason': 'escape_guard'})
+                    return 5
+                if not os.path.isfile(src_bak):
+                    print(f"[更新器] [回滚] 池内备份缺失: {bak_name}")
+                    _write_update_health(base, 'rollback_failed',
+                                         new_ver=str(st.get('new_ver') or ''),
+                                         old_ver=str(st.get('old_ver') or ''),
+                                         extra={'reason': 'backup_missing'})
+                    return 6
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                os.replace(src_bak, dest)
+                restored += 1
+            except Exception as e:
+                print(f"[更新器] [回滚] 恢复失败 {rel}: {e}")
+                _write_update_health(base, 'rollback_failed',
+                                     new_ver=str(st.get('new_ver') or ''),
+                                     old_ver=str(st.get('old_ver') or ''),
+                                     extra={'reason': f'restore_failed:{str(e)[:40]}'})
+                return 7  # 仅尝试一次：立即终态退出（§4 防自我锁死）
+        _write_update_health(base, 'rolled_back',
+                             new_ver=str(st.get('new_ver') or ''),
+                             old_ver=str(st.get('old_ver') or ''),
+                             extra={'restored': restored})
+        _prune_rollback_pool(pool, remove_all=True)
+        print(f"[更新器] [回滚] 已恢复 {restored} 个文件到更新前版本")
+        try:
+            log.info(f"[回滚] 已恢复 {restored} 个文件到更新前版本: {base}")
+        except Exception:
+            pass
+        return 0
+    except Exception as e:
+        print(f"[更新器] [回滚] 回滚执行异常: {e}")
+        return 8
 
 
 if __name__ == "__main__":

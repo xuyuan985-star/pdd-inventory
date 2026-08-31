@@ -1,0 +1,67 @@
+# PDD EZ v1.6.0 — Pinned dependency combination (requirements.lock)
+#
+# 本文件锁定 PDD EZ v1.6.0 发布包的**精确**依赖组合（含全部传递依赖）。
+# 与 requirements.txt（人读下限式声明，面向新安装）并存：
+#   - 新装环境 → 先按 lock 装环境（开发/打包/CI 三方一致）
+#   - requirements.txt → 继续保留，作为"最低要求"声明给新装用户
+#   - 真值 → 本 lock 文件（精确 ==）
+#
+# ============================================================
+# 验证环境与基线
+# ============================================================
+# - 操作系统：Windows 11（实测本组合在该环境通过）
+# - Python：3.11.3（v1.6.0 锁定基线）
+# - pip：26.1.2
+# - PyInstaller：onedir 模式产物 ~79MB（详见 README.md 打包节）
+# - 实测门禁：pip check 0 冲突；py_compile 全 *.py 通过；unittest discover 1069 全绿（OK）
+# - 验证日期：2026-08-30（v1.6.0 基线锁定）
+#
+# ============================================================
+# 生成/刷新流程
+# ============================================================
+# 1) 在干净 venv 装好 requirements.txt 的下限组合
+# 2) 跑全套门禁通过（详见 docs/BASELINE_GATE.md §3）
+# 3) 跑 `python -m pip freeze > requirements.lock`（覆盖本文件）
+# 4) 复核 lock 与门禁数据，把更新写进本文件头部"验证环境"段
+#
+# ============================================================
+# 升降级禁区（v1.6.0 起，不可任意升级）
+# ============================================================
+# - numpy ≥ 2.0：当前组合 numpy==2.2.6 已实测通过；与 opencv-python==4.13.0.92 兼容
+#   （numpy 2.x ABI 与 opencv-python 4.10+ 兼容；老 opencv-python 4.8/4.9 需 numpy<2.0）
+# - numpy ≤ 1.24：与 opencv-python>=4.8.0.x 存在历史兼容问题（requirements.txt:10 已记录）；
+#   本 lock 已脱离该区间，但若有人回退到 numpy==1.24.x 必须同步把 opencv-python 锁回 4.7.x
+# - opencv-python ≤ 4.8.0.x：同上，与 numpy<1.25 配套；本 lock 用 4.13.0.92 远离该历史坑
+# - Pillow ≥ 11.x：API 微调（getsize 等）可能影响 _prep_image_b64（ocr.py:228）；
+#   本 lock 用 10.4.0 保守位；升级前必须跑全套识别测试
+# - openpyxl ≤ 3.0：read_only + data_only 行为差异；本 lock 用 3.1.5
+# - requests ≥ 3.x：HTTP/2 默认开启在 Windows + corporate proxy 环境偶发卡顿；
+#   本 lock 用 2.34.2；升级前需在企业网络环境实测
+# - PyAutoGUI ≥ 0.9.55：与 pyautogui._pyautogui_win C 扩展偶发 import 错误（已知 0.9.54 修复点）
+# - pywin32 ≠ 3xx：304 及以下与 Python 3.11 不兼容；本 lock 用 312
+#
+# ============================================================
+# 精确锁定（==）
+# ============================================================
+
+cffi==2.1.0
+numpy==2.2.6
+opencv-python==4.13.0.92
+openpyxl==3.1.5
+pillow==10.4.0
+pip==26.1.2
+PyAutoGUI==0.9.54
+pycparser==3.0
+PyGetWindow==0.0.9
+pyperclip==1.11.0
+pywin32==312
+pywin32-ctypes==0.2.3
+requests==2.34.2
+setuptools==65.5.0
+tzdata==2026.2
+
+# ============================================================
+# 注：PyInstaller / pip / setuptools / wheel / cffi / pycparser / tzdata
+# 等均为**传递依赖或构建工具**——由 lock 涵盖但不在 requirements.txt 显式声明。
+# 完整传递依赖完整列表见 `python -m pip freeze --all` 输出（本文件已涵盖本仓实际安装的关键包）。
+# ============================================================

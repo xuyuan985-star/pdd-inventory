@@ -69,6 +69,7 @@
   "replenishment": {
     "model": "classic",
     "safety_days": 2,
-    "in_transit_qty": 0
+    "in_transit_qty": 0,
+    "forecast_version": "v3"
   }
 }

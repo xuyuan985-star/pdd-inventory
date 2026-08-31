@@ -49,7 +49,9 @@ except Exception:
 # ──────────────────────────────────────────────────────────────────
 
 _RECORD_LOCK = threading.Lock()  # 写盘并发安全
-_SCHEMA_VERSION = 1
+# v1.6.0 TC-Q4：schema v2 —— record() 行新增 run_id / prompt_version 两键；
+# v1（schema_version=1、无此两键）行继续可读可聚合（读取方按缺省空串处理）。
+_SCHEMA_VERSION = 2
 _LOG_FILE = 'usage_log.jsonl'
 # session 暂存：用于「本次识别」聚合（= GUI 启动后到当前批次的累计 cost）
 _SESSION_STATE = {
@@ -189,13 +191,17 @@ def _now_iso():
 def record(provider: str, api_type: str, model: str, endpoint: str,
            usage, cost_cny, is_estimate: bool,
            call_site: str = '', batch_id: str = '',
-           ts: str = None) -> None:
+           ts: str = None, run_id: str = '', prompt_version: str = '') -> None:
     """追加一行 JSON 到 usage_log.jsonl。
 
-    行格式（SPEC §5.1）：
+    行格式（SPEC §5.1；v1.6.0 TC-Q4 schema v2 增 run_id/prompt_version）：
       {schema_version, ts, event, provider, api_type, model, endpoint,
        usage: {prompt, completion, total, image_tokens, source},
-       cost_cny, is_estimate, call_site, batch_id, extra}
+       cost_cny, is_estimate, call_site, batch_id, run_id, prompt_version, extra}
+
+    v1.6.0 TC-Q4：run_id（RUN-YYYYMMDD-HHMMSS-XXXX，run_context 生成）与
+    prompt_version（prompts.manifest.prompt_version()）为可选入参，默认空串——
+    旧调用零影响；v1 旧行缺此两键，聚合/明细按缺省处理，互相兼容。
 
     异常吞掉：写盘失败/序列化失败 → _ocr_dlog 记一行 [usage]...。
     usage.enabled=False → 整条链路不写盘，但 _SESSION_STATE 仍记（费用面板可
@@ -229,6 +235,8 @@ def record(provider: str, api_type: str, model: str, endpoint: str,
             'is_estimate': bool(is_estimate),
             'call_site': str(call_site or ''),
             'batch_id': str(batch_id or ''),
+            'run_id': str(run_id or ''),
+            'prompt_version': str(prompt_version or ''),
             'extra': {},
         }
         line_str = json.dumps(line, ensure_ascii=False, separators=(',', ':'))

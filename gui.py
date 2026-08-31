@@ -10,6 +10,7 @@ from datetime import datetime
 from utils import get_base_dir, get_api_config, VERSION, version_newer
 from settings_ui import SettingsUIMixin
 from stats_ui import StatsPagesMixin
+from import_service import ImportServiceMixin, resolve_last_mapping  # TC-A1.1
 from logger import log
 import async_queue  # 全局任务队列
 import store_ui_logic  # 店铺切换/入库组装纯逻辑（无 Tk 依赖，test_store_ui_logic 可单测）
@@ -718,7 +719,7 @@ def batch_images_progress_text(i, n):
     return f'批量图片识别 第 {i}/{n} 张…'
 
 
-class App(SettingsUIMixin, StatsPagesMixin):
+class App(SettingsUIMixin, StatsPagesMixin, ImportServiceMixin):
     # Design system — New Minimalism / Flat Design
     C_PRIMARY = '#111111'  # 近黑（主标题/文字）
     C_SECONDARY = '#333333'  # 深灰（次级文字）
@@ -1014,6 +1015,155 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self._refresh_cost_label()
         try:
             self.win.after(60000, self._poll_cost_label)
+        except Exception:
+            pass
+        # v1.6.0 TC-C2：启动健康检查——异步聚合五项，结果存 _health_state；
+        # 仅徽章提示（YELLOW/RED 时延迟落一次状态栏），不弹窗、不阻塞启动（零行为变更）
+        # v1.6.0 TC-C3：挂点延后到 first-frame render 成功（after(50)——回调在
+        # mainloop 起跑后才执行，天然保证"主循环首帧成功才做健康检查/标记 ok"）；
+        # pending + 启动失败计数 ≥3 → 自动回滚（仅一次，§4 防自我锁死）
+        self._health_state = []
+        self._rollback_attempted = False  # §4：自动回滚仅尝试一次（进程生命周期内）
+        self._upd_pending_count = 0
+        try:
+            import updater as _upd
+            _st = _upd._read_update_health('')
+            if str(_st.get('state') or '') == 'pending':
+                self._upd_pending_count = _upd.bump_launch_count('')
+        except Exception:
+            self._upd_pending_count = 0
+        try:
+            self.win.after(50, self._run_startup_health)
+        except Exception:
+            pass
+        # v1.6.0 TC-Q2：可信度汇总初始值（_calc_from_items 每次计算后覆盖；
+        # TC-Q3 自检报告消费方无需判空）
+        self._last_trust_summary = {'total': 0, 'green': 0, 'yellow': 0,
+                                    'red': 0, 'no_data': 0}
+        # v1.6.0 TC-Q4 相位 2：当前 Run（run_context；四识别入口 _run_begin 触发）
+        self._active_run = None
+
+    def _run_begin(self, kind: str):
+        """TC-Q4：开始一个 Run（四识别入口调用）。上一个未 finish 的 run 自动
+        截断落账（跨 run 防串账）；入口直接取消 → 无事件行无痕。绝不抛。"""
+        try:
+            import run_context as _rc
+            if self._active_run is not None:
+                self._run_finish()
+            try:
+                from utils import get_api_config, get_secondary_model
+                _api = get_api_config()
+                _act = _api.get('active_provider', '')
+                _main = ((_api.get('providers') or {}).get(_act, {}) or {}).get('model', '')
+                _sec = get_secondary_model() or ''
+            except Exception:
+                _main = _sec = ''
+            self._active_run = _rc.new_run(_main, _sec)
+            self._active_run.error = ''
+            _rc.set_current_run(self._active_run)
+            try:
+                from ocr import _ocr_dlog
+                _ocr_dlog(f"[run] {kind} 开始 {self._active_run.run_id}")
+            except Exception:
+                pass
+        except Exception:
+            self._active_run = None
+
+    def _run_finish(self, error: str = ''):
+        """TC-Q4：结束当前 Run（on_closing / 下一个 _run_begin 自动截断时调用）。
+        行统计已由 _fill_from_ocr 累计进 ctx；写 run_end 事件行（updater 式
+        失败吞掉——诊断落账绝不影响退出/主流程）。"""
+        try:
+            ctx = self._active_run
+            if ctx is None:
+                return
+            import run_context as _rc
+            _rc.finish_run(ctx, error=error)
+        except Exception:
+            pass
+        finally:
+            try:
+                import run_context as _rc
+                _rc.clear_current_run()
+            except Exception:
+                pass
+            self._active_run = None
+
+    def _run_startup_health(self):
+        """v1.6.0 TC-C2（WS-C2）：异步执行 startup_health() 聚合。
+
+        - 结果存 self._health_state，供状态栏徽章与 §5.4 TC-D 仪表盘健康卡消费；
+        - 零行为变更：全 GREEN 时完全静默；YELLOW/RED 延迟 2.5s 落一次状态栏文案
+          （避开启动期隐私提示 1.5s / 副模型检查 0.8s 的既有提示窗口），不弹窗；
+        - 检查失败显式记日志（宪法 §4），绝不吞结论；本方法在主线程上下文执行，
+          且仅在主循环首帧渲染成功后由 after(50) 触发（TC-C3 挂点语义）；
+        - v1.6.0 TC-C3：state='pending' 且启动失败计数 ≥3 → 自动回滚（仅一次，
+          再失败显式报错引导人工——§4 替代方案；绝不 rmtree 用户目录，§5 红线）；
+          未触发回滚的 pending 首帧成功 → mark_update_ok（写者仍是 updater 模块）。
+        """
+        # TC-C3 回滚判定（先于 mark ok：卡面字面语义——本次虽起来了，连续 3 次
+        # 启动失败即判定新版本不可信）
+        try:
+            if (not self._rollback_attempted and self._upd_pending_count >= 3):
+                self._rollback_attempted = True
+                import updater as _upd
+                _cli = (sys.executable if getattr(sys, 'frozen', False)
+                        else os.path.abspath(__file__))
+                _rc = _upd.rollback_to_old(_cli)
+                if _rc == 0:
+                    def _rb_ok():
+                        try:
+                            self.status_text.set('↩ 已自动回滚到更新前版本'
+                                                 '（新版本连续启动失败）——请重启应用')
+                        except Exception:
+                            pass
+                    self.win.after(2500, _rb_ok)
+                else:
+                    def _rb_fail():
+                        try:
+                            self.status_text.set('⛔ 自动回滚失败——请人工恢复程序目录'
+                                                 '（回滚清单见 _rollback_pool/，详见 logs）')
+                        except Exception:
+                            pass
+                    self.win.after(2500, _rb_fail)
+                from ocr import _ocr_dlog
+                _ocr_dlog(f"[update] 自动回滚执行完成 rc={_rc} "
+                          f"(pending_count={self._upd_pending_count})")
+                return  # 回滚后本次健康检查结论已无意义（即将重启到旧版）
+        except Exception as _rb_e:
+            try:
+                from ocr import _ocr_dlog
+                _ocr_dlog(f"[update] 自动回滚判定异常（不影响启动）: {_rb_e}")
+            except Exception:
+                pass
+        # TC-C3：本次启动走到这里 = 首帧渲染成功 = 新版本自证可用
+        try:
+            if self._upd_pending_count and not self._rollback_attempted:
+                import updater as _upd
+                _upd.mark_update_ok('')
+        except Exception:
+            pass
+        try:
+            import health as _health
+            self._health_state = _health.startup_health()
+        except Exception as _e:
+            try:
+                from ocr import _ocr_dlog
+                _ocr_dlog(f"[health] 启动自检执行异常（不影响功能）: {_e}")
+            except Exception:
+                pass
+            return
+        try:
+            bad = [it for it in self._health_state if it.level in ('YELLOW', 'RED')]
+            if bad:
+                parts = [f"{it.item}={it.level}" for it in bad]
+
+                def _badge():
+                    try:
+                        self.status_text.set('⚡ 启动自检：' + '；'.join(parts) + '（详见 ocr_dlog）')
+                    except Exception:
+                        pass
+                self.win.after(2500, _badge)
         except Exception:
             pass
 
@@ -1501,6 +1651,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
         # v1.4.x 导航重构：历史趋势 / 用量明细 从弹窗独立成导航页（懒构建见 _show_page）
         self.page_history = tk.Frame(self.content_frame, bg=self.C_BG)
         self.page_usage = tk.Frame(self.content_frame, bg=self.C_BG)
+        # v1.6.0 TC-D：📊 首页仪表盘（懒构建见 _show_page；TTL 缓存字段同 __init__）
+        self.page_dashboard = tk.Frame(self.content_frame, bg=self.C_BG)
         self._current_page = self.page_home
 
         # 冷启动修复（修 默认展开引入的空壳 bug）：导航默认展开后必须立即
@@ -1656,6 +1808,31 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.wh_combo.bind('<<ComboboxSelected>>', toggle_wh_filter)
         
         columns = ("商品", "总库存", "总销量", "预估销量", "可售卖天数", "状态", "补货量")
+
+        # v1.6.0 TC-Q3：AI 自检报告汇总条（可信 N｜需复核 N｜高风险 N）
+        # 数据源：self._last_trust_summary（ 已落盘，_calc_from_items 每次
+        # 计算完后更新）+ 兜底从 self.plans 现算（保证 _render_tree 任何调用
+        # 路径都能拿到正确数据）。_skip_theme 让 _walk_force 不刷白。
+        self._trust_summary_bar = tk.Frame(self.result_frame, bg=self.C_CARD_HDR)
+        self._trust_summary_bar._skip_theme = True
+        self._trust_summary_bar.pack(fill="x", padx=3, pady=(2, 0))
+        self._trust_summary_label = tk.Label(
+            self._trust_summary_bar, text="可信 0｜需复核 0｜高风险 0",
+            font=(self.FONT[0], 9, 'bold'), bg=self.C_CARD_HDR, fg='#FFFFFF',
+            anchor='w')
+        self._trust_summary_label.pack(side="left", padx=(4, 8))
+        self._trust_summary_btn = tk.Button(
+            self._trust_summary_bar, text="查看复核", font=(self.FONT[0], 8),
+            bg=self.C_CARD_HDR, fg=self.C_TEXT, activebackground=self.C_CARD_HDR,
+            activeforeground=self.C_TEXT, relief='flat', bd=0, cursor='hand2',
+            state='disabled', command=self._open_review_from_summary)
+        self._trust_summary_btn.pack(side="left", padx=(0, 6))
+        # 占位（让汇总条即便为空态也有稳定高度）
+        tk.Label(self._trust_summary_bar, text="", bg=self.C_CARD_HDR).pack(side="left", padx=2)
+        # 初始化空态（_update_trust_summary 在 _render_tree 首次调用时再刷）
+        self._last_trust_summary = {'total': 0, 'green': 0, 'yellow': 0,
+                                    'red': 0, 'no_data': 0}
+
         # 结果表放入带滚动条的容器（勾选列多时右侧列不再被截断）
         tree_frame = tk.Frame(self.result_frame, bg=self.C_CARD_HDR)
         tree_frame._skip_theme = True
@@ -1757,6 +1934,7 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 ("📦 商品", self.page_products),
             ]),
             ('数据', [
+                ("📊 仪表盘", self.page_dashboard),
                 ("📈 历史趋势", self.page_history),
                 ("💰 用量明细", self.page_usage),
             ]),
@@ -1839,6 +2017,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
             self._build_history_page(page)
         elif page == self.page_usage and not hasattr(page, '_built'):
             self._build_usage_page(page)
+        elif page == self.page_dashboard and not hasattr(page, '_built'):
+            # v1.6.0 TC-D：📊 仪表盘懒构建（stats_ui mixin）
+            self._build_dashboard_page(page)
         if not hasattr(page, '_built'):
             page._built = True
         # 导航重构：历史/用量数据页每次切入刷新（after 调度进主线程事件队列，
@@ -1852,6 +2033,13 @@ class App(SettingsUIMixin, StatsPagesMixin):
         elif page == self.page_usage:
             try:
                 self.win.after_idle(self._usage_page_refresh)
+            except Exception:
+                pass
+        elif page == self.page_dashboard:
+            # v1.6.0 TC-D：仪表盘切页触发刷新（TTL 60s 缓存由 refresh 内部判断；
+            # force=False 走缓存，事件驱动刷新在 _fill_from_ocr 收尾显式 force=True）
+            try:
+                self.win.after_idle(getattr(self, '_dashboard_page_refresh', None) or (lambda: None))
             except Exception:
                 pass
         # 切页只刷新模型徽章；主题全量重涂仅在主题切换时执行（避免每次切页全树 walk）
@@ -1891,6 +2079,127 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if popup:
             try:
                 messagebox.showerror(_title, _msg, parent=self.win)
+            except Exception:
+                pass
+
+    # ===== v1.6.0 TC-Q3：AI 自检报告汇总条 =====
+    def _update_trust_summary(self, plans=None):
+        """刷新 AI 自检报告汇总条（label 文字 + 按钮可用性）。
+
+        数据源（双保险）：
+        1) self._last_trust_summary（t20 在 _calc_from_items 末尾写入）—— 主路径
+        2) self.plans 兜底（_render_tree 在 _calc_from_items 之前/之外的路径被调用）
+
+        任一源异常 → 用全零默认 + 按钮 disabled（不静默吞数，§4 显式）。
+
+        失败安全：整函数 try/except 包裹，调用方可放任何线程（主线程刷
+        label.config，after 调度；worker 线程经 win.after(0, ...) 转发）。
+        """
+        try:
+            ts = None
+            if isinstance(getattr(self, '_last_trust_summary', None), dict):
+                ts = self._last_trust_summary
+            # 兜底：从 plans 现算（_last_trust_summary 未及时更新场景）
+            if (not ts or ts.get('total', 0) == 0) and isinstance(plans, list) and plans:
+                try:
+                    from ocr_review import trust_summary as _ts_fn
+                    ts = _ts_fn(plans)
+                except Exception:
+                    ts = None
+            if not isinstance(ts, dict):
+                ts = {'total': 0, 'green': 0, 'yellow': 0, 'red': 0, 'no_data': 0}
+            total = int(ts.get('total', 0))
+            green = int(ts.get('green', 0))
+            yellow = int(ts.get('yellow', 0))
+            red = int(ts.get('red', 0))
+            no_data = int(ts.get('no_data', 0))
+            # 文本：可信 N｜需复核 N｜高风险 N（无数据/空计划 → 全部 0）
+            text = f"可信 {green}｜需复核 {yellow}｜高风险 {red}"
+            if no_data:
+                text += f"｜数据不足 {no_data}"
+            if hasattr(self, '_trust_summary_label'):
+                try:
+                    self._trust_summary_label.config(text=text)
+                except Exception:
+                    pass
+            # 按钮：仅当有 YELLOW/RED 时启用（避免空态点击无响应）
+            _has_review = (yellow + red) > 0
+            if hasattr(self, '_trust_summary_btn'):
+                try:
+                    self._trust_summary_btn.config(
+                        state=('normal' if _has_review else 'disabled'))
+                except Exception:
+                    pass
+            return ts
+        except Exception:
+            # 显式降级：label 文字保留旧值、按钮保留旧态，不静默改 UI（§4）
+            return None
+
+    def _open_review_from_summary(self):
+        """汇总条「查看复核」按钮回调——调起现有 _show_review_dialog。
+
+        失败哲学：缺数据/无低置信 → 状态栏提示，不静默开空弹窗（不新增弹窗干扰）。
+        """
+        try:
+            plans = getattr(self, 'plans', None) or []
+            if not plans:
+                self.status_text.set("ℹ️ 当前无结果可复核（先识别或计算）")
+                return
+            # 从 plans 提取行级 items 形态（_show_review_dialog 需要）
+            # 用 plans 本身 + _raw 上下文构造兼容 items；这里复用 has_low_confidence
+            # 判定逻辑：若汇总显示有 YELLOW/RED → 直接弹（接受用户「展开复核」诉求）
+            try:
+                from ocr_review import has_low_confidence as _hlc
+            except Exception:
+                _hlc = None
+            # 构造最小 items（confidence 已由 _calc_from_items 写 plan['trust']）
+            items_for_dialog = []
+            for p in plans:
+                if not isinstance(p, dict):
+                    continue
+                # plan['trust'] = GREEN/YELLOW/RED/'' ; 缺省 GREEN（兜底）
+                _trust = p.get('trust', '') or 'GREEN'
+                if _trust not in ('GREEN', 'YELLOW', 'RED'):
+                    _trust = 'GREEN'
+                # CROSS#1 修复（发布前修复批次）：trust→confidence.level 映射
+                # 之前误把 YELLOW 标 'low'，会导致 _show_review_dialog 把 YELLOW 行
+                # 视作 RED 同级（影响 review 弹窗的 need_review 排序/计数语义）。
+                # 正确语义：GREEN=high（无需复核）/ YELLOW=medium（需复核但非高风险）/
+                # RED=low（高风险·强制 qty=0）。has_review_items(items) 覆盖 low+medium
+                # —— YELLOW 仍能进复核列表但不被错误升级为 RED。
+                if _trust == 'RED':
+                    _conf_lv = 'low'
+                elif _trust == 'YELLOW':
+                    _conf_lv = 'medium'
+                else:
+                    _conf_lv = 'high'
+                items_for_dialog.append({
+                    'name': p.get('name', ''),
+                    'stock': p.get('stock', 0),
+                    'sales': p.get('sales', 0),
+                    '_confidence_level': _conf_lv,
+                    'confidence': {'level': _conf_lv, 'reasons': []},
+                })
+            if _hlc and not _hlc(items_for_dialog):
+                # 无低置信行（按 confidence 路径）—— 弹窗不出现
+                # 但用户明确点「查看复核」按钮，仍允许打开空表（Tk 弹窗
+                # 显示空列表，状态栏提示）。不增加新弹窗类型（任务红线）。
+                pass
+            # 调起现有 _show_review_dialog（不修改其行为，仅在用户点汇总按钮时复用）
+            _action, _edits = self._show_review_dialog(items_for_dialog)
+            if _action == 'edited' and _edits:
+                # 用户在弹窗里修正 → 重算（与 _fill_from_ocr 同款收尾）
+                try:
+                    from ocr_review import apply_user_edits as _aue
+                    _aue(items_for_dialog, _edits)
+                except Exception:
+                    pass
+                self._calc_from_items(items_for_dialog)
+                self.status_text.set(f"✓ 修正 {len(_edits)} 项后已重算")
+        except Exception:
+            # 弹窗失败 → 状态栏提示，不阻塞主流程（§4 显式降级）
+            try:
+                self.status_text.set("⚠ 复核弹窗调用失败")
             except Exception:
                 pass
 
@@ -3173,275 +3482,88 @@ class App(SettingsUIMixin, StatsPagesMixin):
             return None
 
     def _calc_from_items(self, items):
-        """直接从OCR结果计算并显示（v1.3 动态列：勾选列 + 固定计算列）"""
-        today = datetime.now()
+        """直接从OCR结果计算并显示（v1.3 动态列：勾选列 + 固定计算列）
+
+        v1.6.0 TC-A1.2 相位 2 薄壳接线：把内联计算/警告/预测/安全闸循环委托给
+        ``replenishment_service.build_plans`` 纯函数；本方法只剩「配置提取 +
+        依赖注入 + GUI 副作用（self.* / 状态栏 / 缓存 / 推荐 cache）」。
+        行为契约零变化：plans 字段集合与排序、推荐缓存、self.* 状态完全等价。
+        """
+        # ── 配置提取（与原方法同款 6 步；任何步骤失败都回退默认值）──
         region = self.region_var.get()
-        plans = []
-        # 读取客户勾选的识别列（未配置/空 → 回退默认商品字段列）
         try:
             from utils import get_ocr_columns
             _col_cfg = get_ocr_columns()
-            _sel_cols = [c for c in (_col_cfg.get('selected') or []) if c]
         except Exception:
             _col_cfg = {}
-            _sel_cols = []
-        if not _sel_cols:
-            _sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
-        # mapping 反查：列名 → 业务字段（渲染动态列时把 name/stock/sales 放回对应勾选列）
-        try:
-            _sel_cols_map = {v: k for k, v in ((_col_cfg.get('mapping') or {}).items()) if v}
-        except Exception:
-            _sel_cols_map = {}
-
-        # 防御性转换：兼容字符串/None/含单位文本，避免 ValueError/TypeError（循环外定义避免重复建函数）
-        def _to_int(v, default=0):
-            try:
-                return int(v)
-            except (ValueError, TypeError):
-                return default
-
-        # 补货时间偏移量：默认 1，可由 settings.replenishment_offset 覆盖（循环外读一次，避免每迭代 IO）
         try:
             from utils import Config as _Cfg
             _off = int(_Cfg.load().get('replenishment_offset', 1))
         except Exception:
             _off = 1
-
-        # P3-A：补货模型分发（用户裁定：默认 classic，原公式一行不改）
         try:
             from utils import get_replenishment_cfg
             _rep_cfg = get_replenishment_cfg()
         except Exception:
             _rep_cfg = {'model': 'classic', 'safety_days': 2, 'in_transit_qty': 0}
-        _rep_model = str(_rep_cfg.get('model') or 'classic')
-        _rep_safety = int(_rep_cfg.get('safety_days', 2) or 0)
-        _rep_intransit = int(_rep_cfg.get('in_transit_qty', 0) or 0)
 
-        # history_lookup 适配 history_db.query_sku_history 签名。
-        # 起加权/高级模式专用；R2 预测起经典模式也注入——「预测」列不依赖
-        # 补货模型（每商品查近 30 天历史 → forecast_next_period）。查询体自带
-        # try/except 兜底 []，经典公式本身一行未改（铁律不受影响）。
+        # 传给 build_plans 的 cfg（25 字段契约见 replenishment_service.FIELD_ALIGNMENT）
+        cfg = {
+            'region': region,
+            'replenishment_offset': _off,
+            'model': str(_rep_cfg.get('model') or 'classic'),
+            'safety_days': int(_rep_cfg.get('safety_days', 2) or 0),
+            'in_transit_qty': int(_rep_cfg.get('in_transit_qty', 0) or 0),
+            'advanced': _rep_cfg.get('advanced') if isinstance(_rep_cfg, dict) else None,
+            'col_cfg': _col_cfg if isinstance(_col_cfg, dict) else {},
+        }
+
+        # ── 依赖注入：history_lookup + shipping_fn ──
         def _history_lookup(sku_id, reg, days, name=None):
             try:
                 import history_db as _hdb
                 if sku_id:
-                    return _hdb.query_sku_history(sku_key=sku_id, days=days, region=reg, name='') or []
-                return _hdb.query_sku_history(sku_key='', days=days, region=reg, name=name or '') or []
+                    return _hdb.query_sku_history(sku_key=sku_id, days=days,
+                                                  region=reg, name='') or []
+                return _hdb.query_sku_history(sku_key='', days=days,
+                                              region=reg, name=name or '') or []
             except Exception:
                 return []
 
-        # R2 预测：安全库存推荐缓存 payload（首个有足够历史的商品命中后不再覆盖——
-        # 推荐基于"数据最充分的代表商品"，settings 设置页展示 + 一键应用）
+        shipping_fn = self._get_shipping
+
+        # ── 主链：纯函数 build_plans 完成 calc + warning + forecast + safety gate ──
+        from replenishment_service import build_plans
+        plans = build_plans(items, cfg, _history_lookup, shipping_fn)
+
+        # ── R2 预测：安全库存推荐（首个数据足够商品命中后不再覆盖）。
+        # 需依赖 self._build_safety_recommendation 故留在 gui（build_plans 纯函数不持 self）。
         _rec_payload = None
-
-        for item in items:
-            name = item.get('name', '')
-            stock = _to_int(item.get('stock', 0))
-            daily = max(_to_int(item.get('sales', 0)), 0)
-            calc_daily = daily if daily > 0 else 1  # 除法保护，显示保留原始值
-            # R2 问题：_adv_plan 逐商品显式初始化（替代 dict 字面量里借
-            # 局部命名空间做字符串查找的旧写法——改名即静默回退 1.0 的埋雷）
-            _adv_plan = None
-            # 每商品用自己的地区查时效（批量识别多省份各行 region 不同），
-            # 无则回退当前地区——修复其他省份商品被按最后省份计算
-            _it_region = item.get('region') or region
-            shipping = self._get_shipping(_it_region, name)  # 逐商品查运输时效
-
-            if _rep_model == 'weighted':
-                # P3-A：加权模式——走 utils.calc_replenishment_weighted（任何异常回退经典）
-                try:
-                    from utils import calc_replenishment_weighted
-                    _w = calc_replenishment_weighted(
-                        item, _it_region, shipping, _rep_safety, _rep_intransit,
-                        _history_lookup,
-                    )
-                    status = _w['status']
-                    color = _w['color']
-                    qty = _w['qty']
-                    ratio = _w['ratio']
-                    reorder = _w['reorder']
-                    daily = _w.get('daily', daily)
-                    _model_tag = _w.get('model', 'weighted')
-                except Exception:
-                    # 加权模式异常 → 经典公式兜底。
-                    # 标注 'classic(error)' 与 'classic(no_history)' 区分
-                    # - no_history：加权查到空结果，主动回退（已知语义）
-                    # - error：加权抛异常（DB 损坏/字段缺失/未知），是被动回退
-                    _model_tag = 'classic(error)'
-                    if daily <= 0:
-                        status = '无销量·观察'
-                        color = 'gray'
-                        qty = 0
-                        ratio = 0.0
-                        reorder = 0.0
-                    else:
-                        ratio = stock / calc_daily
-                        lead_time = shipping + _off
-                        reorder = ratio - lead_time
-                        if reorder <= 0:
-                            status = '立刻补货'
-                            color = 'red'
-                            qty = max(daily * 8, 100)
-                            qty = ((qty + 99) // 100) * 100
-                        elif reorder <= 2:
-                            status = f'{reorder:.0f}天后下单'
-                            color = 'yellow'
-                            qty = max(daily * 8, 100)
-                            qty = ((qty + 99) // 100) * 100
-                        else:
-                            status = f'{reorder:.0f}天后下单'
-                            color = 'green'
-                            qty = 0
-            elif _rep_model == 'advanced':
-                # 高级模式：走 algorithm_ui.dispatch_plan 统一封装
-                # （内部调 utils.calc_replenishment_advanced，缺历史逐商品回退经典 + 标注 classic(error)）
-                try:
-                    from algorithm_ui import dispatch_plan
-                    _adv_plan = dispatch_plan(
-                        item, _it_region, shipping,
-                        _rep_cfg, _history_lookup,
-                    )
-                    status = _adv_plan['status']
-                    color = _adv_plan['color']
-                    qty = _adv_plan['qty']
-                    ratio = _adv_plan['ratio']
-                    reorder = _adv_plan['reorder']
-                    # 高级模式 daily 字段已等于 effective_daily（与基础 classic 兼容字段约定一致）
-                    daily = _adv_plan.get('daily', daily)
-                    _model_tag = _adv_plan.get('model', 'advanced')
-                except Exception:
-                    # dispatch_plan 已自带兜底；这里是双保险（理论上不该走到）
-                    _model_tag = 'classic(error)'
-                    if daily <= 0:
-                        status = '无销量·观察'
-                        color = 'gray'
-                        qty = 0
-                        ratio = 0.0
-                        reorder = 0.0
-                    else:
-                        ratio = stock / calc_daily
-                        lead_time = shipping + _off
-                        reorder = ratio - lead_time
-                        if reorder <= 0:
-                            status = '立刻补货'
-                            color = 'red'
-                            qty = max(daily * 8, 100)
-                            qty = ((qty + 99) // 100) * 100
-                        elif reorder <= 2:
-                            status = f'{reorder:.0f}天后下单'
-                            color = 'yellow'
-                            qty = max(daily * 8, 100)
-                            qty = ((qty + 99) // 100) * 100
-                        else:
-                            status = f'{reorder:.0f}天后下单'
-                            color = 'green'
-                            qty = 0
-            else:
-                # 经典模式（用户裁定：一行公式都不许改）——原样保留
-                _model_tag = 'classic'
-                if daily <= 0:
-                    # 无销量商品：不强制补货，标记观察（销量0可能数据未更新，交客户人工判断）
-                    status = '无销量·观察'
-                    color = 'gray'
-                    qty = 0
-                    ratio = 0.0
-                    reorder = 0.0
-                else:
-                    ratio = stock / calc_daily
-                    lead_time = shipping + _off
-                    reorder = ratio - lead_time
-
-                    if reorder <= 0:
-                        status = '立刻补货'
-                        color = 'red'
-                        qty = max(daily * 8, 100)
-                        qty = ((qty + 99) // 100) * 100
-                    elif reorder <= 2:
-                        status = f'{reorder:.0f}天后下单'
-                        color = 'yellow'
-                        qty = max(daily * 8, 100)
-                        qty = ((qty + 99) // 100) * 100
-                    else:
-                        status = f'{reorder:.0f}天后下单'
-                        color = 'green'
-                        qty = 0
-
-            plans.append({
-                'name': name, 'stock': stock,
-                'daily': daily, 'ratio': round(ratio, 1),
-                'days_left': round(ratio, 1),
-                'status': status, 'color': color, 'qty': qty,
-                '_row_idx': len(plans),  # 原始 rows 索引（筛选/排序后编辑仍回写正确行）
-                'warehouse': item.get('warehouse', ''),
-                # v1.4.7 WS-A（A1）：sku_id 补进 plans——历史库 SKU 权威关联键
-                # （与 ocr.dedup_items 同语义；无 ID 行由历史库回退 (region, name) 匹配）
-                'sku_id': item.get('sku_id', '') or '',
-                # 通用列原始数据：客户勾选列从 _raw 取原文显示
-                '_raw': item.get('_raw') or {},
-                '_sel_cols': _sel_cols,
-                '_sel_cols_map': _sel_cols_map,
-                # P3-A / F1：补货模型标注
-                # classic = 经典模式（默认）
-                # weighted = 加权模式（成功查到历史）
-                # advanced = 高级模式（季节/大促/滞销/超卖四因子）
-                # classic(no_history) = 加权模式主动回退（查到空结果）
-                # classic(error) = 加权/高级模式被动回退（异常/DB 损坏）
-                'model': _model_tag,
-                # 预警列：表格 + 导出共用。滞销⚠/超卖🔥/超卖⚠/低置信⚠（不互斥，' / ' 分隔）
-                'warning': '',
-            })
-            # 高级模式附加字段（R2 问题：_adv_plan 显式初始化 + isinstance 收敛——
-            # dispatch_plan 异常或内部 classic(error) 回退时 _adv_plan 为 None/缺字段，
-            # 占位值与 model 标注语义一致，不再借局部命名空间字符串查找静默兜底）
-            _adv = _adv_plan if isinstance(_adv_plan, dict) else {}
-            plans[-1]['season_factor'] = _adv.get('season_factor', 1.0) \
-                if _rep_model == 'advanced' else 1.0
-            plans[-1]['promo_multiplier'] = _adv.get('promo_multiplier', 1.0) \
-                if _rep_model == 'advanced' else 1.0
-            plans[-1]['effective_daily'] = _adv.get('effective_daily', daily) \
-                if _rep_model == 'advanced' else daily
-            plans[-1]['slow_moving'] = _adv.get('slow_moving', False) \
-                if _rep_model == 'advanced' else False
-            plans[-1]['oversell_risk'] = _adv.get('oversell_risk', False) \
-                if _rep_model == 'advanced' else False
-            plans[-1]['oversell_level'] = _adv.get('oversell_level', None) \
-                if _rep_model == 'advanced' else None
-            # 补齐 warning 字段：经典/加权模式不显示高级因子预警，只看低置信
-            try:
-                from algorithm_ui import warning_display as _wd
-                plans[-1]['warning'] = _wd(plans[-1], item)
-            except Exception:
-                plans[-1]['warning'] = ''
-            # R2 预测：每商品查近 30 天历史 → forecast_next_period
-            # 预测下一期日销（plan['forecast'] float|None；None=样本不足显示 '—'）。
-            # 顺带做安全库存推荐（首个数据足够的商品，供设置页展示+应用）。
-            _fc = None
-            try:
-                from algorithm_ui import forecast_next_period as _fnp
-                _hrows = _history_lookup(item.get('sku_id', '') or '', _it_region, 30,
-                                         name=name)
+        try:
+            from algorithm_ui import forecast_next_period as _fnp
+            for item, plan in zip(items, plans):
+                if _rec_payload is not None:
+                    break
+                if not isinstance(item, dict):
+                    continue
+                _it_region = item.get('region') or region
+                _ship = self._get_shipping(_it_region, item.get('name', ''))
+                _hrows = _history_lookup(item.get('sku_id', '') or '',
+                                         _it_region, 30, name=item.get('name', ''))
                 if _hrows:
                     _fc = _fnp(_hrows)
-                    if _rec_payload is None:
+                    if _fc is not None:
                         _rec_payload = self._build_safety_recommendation(
-                            _hrows, shipping, name=name,
-                            sku_id=item.get('sku_id', '') or '', region=_it_region,
-                            forecast=_fc)
-            except Exception:
-                _fc = None  # 预测失败不阻塞计算主链（§4：列显示 '—' 即显式语义）
-            plans[-1]['forecast'] = _fc
-        
-        # Sort
-        priority = {'red': 0, 'yellow': 1, 'green': 2}
-        plans.sort(key=lambda p: priority.get(p['color'], 99))
-        
-        # Show（按筛选状态渲染，内部重建动态列）
+                            _hrows, _ship, name=item.get('name', ''),
+                            sku_id=item.get('sku_id', '') or '',
+                            region=_it_region, forecast=_fc)
+        except Exception:
+            _rec_payload = None  # 推荐失败不阻塞主链（§4：显式降级）
+
+        # ── GUI 副作用（保持原顺序：渲染 → 状态赋值 → 缓存 → 推荐落盘 → 状态栏）──
         self._render_tree(plans)
-        
         self.plans = plans
-        # R2 预测：安全库存推荐缓存写入（键 settings['replenishment']['recommendation']，
-        # save_recommendation_cache 白名单落盘）+ 状态栏简报一行。
-        # 写失败不阻塞计算（设置页只是少一次"上次推荐"展示，§4 不弹窗打断）。
+
         _brief = ''
         if _rec_payload:
             try:
@@ -3449,9 +3571,6 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 _src(_rec_payload)
             except Exception:
                 pass
-            # R3 遗留修复（R2-Leftover-1）：写缓存后刷新设置页「上次推荐」展示
-            # （settings_ui.SettingsUIMixin._refresh_recommendation，hasattr 守卫
-            # 兼容未挂 mixin/单测替身；设置页没构造时静默跳过）。
             try:
                 if hasattr(self, '_refresh_recommendation'):
                     self._refresh_recommendation()
@@ -3461,12 +3580,24 @@ class App(SettingsUIMixin, StatsPagesMixin):
         self.status_text.set(f"计算完成 — {len(plans)} 个商品"
                              + ("（仅显示预警）" if self._filter_warning_only else "")
                              + (f"｜{_brief}" if _brief else ""))
+        try:
+            from ocr_review import trust_summary as _trust_summary
+            self._last_trust_summary = _trust_summary(plans)
+        except Exception:
+            self._last_trust_summary = {'total': len(plans), 'green': 0,
+                                        'yellow': 0, 'red': 0, 'no_data': 0}
+        _ts = self._last_trust_summary
+        if _ts.get('red') or _ts.get('yellow'):
+            self.status_text.set(
+                self.status_text.get()
+                + (f"｜⛔{_ts['red']} 行高风险已停补" if _ts.get('red') else "")
+                + (f"｜⚠{_ts['yellow']} 行需复核" if _ts.get('yellow') else "")
+                + (f"｜⚠{_ts['no_data']} 行数据不足" if _ts.get('no_data') else ""))
         self.export_btn.config(state="normal")
         self._sort_col = None
         self._auto_expand(len(plans))
-        
+
         # 保存到缓存
-        region = self.region_var.get()
         self.active_region = region
         self.cache[region] = {'plans': plans, 'items': items}
         self._update_tabs()
@@ -3543,7 +3674,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     # None（无历史/样本<2 天）显示 '—'（§4：显式缺数据，不编 0）
                     row_vals.append(forecast_cell_text(p.get('forecast')))
                 elif _c == '状态':
-                    row_vals.append(p.get('status', '') or '')
+                    # v1.6.0 TC-Q2：可信度标识——RED/NO_DATA 已由安全闸在 status 里
+                    # 落 ⛔/⚠ 前缀；此处补 YELLOW 的 ⚠ 展示标记（仅显示层，不改 plan）
+                    _st = p.get('status', '') or ''
+                    if p.get('trust') == 'YELLOW' and not str(_st).startswith(('⛔', '⚠')):
+                        _st = '⚠' + str(_st)
+                    row_vals.append(_st)
                 elif _c == '补货量':
                     row_vals.append(p.get('qty', '') or '')
                 elif _c == '预警':
@@ -3582,6 +3718,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     row_vals.append(_raw.get(_c, '') or '')
             iid = self.tree.insert("", "end", values=tuple(row_vals), tags=tags)
             self._row_index_map[iid] = p.get('_row_idx', len(self._row_index_map))
+        # v1.6.0 TC-Q3：渲染完表格后刷汇总条（每次 _render_tree 都能拿到
+        # 最新 plans；兜底从 plans 现算）
+        self._update_trust_summary(plans)
     
     def _update_tabs(self):
         """更新地区切换标签"""
@@ -3934,6 +4073,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if skipped:
             msg += f"（已跳过 {skipped} 个空行）"
         self.status_text.set(msg)
+        # v1.6.0 TC-Q3：手动编辑重算路径同步刷汇总条（_calc_from_items 已
+        # 写 _last_trust_summary；此处再调一次保险 + 触发 label 刷新）
+        self._update_trust_summary(items)
     
     def _emergency_stop(self):
         """F9 紧急停止批量识别。
@@ -4031,6 +4173,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
         队列清理逻辑原样保留在其后）。
         R3 健壮：收队前还原全局异常钩子（防还原期钩子引用已死窗口）。
         """
+        # v1.6.0 TC-Q4 相位 2：退出前收口当前 Run（run_end 事件落账）
+        self._run_finish()
         try:
             if getattr(self, '_ex_handles', None):
                 import exception_guard as _eg
@@ -4073,6 +4217,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if getattr(self, '_batch_running', False) or getattr(self, '_img_batch_running', False):
             messagebox.showinfo("批量识别", "批量任务正在进行中，请先等待完成或停止后再试")
             return
+        # v1.6.0 TC-Q4 相位 2：开始一个 Run（批量识别）
+        self._run_begin('batch')
         known = sorted(self.regions.keys())
         if not known:
             # v1.5.9.3：首次使用引导——批量需要先有识别过的地区（用户反复误点批量被卡）
@@ -5402,71 +5548,6 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 pass
         return False
 
-    def _open_import_menu(self):
-        """v1.5.7 导入入口：点击弹菜单二选一（导入表格文件 / 选择图片文件）。
-
-        菜单数据来自 home_actions.IMPORT_MENU_ITEMS（单一事实源，find_menu_item
-        消费，防契约漂移）。仅 tk.TclError（grab/widget 交互失败）兜底到表格导入
-        并显式提示；其他异常原样冒泡（DESIGN §4 显式失败，绝不静默跳转）。
-        v1.5.8（F2）：菜单用后即 destroy，防 widget 树累积与 grab 残留。
-        """
-        try:
-            from home_actions import IMPORT_MENU_ITEMS, menu_labels
-        except Exception as _e:
-            self.status_text.set(f"⚠ 导入菜单初始化失败，已回退表格导入：{str(_e)[:60]}")
-            self._import_table()
-            return
-        import tkinter.messagebox as _tkmsg
-        menu = None
-        try:
-            menu = tk.Menu(self.win, tearoff=0)
-            for _label, _it in zip(menu_labels(), IMPORT_MENU_ITEMS):
-                _k = _it['key']
-                menu.add_command(label=_label,
-                                 command=lambda k=_k: self._dispatch_import(k))
-            try:
-                menu.tk_popup(*(self.win.winfo_pointerxy()))
-            finally:
-                try:
-                    menu.grab_release()
-                except Exception:
-                    pass
-        except tk.TclError as _e:
-            try:
-                self.status_text.set(f"⚠ 导入菜单弹出失败：{str(_e)[:60]}")
-                _tkmsg.showwarning("导入菜单", f"菜单弹出失败（{str(_e)[:80]}），已回退表格导入。",
-                                   parent=self.win)
-                self._import_table()
-            except Exception:
-                pass
-        finally:
-            # F2：menu 用后即毁（tk_popup 已返回；destroy 失败静默）
-            if menu is not None:
-                try:
-                    menu.destroy()
-                except Exception:
-                    pass
-
-    def _dispatch_import(self, key):
-        """导入菜单项分派：pick_images → 批量图片路径；import_table → 表格导入。
-
-        v1.5.8（BUG_HUNT_V157 ★条）：未知 key/路径异常**不再静默跳转表格导入**——
-        未知 key 记日志并显式提示（契约漂移早发现）；pick_images 业务异常原样冒泡
-        由调用方（async_queue/异常守卫）显式呈现（DESIGN §4）。
-        """
-        if key == 'pick_images':
-            self._batch_images()
-            return
-        if key == 'import_table':
-            self._import_table()
-            return
-        # 未知 key：契约漂移信号——显式留痕不猜（§4）
-        try:
-            from utils import _sanitize_for_log
-            log.warn(f"导入菜单未知 key：{_sanitize_for_log(str(key))[:40]}，已忽略")
-        except Exception:
-            pass
-
     def _live_screenshot(self):
         # v1.5.9：识别前置 API 预检（未配置 → 明确引导弹窗 + 可跳转设置页）
         if not self._ensure_api_ready():
@@ -5477,6 +5558,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
             _us.session_reset()
         except Exception:
             pass
+        # v1.6.0 TC-Q4 相位 2：开始一个 Run（run_id 贯通 usage/history/诊断）
+        self._run_begin('live')
 
         # P2-C：免费版每日 50 次实时截图识别门控（enforce=false 时跳过）
         # 用户裁定：表格导入/手动输入永不限制；批量识别/双模型/Excel 导出也不在门控范围
@@ -5663,6 +5746,8 @@ class App(SettingsUIMixin, StatsPagesMixin):
             return
         import ocr as _ocr_mod
         from tkinter import filedialog
+        # v1.6.0 TC-Q4 相位 2：开始一个 Run（批量图片）
+        self._run_begin('images')
         # 引擎显式存在性校验（§4：缺失显式报错，不静默降级成别的行为）
         if not hasattr(_ocr_mod, 'batch_ocr_images'):
             messagebox.showerror(
@@ -6010,6 +6095,18 @@ class App(SettingsUIMixin, StatsPagesMixin):
         if not items:
             self.status_text.set("未识别到表格数据——请确认截图包含完整的订货管理表格后重试")
             return
+        # v1.6.0 TC-Q4 相位 2：行统计累计进当前 Run（summarize_review 口径
+        # high=ok，medium+low=low；error 行 OCR 层不产出 → 记 error 字符串场景）
+        try:
+            _ctx = self._active_run
+            if _ctx is not None:
+                from ocr_review import summarize_review as _sr
+                _s = _sr(items)
+                _ctx.rows_total += int(_s.get('total') or 0)
+                _ctx.rows_ok += int(_s.get('high') or 0)
+                _ctx.rows_low += int(_s.get('medium') or 0) + int(_s.get('low') or 0)
+        except Exception:
+            pass
         # 按地区分组：多省份×多仓库批量时每个地区独立缓存（避免全混进第一个地区）
         from ocr import strip_region_suffix as _srs
         by_region = {}
@@ -6121,6 +6218,12 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     f"识别到新地区：{'、'.join(newly_added)}\n\n已自动添加到地区列表，各商品运输时间暂设为3天。\n请点击「商品时效设置」根据实际情况调整。",
                     parent=self.win))
         self.status_text.set(msg)
+        # v1.6.0 TC-Q3：_fill_from_ocr 收尾异步刷汇总条（worker 线程可能调到这里，
+        # 用 win.after(0, ...) 转发到主线程，禁止 worker 直调 Tk 控件，§4 显式）
+        try:
+            self.win.after(0, lambda: self._update_trust_summary(self.plans))
+        except Exception:
+            pass
         # 计算前 OCR 复核—— 存在 low 置信行 → 弹窗
         # 让用户确认/修正。低置信 = 任一 confidence.level == 'low'（含模糊/双模型
         # 差异>30%/数字异常/名字配对异常等维度）。所有 items 在弹窗前先注入
@@ -6234,9 +6337,15 @@ class App(SettingsUIMixin, StatsPagesMixin):
                     # （store_ui_logic.group_plans_by_store，单测覆盖；入参形状归
                     # store_registry/history_db 的 契约）。
                     _store = getattr(self, '_store_id', None) or 'default'
+                    # v1.6.0 TC-Q4 相位 2：run_id/prompt_version 贯通历史采集
+                    # （capture_sessions 列已由 就位；无活动 run → 空串=旧 session）
+                    _run_ctx = self._active_run
                     history_db.record_capture(
                         store_ui_logic.group_plans_by_store(_plans_by_region, _store),
-                        source=source)
+                        source=source,
+                        run_id=(str(_run_ctx.run_id) if _run_ctx is not None else ''),
+                        prompt_version=(str(_run_ctx.prompt_version)
+                                        if _run_ctx is not None else ''))
         except Exception as _hist_e:
             try:
                 from ocr import _ocr_dlog
@@ -6245,6 +6354,20 @@ class App(SettingsUIMixin, StatsPagesMixin):
                 pass
         # v1.4.7 WS-C：回填收尾点主动刷新费用 Label（此处为主线程上下文，直接调）
         self._refresh_cost_label()
+        # v1.6.0 TC-D：仪表盘数据刷新（事件驱动——识别完成即触发；不引入 60s 定时轮询）
+        try:
+            self._dashboard_page_refresh(force=True)
+        except Exception:
+            pass
+
+        # v1.6.0 TC-A1.3 相位 2：用量页「按用途」区事件驱动刷新钩子（ 修过
+        # usage_panel_summary by_call_site 之后，识别完成的统计聚合已更新；此处
+        # 仅加触发，不改聚合/渲染）。after_idle 入主线程事件队列，worker 线程
+        # 不直调 Tk；_usage_page_refresh 内部 _current_page 守门，迟到无害。
+        try:
+            self.win.after_idle(self._usage_page_refresh)
+        except Exception:
+            pass
 
     # ─────────────────── v1.4.7 WS-C：费用显示（T-C5 GUI 侧）───────────────────
 
@@ -6460,224 +6583,9 @@ class App(SettingsUIMixin, StatsPagesMixin):
                        font=(self.FONT[0], 8), fill=self.C_TEXT)
 
     # ─────────────────── v1.4.7 WS-B：表格导入（T-B2 GUI 侧）───────────────────
-
-    def _import_table(self):
-        """CSV/XLSX 结构化导入入口：filedialog → 映射预览 → worker 导入 → 报告+清洗+收口。
-
-        流程（T-B2）：线程内不碰 Tk；结果经 win.after 回主线程；name/region/warehouse
-        过 export_xlsx._sanitize_cell（强制复用点②）后 _fill_from_ocr(source='import') 收口。
-        """
-        # v1.5.8（BUG_HUNT_V157 A1）：批量互斥守卫——批量识别/批量图片运行中禁止导入表格
-        # （导入也走 TaskQueue/识别队列，双批并发会串台状态；与 _batch_images 同款提示）
-        if getattr(self, '_batch_running', False) or getattr(self, '_img_batch_running', False):
-            messagebox.showinfo("导入", "批量任务正在进行中，请先等待完成或停止后再试",
-                                parent=self.win)
-            return
-        import table_import
-        from tkinter import filedialog
-        path = filedialog.askopenfilename(
-            title="选择要导入的表格（CSV / XLSX）",
-            filetypes=[("表格文件", "*.csv *.xlsx"), ("所有", "*.*")])
-        if not path:
-            return
-        if str(path).lower().endswith('.xls'):
-            # 归类为 legacy_xls 文案（与 table_import 一致）
-            from ocr_review import categorize_error as _ce
-            _cat, _msg, _title = _ce('暂不支持 .xls 老格式')
-            messagebox.showerror(_title, _msg, parent=self.win)
-            return
-        try:
-            headers, _rows = table_import.read_table_rows(path)
-        except Exception as e:
-            # 异常归类（编码失败 / XLSX 损坏 / 文件不存在 / 行超限）
-            self._friendly_error(e, popup=True)
-            return
-        if not headers:
-            # 文件首个非空行没有表头：归类为 xlsx_corrupt / mapping_missing
-            self._friendly_error('文件首个非空行没有表头，无法识别列映射',
-                                 popup=True, title='导入失败')
-            return
-        mapping, has_region = self._import_preview_dialog(headers, path)
-        if mapping is None:
-            return  # 用户取消
-        self.status_text.set("导入中...")
-        self.win.update()
-
-        def task(_progress=None):
-            # v1.5.9.4-hotfix：TaskQueue 契约 fn(progress)——旧 def task() 无参
-            # 导致表格导入任务一执行即 TypeError（导入一直静默失败的真凶）
-            # 异常由 TaskQueue 捕获并通过 on_error 回调
-            items, issues = table_import.import_items(path, mapping=mapping)
-            self.win.after(0, lambda i=items, s=issues: self._import_done(i, s, has_region))
-
-        # 使用 TaskQueue 执行任务
-        # 导入异常用 _friendly_error 归类（编码失败 / 损坏 / 行超限 / 列映射缺失）
-        self._task_queue.submit(
-            "表格导入",
-            task,
-            on_error=lambda e: self.win.after(0, lambda exc=e: self._friendly_error(exc, popup=True)),
-        )
-
-    def _import_preview_dialog(self, headers, path):
-        """映射预览对话框：文件表头 ↔ 业务字段对位 + 缺失清单 + 可改下拉 + 生成模板。
-
-        返回 (mapping|None, has_region)：None=用户取消；确认时 mapping 必含
-        name/stock/sales（缺任一不允许导入，宪法 §1 同纪律——不静默 fallback）。
-        """
-        import table_import
-        try:
-            found, missing = table_import.guess_mapping(headers)
-        except Exception:
-            found, missing = {}, ['name', 'stock', 'sales']
-        # R1 效率：导入映射记忆——读上次确认过的映射，文件表头与之一致
-        # （import_memory.last_mapping_matches：核心 name/stock/sales 经
-        # normalize_col_name 全命中）则用 resolve_last_mapping 对位预填下拉；
-        # 读取失败/模块缺失降级为无记忆（guess_mapping 结果照旧），不阻塞导入。
-        # 清除入口在设置页，gui 这里只读写。
-        _prefill = {}
-        try:
-            if import_memory is not None:
-                _last_map = import_memory.get_last_mapping()
-                if _last_map and import_memory.last_mapping_matches(headers, _last_map)[0]:
-                    _prefill = resolve_last_mapping(headers, _last_map)
-        except Exception:
-            _prefill = {}
-        # 预填已覆盖的字段不再算「未自动识别」（记忆命中也算识别，提示不再吓人）
-        if _prefill:
-            missing = [f for f in missing if f not in _prefill]
-        top = tk.Toplevel(self.win)
-        top.title("导入映射预览")
-        top.geometry(self._geo(500, 400))
-        top.configure(bg=self.C_BG)
-        top.transient(self.win)
-        tk.Label(top, text=f"文件：{os.path.basename(path)}（{len(headers)} 列）",
-                 font=(self.FONT[0], 9), fg=self.C_TEXT, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(14, 2))
-        if missing:
-            tk.Label(top, text=f"⚠ 未自动识别关键列：{'、'.join(missing)} — 请在下方下拉手工指定",
-                     font=(self.FONT[0], 8), fg='#C62828', bg=self.C_BG).pack(
-                anchor='w', padx=16, pady=2)
-        else:
-            tk.Label(top, text=("✓ 已按上次导入映射预填（表头一致），可调整后确认导入"
-                                if _prefill else "✓ 关键列已自动识别，可调整后确认导入"),
-                     font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
-                anchor='w', padx=16, pady=2)
-        fields = [('name', '商品名(必填)'), ('stock', '库存(必填)'), ('sales', '销量(必填)'),
-                  ('region', '销售区域(可选)'), ('warehouse', '仓库(可选)')]
-        combo_vars = {}
-        for fid, label in fields:
-            row = tk.Frame(top, bg=self.C_BG)
-            row.pack(fill="x", padx=16, pady=3)
-            tk.Label(row, text=label, width=13, anchor='e', font=(self.FONT[0], 9),
-                     fg=self.C_TEXT, bg=self.C_BG).pack(side="left")
-            v = tk.StringVar(top, value=(_prefill.get(fid) or found.get(fid, '(不使用)')))
-            ttk.Combobox(row, textvariable=v, values=['(不使用)'] + list(headers),
-                         state='readonly', width=26,
-                         font=(self.FONT[0], 9)).pack(side="left", padx=8)
-            combo_vars[fid] = v
-
-        def gen_template():
-            try:
-                out_dir = os.path.join(get_base_dir(), 'output')
-                os.makedirs(out_dir, exist_ok=True)
-                tpath = table_import.write_template(
-                    os.path.join(out_dir, 'PDD导入模板.xlsx'))
-                try:
-                    os.startfile(tpath)
-                except Exception:
-                    messagebox.showinfo("模板已生成", f"模板文件：\n{tpath}", parent=top)
-            except Exception as e:
-                messagebox.showerror("模板生成失败", str(e)[:200], parent=top)
-
-        result = []
-
-        def confirm():
-            mapping = {}
-            for fid, _label in fields:
-                col = combo_vars[fid].get()
-                if col and col != '(不使用)':
-                    mapping[fid] = col
-            absent = [f for f in ('name', 'stock', 'sales') if not mapping.get(f)]
-            if absent:
-                messagebox.showwarning(
-                    "缺少关键列",
-                    f"{'、'.join(absent)} 为必填映射，请选择对应列后再导入。",
-                    parent=top)
-                return
-            # R1 效率：用户确认的映射存回记忆（下次同结构文件自动预填）。
-            # 写失败仅记日志、不阻塞本次导入（§4 显式留痕，不静默）。
-            try:
-                if import_memory is not None and not import_memory.save_last_mapping(mapping):
-                    log.warn("导入映射记忆保存失败（settings.json 写盘异常），本次导入不受影响")
-            except Exception:
-                pass
-            result.append((mapping, 'region' in mapping))
-            top.destroy()
-
-        btns = tk.Frame(top, bg=self.C_BG)
-        btns.pack(fill="x", padx=16, pady=(12, 14))
-        self._mk_btn(btns, "生成模板", gen_template, kind='ghost',
-                     font=(self.FONT[0], 9)).pack(side="left", padx=4)
-        self._mk_btn(btns, "取消", top.destroy, kind='ghost',
-                     font=(self.FONT[0], 9)).pack(side="right", padx=4)
-        self._mk_btn(btns, "确认导入", confirm, kind='primary',
-                     font=(self.FONT[0], 9, 'bold')).pack(side="right", padx=4)
-        top.grab_set()
-        top.wait_window()
-        return result[0] if result else (None, False)
-
-    def _import_done(self, items, issues, has_region):
-        """主线程收口：导入报告 → 程序端清洗（_sanitize_cell）→ _fill_from_ocr。"""
-        try:
-            if issues:
-                self._import_report_dialog(issues)
-            # 强制复用点 （R7）：导入侧公式注入清洗——name/region/warehouse 过 _sanitize_cell
-            from export_xlsx import _sanitize_cell
-            for p in items:
-                if isinstance(p, dict):
-                    p['name'] = _sanitize_cell(str(p.get('name', '') or ''))
-                    p['region'] = _sanitize_cell(str(p.get('region', '') or ''))
-                    p['warehouse'] = _sanitize_cell(str(p.get('warehouse', '') or ''))
-            if not items:
-                self.status_text.set("导入完成：0 条有效数据（详见导入报告）")
-                return
-            self._fill_from_ocr(items, source='import')
-            if not has_region:
-                self.status_text.set(
-                    f"⚠ 未识别销售区域列，全部商品已归入当前地区「{self.region_var.get()}」")
-        except Exception as e:
-            self._show_error(f"导入数据处理失败: {str(e)[:80]}", popup=True)
-
-    def _import_report_dialog(self, issues):
-        """导入报告：行号/商品/级别/原因（前 200 条 + 计数汇总）。"""
-        top = tk.Toplevel(self.win)
-        top.title("导入报告")
-        top.geometry(self._geo(620, 400))
-        top.configure(bg=self.C_BG)
-        top.transient(self.win)
-        n_err = sum(1 for i in issues if i.get('level') == 'error')
-        n_warn = len(issues) - n_err
-        tk.Label(top, text=f"共 {len(issues)} 条提示：错误 {n_err}，警告 {n_warn}"
-                           + ("（仅显示前 200 条）" if len(issues) > 200 else ""),
-                 font=(self.FONT[0], 9), fg=self.C_TEXT, bg=self.C_BG).pack(
-            anchor='w', padx=12, pady=(10, 4))
-        cols = ('row', 'name', 'level', 'reason')
-        heads = (('row', '行号', 60), ('name', '商品', 200), ('level', '级别', 60),
-                 ('reason', '原因', 240))
-        tree = ttk.Treeview(top, columns=cols, show='headings', height=12)
-        for cid, text, w in heads:
-            tree.heading(cid, text=text)
-            tree.column(cid, width=w, anchor='w' if cid in ('name', 'reason') else 'center')
-        vsb = ttk.Scrollbar(top, orient='vertical', command=tree.yview)
-        tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y", padx=(0, 10), pady=(0, 8))
-        tree.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 8))
-        for i in issues[:200]:
-            tree.insert('', 'end', values=(
-                i.get('row', ''), i.get('name', ''), i.get('level', ''),
-                i.get('reason', '')))
-        self._mk_btn(top, "关闭", top.destroy, kind='dark',
-                     font=(self.FONT[0], 9)).pack(pady=(0, 10))
+    # v1.6.0 TC-A1.1：6 个导入方法已抽至 import_service.py 的 ImportServiceMixin；
+    # 经 class App(SettingsUIMixin, StatsPagesMixin, ImportServiceMixin) MRO 注入。
+    # 删除点：_import_table / _import_preview_dialog / _import_done / _import_report_dialog
 
     def _on_tree_yscroll(self, first, last):
         self._vsb_first = float(first); self._vsb_last = float(last)
