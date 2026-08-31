@@ -1,5 +1,5 @@
 """
-高级补货算法-UI 集成（t8）—— UI 无关的纯逻辑层
+高级补货算法-UI 集成（）—— UI 无关的纯逻辑层
 =================================================
 
 把 settings_ui 的「补货策略」区块、gui.py 的「_calc_from_items 分发 + 预警列」
@@ -8,8 +8,8 @@
 本模块不 import tkinter；不依赖 settings.json 实际存在（用注入的 cfg 字典）。
 
 设计基线：
-- 与 t2 契约对齐：MODEL_ADVANCED + cfg 形参（向后兼容）。
-- 与 t6 纪律一致：纯函数 + 类型提示，test_algorithm_ui.py 端到端验证。
+- 与  契约对齐：MODEL_ADVANCED + cfg 形参（向后兼容）。
+- 与  纪律一致：纯函数 + 类型提示，test_algorithm_ui.py 端到端验证。
 - 「预警」列 = 3 类（不互斥，多个用 / 分隔）：
   * 滞销⚠      — calc_replenishment_advanced 的 slow_moving=True
   * 超卖🔥     — oversell_risk=True，level=high 时前缀「重」
@@ -26,7 +26,7 @@ __all__ = [
     'warning_tags_for_plan', 'warning_display',
     'enrich_plan_with_advanced_fields', 'enrich_plan_with_warning',
     'dispatch_plan',
-    # R2 预测升级
+    #  预测升级（ 产出）
     'recommend_safety_days', 'forecast_next_period',
     'forecast_value', 'sanitize_series',
     'parse_bulk_promo_dates',
@@ -40,7 +40,7 @@ __all__ = [
 DEFAULT_ADVANCED_UI = {
     'promo': {
         'enabled': False,
-        'dates_text': '',  # 形如 "2025-11-11, 2025-12-12"（UI 文本框用）
+        'dates_text': '',      # 形如 "2025-11-11, 2025-12-12"（UI 文本框用）
         'boost': 1.5,
         'lead_days': 3,
     },
@@ -62,7 +62,7 @@ DEFAULT_ADVANCED_UI = {
 
 def build_default_cfg() -> dict:
     """构造一个 cfg 字典，advanced 子配置 = 默认全关闭。
-    用于 t8 集成点缺参兜底。
+    用于  集成点缺参兜底。
     """
     return {
         'model': 'advanced',
@@ -207,8 +207,8 @@ def collect_advanced_cfg_from_form(ui_form: dict) -> dict:
 
 # 标签常量（供测试断言和 UI 渲染复用）
 TAG_SLOW = '滞销⚠'
-TAG_OVERSELL_HIGH = '超卖🔥'  # level=high
-TAG_OVERSELL_MED = '超卖⚠'  # level=medium
+TAG_OVERSELL_HIGH = '超卖🔥'      # level=high
+TAG_OVERSELL_MED = '超卖⚠'       # level=medium
 TAG_LOWCONF = '低置信⚠'
 
 
@@ -284,12 +284,12 @@ def dispatch_plan(item: dict, region: str, shipping: int,
 
     - cfg 必须含 'model' / 'safety_days' / 'in_transit_qty' 三个键
     - history_lookup：可调用 (sku, reg, days[, name]) → list[dict]；仅 weighted/advanced 用
-    - 任何异常 → 经典公式兜底 + model='classic(error)'（与 t2 calc_replenishment 主入口同语义）
+    - 任何异常 → 经典公式兜底 + model='classic(error)'（与  calc_replenishment 主入口同语义）
 
     返回的 plan 已被 enrich_plan_with_advanced_fields + enrich_plan_with_warning 补齐，
-    包含 model / warning 字段；保证 t8 集成点对 plan 的字段集合稳定。
+    包含 model / warning 字段；保证  集成点对 plan 的字段集合稳定。
 
-    这是 t8 给 gui.py _calc_from_items 提供的统一调用面——不传 cfg 也行（走 default）。
+    这是  给 gui.py _calc_from_items 提供的统一调用面——不传 cfg 也行（走 default）。
     """
     from utils import (
         calc_replenishment_classic,
@@ -319,7 +319,7 @@ def dispatch_plan(item: dict, region: str, shipping: int,
         else:
             plan = calc_replenishment_classic(item, region, shipping, 1)
     except Exception:
-        # R2 问题 修复：原代码无条件把 plan.model 覆写为
+        #   修复（ ）：原代码无条件把 plan.model 覆写为
         # 'classic(error)'——但兜底第一段调 calc_replenishment_classic 已
         # 成功（plan 含正确 stock/sales/daily），仅是 weighted/advanced
         # 主路径失败。原覆写让用户看到 'classic(error)' 标签但内部是有效
@@ -341,16 +341,17 @@ def dispatch_plan(item: dict, region: str, shipping: int,
 
 
 # ============================================================
-# R2 预测升级 — 安全库存推荐 + 指数平滑预测
+#  预测升级 — 安全库存推荐 + 指数平滑预测（ 产出）
 # ============================================================
-# 设计目标（PLAN §4 R2 预测升级）
-# 1) recommend_safety_days：基于近 30 天日销序列的标准差 × z × √lead_days 算安全库存；
-# 数据不足（<7 点 / 全 0）返 None，不强行给值（§4 失败哲学）。
-# 2) forecast_next_period：简单指数平滑 SES 预测下一期日销；
-# 初始 S_0=x_0（第一个样本）。
-# 3) parse_bulk_promo_dates：批量粘贴解析（每行一个 YYYY-MM-DD）→ 合法行 + 非法行分别返回。
-# 4) save/load/clear_recommendation_cache：设置页"上次推荐值"展示/应用按钮的缓存通道
-# （键 'replenishment.recommendation'），gui 计算时写入，设置页读出展示。
+# 设计目标（预测升级）：
+#   1) recommend_safety_days：基于近 30 天日销序列的标准差 × z × √lead_days 算安全库存；
+#      数据不足（<7 点 / 全 0）返 None，不强行给值（§4 失败哲学）。
+#   2) forecast_next_period：简单指数平滑 SES 预测下一期日销；
+#      初始 S_0=x_0（第一个样本）。
+#   3) parse_bulk_promo_dates：批量粘贴解析（每行一个 YYYY-MM-DD）→ 合法行 + 非法行分别返回。
+#   4) save/load/clear_recommendation_cache：设置页"上次推荐值"展示/应用按钮的缓存通道
+#      （键 'replenishment.recommendation'），gui 计算时写入，设置页读出展示。
+#
 # 纯逻辑 / 失败安全 / 可单测 —— 不依赖 Tk、不连真实 DB。
 # ============================================================
 
@@ -418,9 +419,10 @@ def _history_to_daily_series(history_rows, days_window: int = 30):
 
 
 # ============================================================
-# v1.6.0 TC-B3 预测增强 V3/V4（PLAN §1.9 WS-B2）
+# v1.6.0  预测增强 V3/V4（）
 # ============================================================
 # 纯逻辑 / 失败安全 / 可单测 —— 不依赖 Tk、不连真实 DB。
+#
 # V3 增强 = sanitize_series：IQR/winsorize 去极值 + 促销日反向缩放 +
 # 连续零销剔除；30 天窗口下推荐轻量阈值；任何异常 → 原序列返回 + 标记
 # `fallback=True`（绝不静默丢点）。
@@ -430,12 +432,12 @@ def _history_to_daily_series(history_rows, days_window: int = 30):
 # ============================================================
 
 # V3 清洗参数（v1.6.0 拍板）
-_SANITIZE_IQR_K = 1.5  # IQR 倍数（标准 Tukey fence）
-_SANITIZE_WINSOR_LOWER = 0.05  # winsorize 下分位
-_SANITIZE_WINSOR_UPPER = 0.95  # winsorize 上分位
-_SANITIZE_MAX_ZERO_STREAK = 7  # 连续零销 > 该值 → 剔除（保窗口完整）
+_SANITIZE_IQR_K = 1.5            # IQR 倍数（标准 Tukey fence）
+_SANITIZE_WINSOR_LOWER = 0.05    # winsorize 下分位
+_SANITIZE_WINSOR_UPPER = 0.95    # winsorize 上分位
+_SANITIZE_MAX_ZERO_STREAK = 7    # 连续零销 > 该值 → 剔除（保窗口完整）
 _SANITIZE_PROMO_DOWNSHIFT = 0.7  # 促销日反向缩放系数（销量 1.4× → 还原 1.0）
-_SANITIZE_PROMO_FACTOR = 1.4  # 判定促销日的倍率阈值（销量 > 中位数 × 该值）
+_SANITIZE_PROMO_FACTOR = 1.4     # 判定促销日的倍率阈值（销量 > 中位数 × 该值）
 
 
 def sanitize_series(series, cfg=None):
@@ -607,7 +609,7 @@ def sanitize_series(series, cfg=None):
 
 
 def forecast_value(result):
-    """向后兼容辅助函数（v1.6.0 TC-B3 配套）—— 把 dict 契约折叠成 float。
+    """向后兼容辅助函数（v1.6.0  配套）—— 把 dict 契约折叠成 float。
 
     用途：旧调用方（export_xlsx.py / 既有单元测试）只需一个标量预测值，
     调 forecast_value(v) 即可拿到 v['base']。**不影响新增 dict 字段**。
@@ -627,7 +629,7 @@ def forecast_value(result):
 
 
 # V4 趋势参数（v1.6.0 拍板）
-_TREND_TAIL_N = 14  # 取尾部 N 日做线性回归
+_TREND_TAIL_N = 14     # 取尾部 N 日做线性回归
 _TREND_MIN_SAMPLES = 14  # V4 启用最小样本数
 _TREND_SLOPE_NORM_CAP = 0.5  # 斜率 / base 比例上限（超过视为回归不稳定，回退 V3）
 
@@ -666,15 +668,15 @@ def forecast_next_period(history_rows, alpha: float = DEFAULT_FORECAST_ALPHA,
     - 默认（as_dict=False）→ 返 float | None（与 v1.5.13 完全一致；gui.py / 旧调用零改动）
     - as_dict=True → 返 dict：
         {
-          'base': float,  # 下一期预测日销（>=0；与旧契约同语义）
-          'trend': float,  # 尾部线性回归斜率（每日增量；V4 用）
-          'version': 'v3'|'v4',  # 实际启用的版本
-          'fallback': bool,  # 是否回退
+          'base': float,                # 下一期预测日销（>=0；与旧契约同语义）
+          'trend': float,               # 尾部线性回归斜率（每日增量；V4 用）
+          'version': 'v3'|'v4',         # 实际启用的版本
+          'fallback': bool,             # 是否回退
           'fallback_reason': str|None,  # 回退原因
         }
     - 旧调用方拿标量可用 `forecast_value(v)` 折叠。
     失败哲学：缺数据 / 异常 / V4 不稳定 → 显式回退 V3 + 填 fallback_reason
-    （绝不静默，符合 §4 失败哲学 + 宪法 R8）。
+    （绝不静默，符合 §4 失败哲学 + 宪法 ）。
 
     version 行为（缺省从 settings 读：replenishment.forecast_version）：
     - 'v3'：sanitize_series + SES（默认保守）
@@ -775,7 +777,7 @@ def recommend_safety_days(history_rows, lead_days: int, z: float = DEFAULT_SAFET
     Raises:
         无。所有异常路径返 None。
 
-    契约（供 fix-glm/t5 接入）：
+    契约（供 fix-glm/ 接入）：
         - history_rows：list[dict]，每行 {captured_at, sales}，
           与 history_db.query_sku_history 返回同款形态。
         - lead_days：int，推荐窗口长度（运输天数）。<=0 → 返 None。
@@ -882,17 +884,18 @@ def parse_bulk_promo_dates(text: str):
 
 # ─────────── 推荐缓存（设置页展示 / 应用按钮用） ───────────
 # 键：settings.json['replenishment']['recommendation']
-# 形态
-# {
-# 'safety_days': int,
-# 'safety_days_lead': int, # 推荐时的 lead_days（运输天数）
-# 'sigma': float, # 实际算出的样本标准差（只读展示）
-# 'forecast': float, # forecast_next_period 结果
-# 'n_samples': int, # 实际样本数（窗口内）
-# 'z': float, # 使用的 z 系数
-# 'computed_at': 'YYYY-MM-DDTHH:MM:SS', # ISO 本地时间
-# 'sku_key': str, # 推荐是基于哪个商品（sku 或 region+name）
-# }
+# 形态：
+#   {
+#     'safety_days': int,
+#     'safety_days_lead': int,    # 推荐时的 lead_days（运输天数）
+#     'sigma': float,             # 实际算出的样本标准差（只读展示）
+#     'forecast': float,          # forecast_next_period 结果
+#     'n_samples': int,           # 实际样本数（窗口内）
+#     'z': float,                 # 使用的 z 系数
+#     'computed_at': 'YYYY-MM-DDTHH:MM:SS',  # ISO 本地时间
+#     'sku_key': str,             # 推荐是基于哪个商品（sku 或 region+name）
+#   }
+#
 # 写入方：fix-glm 在 _calc_from_items / dispatch_plan 后把当前商品的推荐值写入。
 # 读取方：settings_ui 在「补货策略」卡 advanced 区展示 + 一键应用按钮。
 # 失败语义：键不存在 / 损坏 / 过期 → load 返回 None（视为"无缓存推荐"）。

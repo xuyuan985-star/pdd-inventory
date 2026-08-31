@@ -214,7 +214,7 @@ def build_plans(items, cfg, history_lookup, shipping_fn):
 
         # ── 模型分发 ──
         if model == MODEL_WEIGHTED:
-            # P3-A：加权模式——走 utils.calc_replenishment_weighted
+            # t13 P3-A：加权模式——走 utils.calc_replenishment_weighted
             try:
                 _w = calc_replenishment_weighted(
                     item, _it_region, shipping, safety_days, in_transit_qty,
@@ -236,7 +236,7 @@ def build_plans(items, cfg, history_lookup, shipping_fn):
                 ratio = _fb['ratio']
                 daily = _fb.get('daily', daily)
         elif model == MODEL_ADVANCED:
-            # 高级模式：走 algorithm_ui.dispatch_plan
+            # t8 高级模式：走 algorithm_ui.dispatch_plan
             try:
                 _adv_plan = dispatch_plan(
                     item, _it_region, shipping,

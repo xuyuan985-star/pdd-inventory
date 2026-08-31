@@ -55,8 +55,8 @@ class StatsPagesMixin:
         入参：
           daily_rows: history_db.query_daily(days=7) 行 [{day,region,items,alerts,stock_total}]
           usage_panel: usage_store.usage_panel_summary()（4 档聚合 + month_label）
-          health_state: t18 startup_health() -> list[HealthItem(item, level, detail)]
-          trust_summary: t20 _last_trust_summary {total,green,yellow,red,no_data}
+          health_state:  startup_health() -> list[HealthItem(item, level, detail)]
+          trust_summary:  _last_trust_summary {total,green,yellow,red,no_data}
           now_ts: 缓存时间戳（测试注入；生产由 refresh 传 time.time()）
         返回扁平 dict（全部原子字段，UI 层只读渲染；任何缺失键兜底，绝不抛）：
           stock_total / alerts_total / items_7d / trend(近7日升序 [{day,items,alerts}])
@@ -127,7 +127,7 @@ class StatsPagesMixin:
 
     @staticmethod
     def dashboard_trust_line(trust):
-        """TC-D：可信度汇总条文案（t20 _last_trust_summary → 一行中文）。"""
+        """TC-D：可信度汇总条文案（ _last_trust_summary → 一行中文）。"""
         t = trust if isinstance(trust, dict) else {}
         total = int(t.get('total') or 0)
         if total <= 0:
@@ -137,7 +137,7 @@ class StatsPagesMixin:
                 f" ｜ 数据不足 {int(t.get('no_data') or 0)}（共 {total} 行）")
 
 
-    # ─────────────── R1 布局优化：纯逻辑助手（无 Tk 依赖，便于单测） ───────────────
+    # ─────────────── 布局优化：纯逻辑助手（无 Tk 依赖，便于单测） ───────────────
 
     @staticmethod
     def history_filter_segments():
@@ -177,7 +177,7 @@ class StatsPagesMixin:
         return ('--', '暂无数据', '--', '--', '--')
 
     def _history_page_enter(self):
-        """进入历史页：先与主页当前店铺联动一次，再刷新数据。
+        """进入历史页（ ）：先与主页当前店铺联动一次，再刷新数据。
 
         旧路径每次刷新都保持 _hist_store_var 原值——用户切到店铺 B 后进历史页，
         筛选仍停在进入前的店铺（含默认'全部店铺'），历史趋势与当前操作店铺脱节。
@@ -215,7 +215,7 @@ class StatsPagesMixin:
         折线（_history_sku_chart）；「清空全部历史」二次确认；首次启用一次性
         提示。页面每次切入由 _show_page → _history_page_refresh 刷新数据。
 
-        R1 布局优化：筛选条改用 grid 列对齐（标签右贴/Combo 左对齐 + 列宽
+         布局优化：筛选条改用 grid 列对齐（标签右贴/Combo 左对齐 + 列宽
         固定），避免 side='left' 在长名 / 多 store 时的串位；空态文案与占位
         行统一走 history_summary_text / history_empty_placeholder_row 纯函数。
         """
@@ -226,19 +226,19 @@ class StatsPagesMixin:
         # 首次启用一次性提示（幂等：Config['history'].privacy_hint_shown 已置位即跳过）
         self._history_privacy_hint()
 
-        # page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
+        # (③)：page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
         self._lbl(page, text="识别历史趋势", font=self.FONT_HEADING, bg=self.C_BG,
                   fg=self.C_TEXT).pack(anchor='w', padx=16, pady=(14, 2))
         self._lbl(page, text="识别数据按日汇总（仅保存在本机 history.db，不上传）",
                   font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(0, 8))
+            anchor='w', padx=16, pady=(0, 8))   # (): (0,6)→(0,8)
 
-        # ── 筛选行：店铺下拉+ 地区下拉（含'全部'）+ 天数 30/90/180 + 汇总提示 ──
-        # R1：3 个筛选段用独立 Frame（side='left'，内部 label+Combo 同节奏），
+        # ── 筛选行：店铺下拉（）+ 地区下拉（含'全部'）+ 天数 30/90/180 + 汇总提示 ──
+        # 3 个筛选段用独立 Frame（side='left'，内部 label+Combo 同节奏），
         # 段间固定 padx；summary 留右侧贴边。Combo 列宽走 history_filter_segments()
         # 单一来源，避免硬编码漂移。
         bar = tk.Frame(page, bg=self.C_BG)
-        bar.pack(fill="x", padx=16, pady=(0, 6))
+        bar.pack(fill="x", padx=16, pady=(0, 6))   # (): (0,4)→(0,6)
         # 第一段：店铺
         store_seg = tk.Frame(bar, bg=self.C_BG)
         store_seg.pack(side='left')
@@ -286,7 +286,7 @@ class StatsPagesMixin:
             tree.heading(cid, text=text)
             tree.column(cid, width=w, anchor='center')
         tree_wrap = tk.Frame(page, bg=self.C_BG)
-        tree_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        tree_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))   # (): (0,4)→(0,8)
         vsb = ttk.Scrollbar(tree_wrap, orient='vertical', command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
@@ -299,7 +299,7 @@ class StatsPagesMixin:
             if not sel:
                 return
             vals = tree.item(sel[0], 'values')
-            # 修 v4f-F13：空态占位行（日期列为 '--'）不响应双击，
+            # 修 -F13：空态占位行（日期列为 '--'）不响应双击，
             # 否则会打开"暂无数据 · --"的空明细窗困扰用户
             if not vals or vals[0] == '--':
                 return
@@ -333,12 +333,12 @@ class StatsPagesMixin:
             self._history_page_refresh()
 
         btns = tk.Frame(page, bg=self.C_BG)
-        btns.pack(fill="x", padx=16, pady=(4, 14))
+        btns.pack(fill="x", padx=16, pady=(4, 14))   # (): (2,12)→(4,14)
         self._mk_btn(btns, "🗑 清空全部历史", clear_all_hist, kind='ghost',
                      font=(self.FONT[0], 9)).pack(side="right", padx=4)
         self._lbl(btns, text="双击行看当日明细；明细行双击看单商品库存趋势折线",
                   font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
-            side="left", padx=(0, 4))
+            side="left", padx=(0, 4))   # (): 离左缘 4px
 
         # 筛选变化即刷新（trace 防重入见 _history_page_refresh）
         self._hist_reg_var.trace('w', lambda *_: self._history_page_refresh())
@@ -357,7 +357,7 @@ class StatsPagesMixin:
         tree = getattr(self, '_hist_tree', None)
         if page is None or tree is None or history_db is None:
             return
-        # v1.4.7 P3-R2-M2：after_idle 迟到守门。用户在 history 页快速切到 usage 页
+        # v1.4.7 P3--M2：after_idle 迟到守门。用户在 history 页快速切到 usage 页
         # 时，_current_page 已变成 usage 页，旧的 after_idle 回调即使触发也不应再
         # 跑 query_daily（浪费 + 可能被 _usage_page 后续操作踩到 tree 引用）。
         if getattr(self, '_current_page', None) is not page:
@@ -415,7 +415,7 @@ class StatsPagesMixin:
                             values=(r.get('day', ''), r.get('region', ''),
                                     r.get('items', 0), r.get('alerts', 0),
                                     r.get('stock_total', 0)))
-            # R1：摘要文案与占位行统一走纯函数 history_summary_text /
+            # 摘要文案与占位行统一走纯函数 history_summary_text /
             # history_empty_placeholder_row；与单测共享一份决策表。
             # getattr 兜底：旧测试替身 / 极端 stub 可能未注入静态方法，回退内联决策。
             try:
@@ -443,7 +443,7 @@ class StatsPagesMixin:
             self._hist_summary_label.config(text=summary_text)
             if not rows and fail is None:
                 tree.insert('', 'end', values=placeholder)
-            # R1：flush 一次 idletasks 让 Combo.values 重建 / Treeview 重绘在同一帧，
+            # flush 一次 idletasks 让 Combo.values 重建 / Treeview 重绘在同一帧，
             # 避免「Combo 先空 → 数据行后到」的闪跳（用户切店铺/地区时观感更稳）。
             try:
                 page.update_idletasks()
@@ -467,7 +467,7 @@ class StatsPagesMixin:
         import usage_store  # 闭包共用（reset_this_month / 刷新）：方法内导入，保持模块轻量
         from utils import get_usage_cfg
 
-        # page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
+        # (③)：page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
         self._lbl(page, text="API 用量明细", font=self.FONT_HEADING, bg=self.C_BG,
                   fg=self.C_TEXT).pack(anchor='w', padx=16, pady=(14, 2))
 
@@ -490,13 +490,13 @@ class StatsPagesMixin:
         # ── 4 档聚合大字（统一走 usage_panel_summary；标签引用留给刷新）──
         self._usage_stat_labels = {}
         topbar = tk.Frame(content, bg=self.C_BG)
-        topbar.pack(fill="x", padx=16, pady=(8, 8))
+        topbar.pack(fill="x", padx=16, pady=(8, 8))   # (): padx=14→16, pady=(6,6)→(8,8)
         for key, label in (('today', '今日'), ('week', '本周'), ('month', '本月'), ('all', '总计')):
             cell = tk.Frame(topbar, bg=self.C_BG, highlightthickness=1,
                             highlightbackground="#EAEAEA")
-            cell.pack(side="left", expand=True, fill="x", padx=6)
+            cell.pack(side="left", expand=True, fill="x", padx=6)   # (): 4→6 视觉呼吸
             self._lbl(cell, text=label, font=(self.FONT[0], 8), fg=self.C_MUTED,
-                      bg=self.C_BG).pack(pady=(8, 0))
+                      bg=self.C_BG).pack(pady=(8, 0))   # (): (6,0)→(8,0)
             cost_lbl = self._lbl(cell, text="¥0.00", font=(self.FONT[0], 13, 'bold'),
                                  fg=self.C_TEXT, bg=self.C_BG)
             cost_lbl.pack()
@@ -507,7 +507,7 @@ class StatsPagesMixin:
 
         # ── 按模型 / 按用途（来自 usage_panel_summary；树引用留给刷新）──
         mid = tk.Frame(content, bg=self.C_BG)
-        mid.pack(fill="x", padx=16, pady=8)
+        mid.pack(fill="x", padx=16, pady=8)   # (): padx=14→16, pady=6→8
         left = tk.Frame(mid, bg=self.C_BG)
         left.pack(side='left', fill='both', expand=True, padx=(0, 6))
         right = tk.Frame(mid, bg=self.C_BG)
@@ -539,7 +539,7 @@ class StatsPagesMixin:
         # ── 模型分布 Canvas 条图（本版新增；手绘零图表库依赖，同 _history_sku_chart 风格）──
         cv = tk.Canvas(content, height=120, bg=self.C_BG, highlightthickness=0)
         cv._skip_theme = True  # 画布项颜色由重绘回调管理，walk 不碰
-        cv.pack(fill='x', padx=16, pady=(2, 2))
+        cv.pack(fill='x', padx=16, pady=(2, 2))   # (): padx=14→16
         self._usage_chart_canvas = cv
         self._usage_panel = {}
         self._usage_chart_w = 0
@@ -549,12 +549,12 @@ class StatsPagesMixin:
         self._lbl(content, text="估算仅供参考：'~' 前缀行为兜底估算（不计费）；'?' 为未配置价格"
                                 "——请在下方价格表填写官方刊例价（元/百万 token，图片价按张）",
                   font=(self.FONT[0], 7), fg=self.C_MUTED, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(0, 8))  # A7：统一垂直节奏 8px
+            anchor='w', padx=16, pady=(0, 8))   # A7：统一垂直节奏 8px
 
         # ── 价格表编辑（双击单元格改值；「保存价格表」写 Config['usage']['pricing']）──
         self._lbl(content, text="价格表（元/百万 token；image_per_call 为每张图价，可留空）",
                   font=(self.FONT[0], 9, 'bold'), fg=self.C_TEXT, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(0, 8))  # A7：统一垂直节奏 8px
+            anchor='w', padx=16, pady=(0, 8))   # A7：统一垂直节奏 8px
         pcols = ('provider', 'model', 'input', 'output', 'image')
         pheads = (('provider', '提供商', 90), ('model', '模型名', 220),
                   ('input', '输入价', 90), ('output', '输出价', 90),
@@ -563,7 +563,7 @@ class StatsPagesMixin:
         for cid, text, w in pheads:
             ptree.heading(cid, text=text)
             ptree.column(cid, width=w, anchor='center')
-        ptree.pack(fill='x', padx=16, pady=(0, 8))  # A7：统一垂直节奏 8px
+        ptree.pack(fill='x', padx=16, pady=(0, 8))   # A7：统一垂直节奏 8px
         _PFIELDS = ('provider', 'model', 'input', 'output', 'image')
         rows_data = {}
         _row_seq = [0]
@@ -609,7 +609,7 @@ class StatsPagesMixin:
             if not bbox:
                 return
             x, y, w, h = bbox
-            # v1.4.7 P3-R2-L1 + P3-R2-M1：防御性销毁已存在的编辑 Entry。
+            # v1.4.7 P3--L1 + P3--M1：防御性销毁已存在的编辑 Entry。
             # 极快速双击 cell A→B 时，old Entry 的 FocusOut 回调与新 Double-1
             # 在同一事件循环窗口里抢资源，直接 e.destroy() 会与新 Entry.place/
             # focus_set 撞车出现 TclError 抖动。修复：destroy 全部走 after_idle
@@ -633,7 +633,7 @@ class StatsPagesMixin:
 
             def _commit(_e=None):
                 try:
-                    # v1.4.7 P3-R2-M2：输入校验——价格字段（input/output/image）必须是非负数；
+                    # v1.4.7 P3--M2：输入校验——价格字段（input/output/image）必须是非负数；
                     # provider/model 是标识符字段只去空白。负价 clamp 为 0，非法输入
                     # （非数字串）显式 showwarning 后保留原值不静默丢。
                     raw = e.get().strip()
@@ -667,7 +667,7 @@ class StatsPagesMixin:
                     rows_data[iid][field] = new_val
                     ptree.set(iid, field, new_val)
                 finally:
-                    # v1.4.7 P3-R2-M1：destroy 走 after_idle 避免与新事件抢时序；
+                    # v1.4.7 P3--M1：destroy 走 after_idle 避免与新事件抢时序；
                     # 仅当 _edit_entry 仍指向自己才清引用（后到回调可能已被新 Edit 替换）
                     try:
                         if ptree._edit_entry is e:
@@ -691,7 +691,7 @@ class StatsPagesMixin:
         ptree.bind('<Double-1>', on_ptree_dbl)
         self._lbl(content, text="双击单元格修改；provider 如 doubao/qwen/glm，model 填完整模型名",
                   font=(self.FONT[0], 7), fg=self.C_MUTED, bg=self.C_BG).pack(
-            anchor='w', padx=16, pady=(2, 4))
+            anchor='w', padx=16, pady=(2, 4))   # (): padx=14→16
 
         def save_pricing():
             from utils import Config
@@ -748,7 +748,7 @@ class StatsPagesMixin:
                                      parent=self.win)
 
         pbtns = tk.Frame(content, bg=self.C_BG)
-        pbtns.pack(fill="x", padx=16, pady=(2, 14))
+        pbtns.pack(fill="x", padx=16, pady=(2, 14))   # (): padx=14→16
         self._mk_btn(pbtns, "＋ 添加型号", lambda: (_add_row(), _refill_ptree()),
                      kind='ghost', font=(self.FONT[0], 8)).pack(side="left", padx=3)
 
@@ -765,7 +765,7 @@ class StatsPagesMixin:
                      font=(self.FONT[0], 8)).pack(side="left", padx=3)
         self._mk_btn(pbtns, "保存价格表", save_pricing, kind='primary',
                      font=(self.FONT[0], 8, 'bold')).pack(side="right", padx=3)
-        # 实施 A8：重置本月数据——危险操作·用 C_RED_BG 视觉区分（v4f 修正：不新建 _warn_btn，复用 _mk_btn 返回值 config）
+        # 8：重置本月数据——危险操作·用 C_RED_BG 视觉区分（ 修正：不新建 _warn_btn，复用 _mk_btn 返回值 config）
         _reset_btn = self._mk_btn(pbtns, "重置本月数据", reset_this_month, kind='primary',
                      font=(self.FONT[0], 8))
         _reset_btn.configure(bg=self.C_RED_BG)
@@ -799,7 +799,7 @@ class StatsPagesMixin:
 
     @staticmethod
     def _safe_destroy_widget(w):
-        """v1.4.7 P3-R2-M1：延迟销毁 widget 守卫。
+        """v1.4.7 P3--M1：延迟销毁 widget 守卫。
 
         用于价格表 Entry 编辑的 _commit/__cancel 与 on_ptree_dbl 的 prev 清理。
         全部走 after_idle 延迟到当前事件链结束后再 destroy，避免与新 Double-1
@@ -814,7 +814,7 @@ class StatsPagesMixin:
 
     @staticmethod
     def _chart_empty_message(panel):
-        """v1.4.7 P3-R2-L1：条图空数据/全 0 提示文案决策（与绘制解耦，便于单测）。
+        """v1.4.7 P3--L1：条图空数据/全 0 提示文案决策（与绘制解耦，便于单测）。
 
         三分支：
         - entries 空 → 「暂无模型费用数据」引导识别/调用
@@ -843,7 +843,7 @@ class StatsPagesMixin:
         page = getattr(self, '_usage_page', None)
         if page is None:
             return
-        # v1.4.7 P3-R2-M2：after_idle 迟到守门（见 _history_page_refresh 注释）。
+        # v1.4.7 P3--M2：after_idle 迟到守门（见 _history_page_refresh 注释）。
         # 用量页切走时不应再读 jsonl 跑 panel summary 浪费 IO。
         if getattr(self, '_current_page', None) is not page:
             return
@@ -918,7 +918,7 @@ class StatsPagesMixin:
                 return
         except Exception:
             return
-        # v1.4.7 P3-R1'-修 L2：主题切换后画布 bg 联动（C_BG 走主题 token 变化，
+        # v1.4.7 P3-'-修 L2：主题切换后画布 bg 联动（C_BG 走主题 token 变化，
         # _skip_theme 阻止 walk 刷新这里，必须在 redraw 入口显式同步）
         try:
             cv.configure(bg=self.C_BG)
@@ -941,7 +941,7 @@ class StatsPagesMixin:
         cv.create_text(w // 2, 14,
                        text=f"本月模型费用分布（{panel.get('month_label', '')}，共 {n} 个模型）",
                        font=(self.FONT[0], 9, 'bold'), fill=self.C_TEXT)
-        # v1.4.7 P3-R2-L1：友好提示分支。空 entries / 全 0 成本（用户未配价格表）
+        # v1.4.7 P3--L1：友好提示分支。空 entries / 全 0 成本（用户未配价格表）
         # 时给明确引导，避免出现「N 行 '? '」让用户疑惑。决策由 _chart_empty_message
         # 静态方法产出（无 Tk 依赖，可单测），redraw 只负责画。
         empty_msg = self._chart_empty_message(panel)
@@ -973,7 +973,7 @@ class StatsPagesMixin:
         """📊 仪表盘页（懒构建，_show_page 首切触发）。
 
         布局：顶部 4 数据卡（库存合计/预警数/今日费用/本月费用）→ 可信度汇总条
-        （复用 t20 _last_trust_summary）→ 健康卡（复用 t18 _health_state 六项）
+        （复用  _last_trust_summary）→ 健康卡（复用  _health_state 六项）
         → 近 7 日识别量趋势小图（Canvas 手绘零依赖）。数据渲染只读
         self._dash_cache（由 _dashboard_page_refresh 装配），构建期零查询。
         """
@@ -1000,7 +1000,7 @@ class StatsPagesMixin:
                       fg=self.C_MUTED, bg=self.C_BG).pack(pady=(0, 6))
             self._dash_card_labels[key] = val
 
-        # 可信度汇总条+ 健康卡
+        # 可信度汇总条（ 语义）+ 健康卡（ 六项）
         self._dash_trust_lbl = self._lbl(
             page, text='本轮无识别数据（识别/导入后自动更新）',
             font=(self.FONT[0], 9), fg=self.C_TEXT, bg=self.C_BG)
@@ -1035,7 +1035,7 @@ class StatsPagesMixin:
         """TC-D：仪表盘刷新——一次性拉取 + TTL 60s 缓存 + 迟到守门。
 
         数据源：history_db.query_daily(7) + usage_store.usage_panel_summary()
-        + self._health_state（t18）+ self._last_trust_summary（t20）。
+        + self._health_state（）+ self._last_trust_summary（）。
         缓存 self._dash_cache = {'data': dict, 'ts': float}；TTL 内（force=False）
         直接用缓存重绘；过期才重新拉取（**不引入定时轮询**——事件驱动：
         _fill_from_ocr/_import_done 收尾 + 切页 after_idle）。

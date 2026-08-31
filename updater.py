@@ -61,18 +61,18 @@ def _clear_progress():
         pass
 
 
-# ── v1.6.0 TC-C3：更新健康状态与自动回滚（docs/PLAN_v160.md §5.5 TC-C3）──────
+# ── v1.6.0 ：更新健康状态与自动回滚（docs/_v160.md §5.5 ）──────
 # update_health.json 状态机：pending（finalize 落盘，待新版本自证可用）
-# → ok（主程序首帧渲染成功，mark_update_ok；同时清空启动计数与回滚池）
-# → rolled_back（启动失败 ≥3 次触发 rollback_to_old 成功）
-# → rollback_failed（自动回滚失败——显式报错引导人工，绝不重试，§4 防自我锁死）
+#   → ok（主程序首帧渲染成功，mark_update_ok；同时清空启动计数与回滚池）
+#   → rolled_back（启动失败 ≥3 次触发 rollback_to_old 成功）
+#   → rollback_failed（自动回滚失败——显式报错引导人工，绝不重试，§4 防自我锁死）
 # 宪法 §5 红线：update_health.json 在程序目录只由 updater（本模块函数）写入，
 # 不进 git；_rollback_pool/ 是 updater 自建资产，清理绝不越出该目录、绝不 rmtree
 # 用户程序目录本身。
 UPDATE_HEALTH_FILE = "update_health.json"
 ROLLBACK_POOL_DIR = "_rollback_pool"
-ROLLBACK_POOL_MAX_AGE = 14 * 24 * 3600  # 回滚份过期阈值：14 天
-ROLLBACK_FAIL_THRESHOLD = 3  # 启动失败计数 ≥3 → 触发自动回滚（gui 消费）
+ROLLBACK_POOL_MAX_AGE = 14 * 24 * 3600   # 回滚份过期阈值：14 天
+ROLLBACK_FAIL_THRESHOLD = 3              # 启动失败计数 ≥3 → 触发自动回滚（gui 消费）
 
 
 def _version_of(utils_py_path: str) -> str:
@@ -272,7 +272,7 @@ def download_asset(asset, dest, progress_stage: str = "download", expected_sha25
     任一源成功后即返回；任一步骤失败（含 HTTP 错误/超时/校验不匹配）自动换下一源，
     失败的临时文件清理后继续。
 
-    v1.4.8 P1-B-fix（t17）：expected_sha256 非空时，下载成功后立即算 SHA256 比对；
+    v1.4.8 -fix（）：expected_sha256 非空时，下载成功后立即算 SHA256 比对；
     不匹配 → 视为该源不可信，log 警告 + 清理残文件 + continue 换下一源（不再走下游校验）。
     expected_sha256 缺省 None 时保持原行为（下游 main() 仍做校验）。
     """
@@ -303,7 +303,7 @@ def download_asset(asset, dest, progress_stage: str = "download", expected_sha25
             req = Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "PDD-EZ-Updater"})
             with urlopen(req, timeout=120) as resp:
                 _stream_to_file(resp, dest, size, name, progress_stage)
-            # v1.4.8 P1-B-fix：期望哈希给定 → 立即就地校验；不匹配则换源
+            # v1.4.8 -fix（）：期望哈希给定 → 立即就地校验；不匹配则换源
             if expected_sha256:
                 try:
                     if not _verify_sha256(dest, expected_sha256):
@@ -367,7 +367,7 @@ def _trunc_err(e: Exception) -> str:
 
 
 def _candidate_settings_paths() -> list:
-    """v1.4.8 P1-B-fix（t17）：返回候选 settings.json 路径，按优先级排序。
+    """v1.4.8 -fix（）：返回候选 settings.json 路径，按优先级排序。
     - frozen（PyInstaller 打包）：%APPDATA%/PDD补货助手 → exe 同目录（便携兜底）
     - 非 frozen（源码运行）：脚本目录
     与 utils.get_base_dir 的逻辑同款但内联（updater.py 禁止 import utils）。
@@ -401,7 +401,7 @@ def _read_update_mirrors() -> dict:
     不依赖 utils.Config（守住约束：updater.py 独立可移植，单文件 + 零 utils 依赖，
     防止 utils.py 变更反向污染更新器）。失败/缺键返回空 dict → 调用方按空=跳过处理。
 
-    v1.4.8 P1-B-fix（t17）：路径查找顺序
+    v1.4.8 -fix（）：路径查找顺序
     - frozen：先 %APPDATA%/PDD补货助手/settings.json（主程序写入位置），再 exe 同目录
     - 非 frozen：脚本目录/settings.json
     找到第一个存在的文件即用；都不存在返 {}。
@@ -506,7 +506,7 @@ def _is_file_locked(path: str) -> bool:
         # FILE_SHARE_NONE：任何其他句柄都算占用
         h = _kernel32.CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
                                   0, None, OPEN_EXISTING, 0, None)
-        # v1.4.5（bug hunt F5）：restype=HANDLE 在 CPython 3.11 ctypes 下返回 int 而非对象
+        # v1.4.5（）：restype=HANDLE 在 CPython 3.11 ctypes 下返回 int 而非对象
         # （旧代码 `h and h != -1` 恒真误判"未占用"；上一版 `h.value` 对 int 抛异常落入
         # 恒锁 fallback）。统一按整数判 INVALID_HANDLE_VALUE(0xFFFFFFFFFFFFFFFF/-1)/0。
         try:
@@ -572,10 +572,10 @@ def _needs_overwrite(src: str, dest: str) -> bool:
 def _overwrite_files(files, progress_stage: str = "cover",
                      backup_pool: str = "", entries_out: list = None):
     """逐文件覆盖：os.replace 备份旧文件 + copy2 落新文件；失败逆序回滚并中断
-    （v1.4.5 bug hunt F6：旧实现逐文件覆盖失败不回滚，程序目录留新旧混合版本）。
+    （v1.4.5 ：旧实现逐文件覆盖失败不回滚，程序目录留新旧混合版本）。
     返回 (ok, skipped_files)。
 
-    v1.6.0 TC-C3：backup_pool 非空时（do_finalize 路径），旧文件备份集中到该池目录
+    v1.6.0 ：backup_pool 非空时（do_finalize 路径），旧文件备份集中到该池目录
     （文件名 = 目标相对路径扁平化 + 内容防撞后缀），成功后**保留**作为自动回滚份，
     并把 [{dest_rel, backup}] 追加到 entries_out；pool 为空时保持 v1.4 行为：
     备份散落 dest+'.old_upd'、成功即删。"""
@@ -611,7 +611,7 @@ def _overwrite_files(files, progress_stage: str = "cover",
             backup = None
             if os.path.exists(dest):
                 if backup_pool:
-                    # TC-C3：备份集中到 _rollback_pool/，扁平名防子目录缺失
+                    # ：备份集中到 _rollback_pool/，扁平名防子目录缺失
                     _rel = os.path.relpath(dest, os.path.dirname(
                         os.path.abspath(backup_pool)))
                     _flat = _rel.replace('..', '__up__').replace(
@@ -750,7 +750,7 @@ def _pick_main_exe(target_dir: str) -> str:
 
 def _is_program_dir(target_dir: str) -> bool:
     """安全底线：target_dir 必须是 PDD EZ 程序目录。
-    判断（v1.4 审查收紧 + v1.4.5 bug hunt F14）：目录内必须有 PDD EZ 主 exe，
+    判断（v1.4 审查收紧 + v1.4.5 ）：目录内必须有 PDD EZ 主 exe，
     且必须有 PyInstaller onedir 的 _internal 目录——仅名字像（C:\\PDD EZ Backup、
     含 PDD EZ_v1.4.3.exe 的普通目录）不再放行，防止整体替换覆盖到非程序目录。"""
     if not os.path.isdir(target_dir):
@@ -826,7 +826,7 @@ def _cover_with_self_handling(files, backup_pool: str = "",
                               entries_out: list = None) -> tuple[bool, list]:
     """逐文件覆盖（March7th 顺序）：先覆盖其他文件 → 再自身改名让位 → 最后覆盖自身。
     中途失败时 updater 自身始终完好；自身覆盖失败时恢复 .old 备份。
-    返回 (ok, skipped_files)。backup_pool/entries_out 透传 _overwrite_files（TC-C3）。"""
+    返回 (ok, skipped_files)。backup_pool/entries_out 透传 _overwrite_files（）。"""
     self_renamed_to = ""
     _self_abs = os.path.abspath(sys.argv[0])
     others = []
@@ -877,7 +877,7 @@ def _cover_with_self_handling(files, backup_pool: str = "",
 
 
 def _apply_deleted_files(extracted_dir: str, target_dir: str) -> int:
-    """v1.4.5 bug hunt F15：应用包内 deleted-files.txt —— 自上版本起删除的运行时资源/
+    """v1.4.5 ：应用包内 deleted-files.txt —— 自上版本起删除的运行时资源/
     模板/文档，目标端白名单删除，防旧 dll/旧模板/旧文档永久残留。
     extracted_dir 须是 _extract_zip 返回的 PDD EZ 程序目录。返回删除文件数。"""
     _del_spec = os.path.join(extracted_dir, 'deleted-files.txt')
@@ -940,7 +940,7 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             _write_progress("error", msg, error=msg)
             return 1
 
-        # 2.5) TC-C3：回滚池入口（创建 + 过期清理）+ 旧版本号采集（必须在覆盖前读！）
+        # 2.5) ：回滚池入口（创建 + 过期清理）+ 旧版本号采集（必须在覆盖前读！）
         pool = _rollback_pool_dir(target_dir)
         try:
             os.makedirs(pool, exist_ok=True)
@@ -952,8 +952,8 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
 
         # 3) 收集待覆盖文件（仅变化的）
         # ⚠ 更新包 zip 顶层是 "PDD EZ/" 目录（_build_update_zip.py arcname 带目录名），
-        # 必须剥掉再拼 target_dir——否则覆盖到 target_dir/PDD EZ/ 子目录，更新不生效
-        # （auto 模式有剥目录逻辑，finalize 漏了，v1.4.1 修复）
+        #   必须剥掉再拼 target_dir——否则覆盖到 target_dir/PDD EZ/ 子目录，更新不生效
+        #   （auto 模式有剥目录逻辑，finalize 漏了，v1.4.1 修复）
         _write_progress("cover", "正在检测文件占用...")
         files = []
         for root, _, fnames in os.walk(extracted):
@@ -980,7 +980,7 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             return 1
 
         # 5) 覆盖（March7th 顺序：先覆盖其他文件 → 再自身改名让位 → 最后覆盖自身，
-        # 中途失败 updater 自身始终完好）。TC-C3：备份集中 _rollback_pool/，
+        # 中途失败 updater 自身始终完好）。：备份集中 _rollback_pool/，
         # 成功后保留为自动回滚份（manifest 记录 dest_rel ↔ 池内文件名）
         ok, skipped = _cover_with_self_handling(files, backup_pool=pool,
                                                 entries_out=pool_entries)
@@ -992,7 +992,7 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
             _write_progress("error", msg, error=msg)
             return 1
 
-        # 5.5) TC-C3：回滚清单落池（pending 状态的回滚依据；失败不阻断更新本身）
+        # 5.5) ：回滚清单落池（pending 状态的回滚依据；失败不阻断更新本身）
         try:
             if pool and pool_entries:
                 with open(os.path.join(pool, 'manifest.json'), 'w',
@@ -1001,12 +1001,12 @@ def do_finalize(file_path: str, extract_dir: str, target_dir: str, wait_pid: int
         except Exception as _e:
             print(f"[更新器] 警告: 回滚清单写入失败（自动回滚将不可用）: {_e}")
 
-        # 3.5 删除清单（v1.4.5 bug hunt F15，R1:置于覆盖成功之后）：包内 deleted-files.txt =
+        # 3.5 删除清单（v1.4.5 ，置于覆盖成功之后）：包内 deleted-files.txt =
         # 自上版本起删除的运行时资源/模板/文档，目标端同步删除，防旧 dll/旧模板/旧文档永久残留。
         # 覆盖成功后再删，避免覆盖失败时旧模板/资源已被删、更新又不生效的中间态半损坏。
         _deleted_n = _apply_deleted_files(extracted, target_dir)
 
-        # 6) TC-C3：落 update_health.json（state='pending'，待新版本首帧自证）。
+        # 6) ：落 update_health.json（state='pending'，待新版本首帧自证）。
         # 宪法 §5：该文件只由 updater 写入；new_ver 取覆盖后的目标端 utils.py。
         _write_update_health(target_dir, 'pending',
                              new_ver=_version_of(os.path.join(target_dir, 'utils.py')),
@@ -1065,12 +1065,12 @@ def main():
     ap.add_argument("--resume-update", action="store_true")
     ap.add_argument("--pid", type=int, default=0)
     ap.add_argument("--mode", choices=("auto", "finalize", "rollback"), default="auto")
-    ap.add_argument("--file", default="")  # finalize: 已下载的更新包路径
-    ap.add_argument("--extract-dir", default="")  # finalize: 解压目录
+    ap.add_argument("--file", default="")          # finalize: 已下载的更新包路径
+    ap.add_argument("--extract-dir", default="")   # finalize: 解压目录
     ap.add_argument("--wait-pid", type=int, default=0)
     args = ap.parse_args()
 
-    # ── rollback 模式（TC-C3）：恢复 _rollback_pool/ 内旧文件集，状态机终态落盘 ──
+    # ── rollback 模式（）：恢复 _rollback_pool/ 内旧文件集，状态机终态落盘 ──
     if args.mode == "rollback":
         me = sys.executable if getattr(sys, 'frozen', False) else __file__
         target = args.target or os.path.join(os.path.dirname(os.path.abspath(me)), EXE_NAME)
@@ -1172,7 +1172,7 @@ def main():
 
     print(f"[更新器] 最新版本: {tag}")
 
-    # v1.4.5（bug hunt F19）：auto 模式版本比较——本地旧版名（PDD EZ vX.Y.exe）可提取版本，
+    # v1.4.5（）：auto 模式版本比较——本地旧版名（PDD EZ vX.Y.exe）可提取版本，
     # 远端不更新则拒绝（防重复安装/降级）；固定名 PDD EZ.exe（v1.4+）无版本标记，由 GUI 主链 guard
     try:
         # 内联 version_newer（不能 from utils import——会把 utils 的函数内重依赖
@@ -1257,7 +1257,7 @@ def main():
     asset_name = os.path.basename(exe_asset["name"].replace('\\', '/'))
     new_exe = os.path.join(tmp, asset_name)
 
-    # v1.4.8 P1-B-fix：先把 .sha256 拉下来学期望哈希，
+    # v1.4.8 -fix（）：先把 .sha256 拉下来学期望哈希，
     # 再用 download_asset(expected_sha256=...) 走「下载+就地校验+不匹配换源」一条龙。
     # 旧流程：先下载包 → 失败也不换源（哈希失败发生在下游）→ 直接 return 1。
     # 新流程：先下载 .sha256 学期望 → 传期望进 download_asset → 任一源哈希不匹配自动换源。
@@ -1267,7 +1267,7 @@ def main():
         if a["name"] == exe_asset["name"] + ".sha256":
             sha_asset = a; break
     if not sha_asset:
-        # v1.4.5（bug hunt F13）：fail-open → fail-closed——发布物未带 .sha256 即拒绝安装，
+        # v1.4.5（）：fail-open → fail-closed——发布物未带 .sha256 即拒绝安装，
         # 防止截断/篡改包在无校验下直达安装
         print("[更新器] 未找到 .sha256 校验文件，已拒绝安装（安全策略）")
         _write_progress("error", "缺少 SHA256 校验文件，已拒绝安装", error="sha256 missing")
@@ -1378,7 +1378,7 @@ def main():
                     _write_progress("error", f"覆盖失败：{_names}", error="cover")
                     _pause()
                     return 1
-                # v1.4.5 bug hunt F15（R1:置于覆盖成功之后）：auto 模式同样应用删除清单
+                # v1.4.5 （置于覆盖成功之后）：auto 模式同样应用删除清单
                 _apply_deleted_files(new_dir, target_dir)
                 print(f"[更新器] 已更新: {target_dir}")
                 log.info(f"auto 已更新: {target_dir}")
@@ -1466,7 +1466,7 @@ del "%~f0"
 
 
 def _do_replace(src, target):
-    # v1.4.5（bug hunt F22）：旧实现先 rename→remove(old) 再 copy2——copy2 失败（磁盘满/
+    # v1.4.5（）：旧实现先 rename→remove(old) 再 copy2——copy2 失败（磁盘满/
     # 权限）时主 exe 已删且 .old 已删 → 程序目录主程序缺失。改为：复制成功后才删 .old，
     # 失败回滚恢复原文件。
     if sys.platform == 'win32' and os.path.exists(target):
@@ -1474,7 +1474,7 @@ def _do_replace(src, target):
         if os.path.exists(old):
             try:
                 os.remove(old)
-            except (PermissionError, OSError):  # v1.4.6 bug hunt F22：磁盘满等 OSError 也走延迟删除
+            except (PermissionError, OSError):  # v1.4.6 ：磁盘满等 OSError 也走延迟删除
                 import ctypes
                 ok = ctypes.windll.kernel32.MoveFileExW(old, None, 4)
                 if not ok:
@@ -1483,7 +1483,7 @@ def _do_replace(src, target):
     try:
         shutil.copy2(src, target)
         print(f"[更新器] 已更新: {target}")
-    except (PermissionError, OSError):  # v1.4.6 bug hunt F22：磁盘满等 OSError 同样触发回滚，防主 exe 缺失
+    except (PermissionError, OSError):  # v1.4.6 ：磁盘满等 OSError 同样触发回滚，防主 exe 缺失
         # 覆盖失败：回滚旧文件（target 已被改名 .old），并保留 .new 供手动处理
         try:
             os.replace(target + ".old", target)
@@ -1509,7 +1509,7 @@ def _do_replace(src, target):
 
 
 def rollback_to_old(updater_cli_path: str, target_dir: str = "") -> int:
-    """TC-C3 自动回滚入口（GUI 调用 / CLI --rollback 共用）：把 _rollback_pool/
+    """ 自动回滚入口（GUI 调用 / CLI --rollback 共用）：把 _rollback_pool/
     内的最后一份旧文件集恢复回程序目录。
 
     语义（宪法 §4/§5）：

@@ -162,13 +162,13 @@ def build_review_list(items: List[dict]) -> List[Dict[str, Any]]:
 
     返回的每条 = {
       'index': items 里的下标,
-      'name': str,  # 商品名（截断 40 字）
-      'field': str,  # 异常字段（stock / sales / overall / name）
-      'reason': str,  # 人类可读原因
-      'raw': str,  # 原文（来自 _raw[field]，缺失则空串）
-      'parsed': int,  # 解析值
+      'name': str,           # 商品名（截断 40 字）
+      'field': str,          # 异常字段（stock / sales / overall / name）
+      'reason': str,         # 人类可读原因
+      'raw': str,            # 原文（来自 _raw[field]，缺失则空串）
+      'parsed': int,         # 解析值
       'level': 'low' | 'medium',
-      'all_reasons': [str]  # 该行全部 reasons 列表
+      'all_reasons': [str]   # 该行全部 reasons 列表
     }
 
     Args:
@@ -190,7 +190,7 @@ def build_review_list(items: List[dict]) -> List[Dict[str, Any]]:
         # 把该行的全部原因汇总成单行复核条目（多原因合并到 reason 用 '；' 隔开）
         issues = _row_audit_issues(it)
         if not issues:
-            # 兜底：有 level 但 reasons 缺失（说明 未注入）→ 用旧标记
+            # 兜底：有 level 但 reasons 缺失（说明 t3 未注入）→ 用旧标记
             if it.get('_low_confidence'):
                 issues = [('overall', '双模型结果差异较大或 name 配对异常')]
             elif it.get('_name_unmatched'):
@@ -235,7 +235,7 @@ def build_review_list(items: List[dict]) -> List[Dict[str, Any]]:
             'raw': raw_str,
             'parsed': parsed,
             'level': lv,
-            'signal': (_row_signals(it) or ['ok'])[0],  # v1.6.0 TC-Q2：主信号名（无信号='ok'）
+            'signal': (_row_signals(it) or ['ok'])[0],   # v1.6.0 TC-Q2：主信号名（无信号='ok'）
             'all_reasons': [r for (_f, r) in issues],
         })
     # 排序：low 优先，按 index 升序
@@ -260,7 +260,7 @@ def apply_user_edits(items: List[dict], edits: List[Dict[str, Any]]) -> List[dic
     """
     if not items or not edits:
         return items
-    # R2 问题 修复：白名单扩 region/warehouse。
+    # R2 BUG-4 修复（t1 BUG-4 / 上期 P3 ③）：白名单扩 region/warehouse。
     # 复核弹窗里用户可改识别错的销售区域/仓库，避免改 stock/sales 后仍按
     # 错区域查时效的逻辑漏洞。数字字段强制 int；文本字段（name/region/
     # warehouse）保留原值转 str。qty 仍不在白名单（其由公式计算得出）。
@@ -315,12 +315,13 @@ def has_review_items(items: List[dict]) -> bool:
 
 # ══════════════════════════════════════════════════════════════════
 # v1.6.0 TC-Q2（§5.2 核心卡 / §1.2 WS-Q2）：三色闸门 + 补货安全闸
-# 设计红线
-# - 纯函数、零 Tk 依赖（延续本模块铁律 ）；
+#
+# 设计红线：
+# - 纯函数、零 Tk 依赖（延续本模块铁律 ④）；
 # - **算后覆盖**——apply_safety_gate 只改 plan 的 qty/status/color/trust/signal
-# 五个键，绝不进入任何补货公式分支（宪法 §7 经典公式冻结）；
+#   五个键，绝不进入任何补货公式分支（宪法 §7 经典公式冻结）；
 # - RED 禁自动补货 = qty 强制 0（宪法 §4：不替用户做不可逆动作；
-# 用户仍可手动改表/导出——闸门拦的是"自动建议值"不是用户操作）；
+#   用户仍可手动改表/导出——闸门拦的是"自动建议值"不是用户操作）；
 # - NO_DATA 不等于 RED：数据不足只是降级提醒（⚠前缀），不替用户清零。
 # ══════════════════════════════════════════════════════════════════
 
@@ -411,7 +412,7 @@ def _no_data_signal_const() -> str:
 
 _STATUS_PREFIX_RED = '⛔高风险·建议人工核对'
 _STATUS_PREFIX_ND = '⚠数据不足'
-_STATUS_PREFIX_FE = '⚠降级计算'  # CROSS#2 发布前修复：fallback_error 显式标注
+_STATUS_PREFIX_FE = '⚠降级计算'   # CROSS#2 发布前修复：fallback_error 显式标注
 
 
 def _strip_gate_prefixes(status: str) -> str:
@@ -474,10 +475,10 @@ def apply_safety_gate(plan: dict, item: dict = None) -> dict:
     if trust == 'RED':
         plan['qty'] = 0
         plan['color'] = 'red'
-        core = _strip_gate_prefixes(status)  # RED 接管：剥旧 ⚠/⛔ 前缀，不叠加
+        core = _strip_gate_prefixes(status)   # RED 接管：剥旧 ⚠/⛔ 前缀，不叠加
         plan['status'] = (_STATUS_PREFIX_RED + '｜' + core) if core else _STATUS_PREFIX_RED
     elif sig == nd:
-        core = _strip_gate_prefixes(status)  # 幂等：已带 ⚠ 前缀不重复叠
+        core = _strip_gate_prefixes(status)   # 幂等：已带 ⚠ 前缀不重复叠
         plan['status'] = (_STATUS_PREFIX_ND + '｜' + core) if core else _STATUS_PREFIX_ND
     elif sig == 'fallback_error':
         # CROSS#2 发布前修复：fallback_error（补货算法降级）→ 显式 ⚠降级计算 前缀

@@ -192,7 +192,7 @@ def _pick_vision_model():
         mdl = p.get('custom_endpoint', '') or p.get('model', '') or mdl_name or default_mdl
         key = p.get('api_key', '') or os.environ.get(
             {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(prov_name, ''), '')
-        # v1.4.8 P1-C-fix：settings.json 密文 → 运行时解密
+        # v1.4.8 P1-C-fix（t18）：settings.json 密文 → 运行时解密
         # 函数内延迟 import：vision 已被 utils/logger 间接 import 过的项目里安全
         try:
             from utils import decrypt_secret
@@ -272,7 +272,7 @@ def _call_vision_api(img_b64: str, prompt: str, max_tokens: int = 256, timeout: 
         _providers = (_gac().get('providers') or {})
         _glm = (_providers.get('glm', {}) or {}) if isinstance(_providers, dict) else {}
         _glm_key = _glm.get('api_key', '') or os.environ.get('ZHIPU_API_KEY', '')
-        # v1.4.8 P1-C-fix：fallback 到智谱端点时同样需解密
+        # v1.4.8 P1-C-fix（t18）：fallback 到智谱端点时同样需解密
         if _glm_key:
             try:
                 from utils import decrypt_secret
@@ -865,16 +865,18 @@ def _locate_table_once(screenshot_path: str = None) -> dict:
 
 # ════════════════════════════════════════════════════════════════════════
 # v1.6.0 TC-A2 / §5.2 P0b：VisionProvider 抽象 + transport 注入缝
-# 宪法引用
+#
+# 宪法引用：
 # - §1 全列识别：Provider 层绝不加 columns 参数——任何包装层都不能破坏 columns=None 全列语义。
 # - §2 模型分型：cascade 第三段必抛 RuntimeError，绝不静默回退硬编码模型。
 # - §4 失败哲学：每级切换写 _ocr_dlog；GUI 状态栏按 v1.5.11 文案规范提示。
-# 设计要点（外部契约零变化）
+#
+# 设计要点（外部契约零变化）：
 # - _pick_vision_model() 仍返回 6 元组 (active, provider, endpoint, key, mdl, use_responses)
 # - _call_vision_api() 仍返回 (text, mdl, usage) 三元组
 # - _ocr_api_call() 仍返回 (content, mdl, usage) 三元组（_TRANSPORT_OVERRIDE 检查点放入口）
 # - 模块级 _TRANSPORT_OVERRIDE + set_transport/clear_transport：默认 None 走原路径
-# （生产路径零感知；评估器 TC-Q1 可注入 stub 避免真实 API）
+#   （生产路径零感知；评估器 TC-Q1 可注入 stub 避免真实 API）
 # ════════════════════════════════════════════════════════════════════════
 
 
@@ -1070,10 +1072,10 @@ def _swap_active_provider(api_cfg):
 # ─────────────────────────────────────────────────────────────────────
 # 默认 None → 走原路径（生产零感知）。
 # 注入函数签名：fn(img_b64, prompt, *, max_tokens, task_type, timeout) -> tuple
-# 返回 (text, model_used, usage)。
-# 设置后 _ocr_api_call / _call_vision_api 入口检查
-# _TRANSPORT_OVERRIDE(img_b64, prompt, max_tokens=..., task_type=..., timeout=...)
-# → 直接返回注入的三元组，跳过网络段、usage 落账、_ocr_dlog。
+#   返回 (text, model_used, usage)。
+# 设置后 _ocr_api_call / _call_vision_api 入口检查：
+#   _TRANSPORT_OVERRIDE(img_b64, prompt, max_tokens=..., task_type=..., timeout=...) 
+#   → 直接返回注入的三元组，跳过网络段、usage 落账、_ocr_dlog。
 _TRANSPORT_OVERRIDE = None
 
 

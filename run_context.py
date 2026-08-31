@@ -14,7 +14,7 @@ PDD EZ v1.6.0 — Run ID 诊断系统（TC-Q4 / docs/PLAN_v160.md §5.2，相位
     usage_store 的 _RECORD_LOCK 与 _log_path() —— 禁止第三存储（卡面红线）；
   - usage.enabled=False → finish_run 不写盘（与 usage_store.record 同开关语义）；
   - 全程 try/except 吞异常（宪法 §4）：诊断落账失败绝不影响识别主流程；
-  - 相位 2 才接线 ocr/vision/gui/history_db/stats_ui。
+  - 相位 2（等队长放行）才接线 ocr/vision/gui/history_db/stats_ui。
 """
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """
-PDD EZ — 全局未捕获异常守卫
+PDD EZ — 全局未捕获异常守卫（v1.5.5 R3 健壮闭环 · 队长实现）
 
 痛点：此前未捕获异常（Tk 回调 / 子线程）直接裸 traceback 或静默吞掉——
 DESIGN §4「失败显式」在异常路径上没有统一收口。
@@ -60,7 +60,7 @@ def summary_for_exception(exc) -> str:
     'ClassName: str(exc)[:120]'，最后兜底固定文案——任何分支都不抛。
     """
     # 1) 复用 OCR 容错分类文案（v1.5.3 ocr_review.categorize_error
-    # → (category, user_msg, title) 三元组；仅取分类命中的 user_msg）
+    #    → (category, user_msg, title) 三元组；仅取分类命中的 user_msg）
     try:
         from ocr_review import categorize_error
         _cat, _user_msg, _title = categorize_error(exc)

@@ -317,7 +317,7 @@ class TaskQueue:
         Args:
             wait: True (default) waits for running tasks; False returns immediately.
 
-        修复：shutdown 时把 _tasks 里所有
+        R2 BUG-5 修复（t1 BUG-5 / 上期 P3）：shutdown 时把 _tasks 里所有
         PENDING 任务标 CANCELLED + set done_event，让 task_status() 语义一致；
         仅 drain _work_queue 不会改 self._tasks，外部对 PENDING task_id 仍
         收到 PENDING（与 cancel() 行为不一致）。先标 PENDING→CANCELLED 再

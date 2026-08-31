@@ -41,7 +41,7 @@ def _load_usage_pricing() -> dict:
 
 
 # ── 批量紧急停止钩子（v1.4.2）：紧急终止必须"立刻"——光靠调用方 Event 轮询，
-# 要等当前 30~90s 的 OCR 请求跑完才轮到检查点。这里提供模块级取消检查
+# 要等当前 30~90s 的 OCR 请求跑完才轮到检查点。这里提供模块级取消检查：
 # gui 批量线程注入 set_cancel_check(stop.is_set)，API 请求前/重试间立即中断，
 # 抛出 BatchCancelled 让批量线程马上收尾，不再等超时。──
 _CANCEL_CHECK = None
@@ -528,7 +528,7 @@ def _ocr_api_call(img_b64: str, prompt: str, max_tok: int = 1024,
 
     key = provider.get('api_key', '') or os.environ.get(
         {'doubao':'ARK_API_KEY','qwen':'DASHSCOPE_API_KEY','glm':'ZHIPU_API_KEY'}.get(active, ''), '')
-    # v1.4.8 P1-C-fix：settings.json 里 api_key 已是 dpapi:v1: 密文，
+    # v1.4.8 P1-C-fix（t18）：settings.json 里 api_key 已是 dpapi:v1: 密文，
     # 裸发给厂商必 401。运行时解密（明文直通 / 密文 → 明文 / 失败 → ""）
     try:
         from utils import decrypt_secret
@@ -597,7 +597,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
     if not isinstance(providers_global, dict):
         providers_global = {}
 
-    # forced_model 可能属于其他 provider（如主模型 glm、副模型 qwen3.5-ocr）
+    # forced_model 可能属于其他 provider（如主模型 glm、副模型 qwen3.5-ocr）：
     # 按模型名前缀推断所属 provider，切换到它的 endpoint/key——否则副模型请求
     # 会发到主 provider 的 endpoint 报"模型不存在"（v1.4 修复，实测 glm 主+qwen-ocr 副报 1211）
     if forced_model:
@@ -617,7 +617,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 endpoint = _alt.get('endpoint', '')
                 key = _alt.get('api_key', '') or os.environ.get(
                     {'doubao': 'ARK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY', 'glm': 'ZHIPU_API_KEY'}.get(active, ''), '')
-                # v1.4.8 P1-C-fix：强制模型走副 provider 时同样需要解密 key
+                # v1.4.8 P1-C-fix（t18）：强制模型走副 provider 时同样需要解密 key
                 try:
                     from utils import decrypt_secret
                     key = decrypt_secret(key)
@@ -674,7 +674,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
         if is_glm and (_is_official_ali or _is_official_ark):
             cur_endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
             cur_key = providers_global.get('glm', {}).get('api_key', '') if isinstance(providers_global, dict) else ''
-            # v1.4.8 P1-C-fix：fallback 到智谱端点时同样需解密
+            # v1.4.8 P1-C-fix（t18）：fallback 到智谱端点时同样需解密
             if cur_key:
                 try:
                     from utils import decrypt_secret
@@ -705,7 +705,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                             'max_output_tokens': cur_max_tok,
                             'stream': False
                         }, timeout=(10, 180))  # v1.4.2 读取超时 30s→180s：VL 处理大图(9列大表)可达 60-120s，
-                        # 30s 必然误判失败（客户实测小表3-5行成功、大表必超时）——给足处理时间再谈网络
+                        #  30s 必然误判失败（客户实测小表3-5行成功、大表必超时）——给足处理时间再谈网络
                     data = resp.json()
                     # v1.4.7 WS-C：debug 落盘钩子（早于文本提取，捕获完整 raw）
                     # 受 usage.debug_archive_enabled 控制，默认关；失败吞掉
@@ -797,7 +797,7 @@ def _ocr_api_call_do(img_b64, prompt, max_tok, forced_model,
                 # 输出 token 上限超模型能力（弱模型/模型版本限制）：400 或
                 # 'maximum context length'/'max_tokens' 类错误 → 砍半重发一次
                 _es = str(e).lower()
-                # v1.4.2 降档条件收紧（find-bugs ）：只对明确的输出 token 超限错误
+                # v1.4.2 降档条件收紧（find-bugs ③）：只对明确的输出 token 超限错误
                 # 砍半重发——裸 '400' 可能是"模型不存在/其他参数错误"，不该混成降档
                 if ((('token' in _es and ('max' in _es or 'limit' in _es or 'exceed' in _es or 'length' in _es)
                       and '400' in _es)
@@ -1093,7 +1093,7 @@ def _split_name_id(value: str) -> tuple:
     """
     拆分商品信息列的值 → (商品名, sku_id)。
     后台格式：'示例商品A500g/袋 ID:12345678901' → ('示例商品A500g/袋', '12345678901')
-    支持 ID:xxx / 商品ID:xxx / id=xxx /  # xxx 等常见格式；无 ID 时返回 (原值, '')。
+    支持 ID:xxx / 商品ID:xxx / id=xxx / #xxx 等常见格式；无 ID 时返回 (原值, '')。
     """
     global _SKU_ID_RE
     if _SKU_ID_RE is None:
@@ -1492,8 +1492,8 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     # 行边界完整性校验：bbox 底部比最后一行底多出 >2.5 行高 → 行边界疑似
     # 漏了底部行（AI 数行不全），行切分必然丢行 → 抛错回退整表识别
     # （整表模型自己数行，与实时截图同路径；v1.4 修复。
-    # ⚠ 阈值 1.5→2.5 行：AI 的 bbox 常比表格实际范围画大 1~2 行，
-    # 过小阈值会把正常表格误判漏行，导致行切分机制失效）
+    #  ⚠ 阈值 1.5→2.5 行：AI 的 bbox 常比表格实际范围画大 1~2 行，
+    #  过小阈值会把正常表格误判漏行，导致行切分机制失效）
     try:
         _avg_h = (_rows[-1][1] - _rows[0][0]) / max(1, len(_rows))
         # 行边界异常（重叠/零高）时 _avg_h≈0，任何差值都会误触发——跳过校验
@@ -1508,7 +1508,7 @@ def ocr_table_row_split(image_path: str, columns: list, table_bbox: dict = None,
     # 分组：避免"孤行组"——最后一组只剩 1 行时（5 行拆 4+1），单行图
     # 无表头参照、图太矮，模型输出列不全（v1.4 修复：山东第4行数据不全）。
     # 拆组规则：前组剩余必须 ≥2 行；前组只有 2 行时直接并入孤行（3 行组，
-    # 容忍超组大小 1 行——超量 token 由"截断拆半重试"兜底；v1.4 审查加固
+    # 容忍超组大小 1 行——超量 token 由"截断拆半重试"兜底；v1.4 审查加固：
     # 组 2 场景下旧逻辑会拆出 [1,2] 首行孤组）
     _groups = []
     _i = 0
@@ -1644,7 +1644,7 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
         return parse_items_generic(result.get('rows') or [], mapping)
     # v1.4.2：副模型是 OCR 专用模型（qwen*-ocr）时直接跳过双模型表格验证——
     # OCR 专用模型输出的是「文字块列表」（{"行号","标题","rotate_rect","text"}），
-    # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测
+    # 不是表格结构化 JSON（columns/rows），做对比必失败+白耗一次 API（客户实测：
     # 换了 VL 主模型后副模型 qwen3.5-ocr 每轮都报'无法解析 JSON'然后降级）。
     if secondary_model and _is_qwen_ocr(secondary_model):
         # v1.5.11：提示友好化——不做坏事地告知"设计跳过"语义，并给出正确用法
@@ -1740,19 +1740,20 @@ def ocr_dual_verify_generic(image_path: str, columns: list = None, mapping: dict
 
 
 # ============================================================
-# OCR 置信度引擎 + 容错文案（v1.4.8 P2-OCR 任务 ）
+# OCR 置信度引擎 + 容错文案（v1.4.8 P2-OCR 任务 t3）
 # ============================================================
-# 设计目标（参考 docs/DESIGN.md §1 全列识别 + §4 失败哲学）
-# - 不改 ocr_dual_verify_generic 本身（现有 _low_confidence / _name_unmatched /
-# _dual_degraded 标记是上一轮设计成果，本任务在产出侧叠加元数据，不破坏契约）。
-# - 全部纯函数、失败安全；任何异常路径不阻塞主识别流程（§4）。
-# - 复用了项目已有依赖：opencv-python + numpy + PIL（requirements.txt 已锁）。
-# - 不依赖 utils.py / history_db.py / async_queue.py（铁律 ）。
-# 提供的 API（全部在 OCR 批处理后置阶段调用，GUI 复核弹窗 直接消费 confidence 字段）
-# - detect_blur(image_path) -> (bool, float) 模糊检测
-# - audit_numeric_fields(items) -> List[Tuple] 数字字段异常审计
-# - build_confidence_meta(items, blur_info=None) 注入每条 item 的 confidence 元数据
-# - USER_MSG_* 常量 中文可读容错文案（供 弹窗/日志共用）
+# 设计目标（参考 docs/DESIGN.md §1 全列识别 + §4 失败哲学）：
+#   - 不改 ocr_dual_verify_generic 本身（现有 _low_confidence / _name_unmatched /
+#     _dual_degraded 标记是上一轮设计成果，本任务在产出侧叠加元数据，不破坏契约）。
+#   - 全部纯函数、失败安全；任何异常路径不阻塞主识别流程（§4）。
+#   - 复用了项目已有依赖：opencv-python + numpy + PIL（requirements.txt 已锁）。
+#   - 不依赖 utils.py / history_db.py / async_queue.py（铁律 ③）。
+#
+# 提供的 API（全部在 OCR 批处理后置阶段调用，GUI 复核弹窗 t8 直接消费 confidence 字段）：
+#   - detect_blur(image_path) -> (bool, float)            模糊检测
+#   - audit_numeric_fields(items) -> List[Tuple]         数字字段异常审计
+#   - build_confidence_meta(items, blur_info=None)        注入每条 item 的 confidence 元数据
+#   - USER_MSG_* 常量                                       中文可读容错文案（供 t8 弹窗/日志共用）
 # ------------------------------------------------------------
 
 # ---- 阈值常量（测试可调，避免散落魔法数） ----
@@ -1764,8 +1765,8 @@ NUMERIC_ABSURD_MAX = 999999
 """单条商品 stock/sales 超过此值视为"量级怪异"（常规 PDD 后台单品 5 位数内），
 更大的数极可能是 OCR 多识别粘连（真 110→识别 1109）或串列。"""
 
-# ---- 中文可读容错文案（供 弹窗 / 日志统一消费；铁律 只在 ocr.py/table_import.py
-# 改文案，行为不动） ----
+# ---- 中文可读容错文案（供 t8 弹窗 / 日志统一消费；铁律 ② 只在 ocr.py/table_import.py
+#      改文案，行为不动） ----
 # 命名风格沿用项目已有的全大写下划线 + 短前缀（OCR_/BATCH_/ICON_ 等），便于 IDE 跳转；
 # 全部为常量字符串，无副作用、无 i18n 钩子（v1.4 阶段先固化中文）。
 USER_MSG_BLUR = '截图模糊，建议重新截图后重试'
@@ -1799,7 +1800,7 @@ USER_MSG_NO_MODEL_AVAILABLE = '未配置可用的识别模型，请到「API 管
 USER_MSG_FATAL_QUOTA = '接口额度或鉴权异常，请检查账户余额或 API Key 是否正确'
 """_is_fatal_api_err 命中（额度耗尽/401/403）时的归一文案。"""
 
-# ── v1.5.11 报错提示体系（对齐错误提示设计文档）──
+# ── v1.5.11 报错提示体系（队长实施；对齐 docs/ERROR_SYSTEM_DESIGN.md）──
 USER_MSG_MODEL_NOT_FOUND = ('识别模型不存在或模型名无效 —— 请到「API 管理」检查模型名\n'
                             '（如 qwen3-vl-plus / glm-4.6v / Doubao 用 ep-xxx 接入点 ID）')
 """model_not_found 分类：1211 InvalidEndpointOrModel / model not found / 模型不存在。
@@ -1902,7 +1903,7 @@ def audit_numeric_fields(items) -> list:
             # 例：'85件' 解析 85（件 是常见单位 → 不报）；'85x' 解析 85（x 奇怪 → 报）
             if raw_str.strip() and any(ch.isdigit() for ch in raw_str):
                 # 提取原文中的数字部分
-                # R2 问题 修复：re 提到模块顶部（line 7），
+                # R2 BUG-16 修复（t1 BUG-16）：re 提到模块顶部（line 7），
                 # 避免循环内每次 import re；与 P3-R2-L2 「避免每次调用 re 导入」一致。
                 _m = re.search(r'-?\d+(?:\.\d+)?', raw_str)
                 if _m:
@@ -1941,7 +1942,7 @@ def audit_numeric_fields(items) -> list:
 
             # 4) 解析值与原文矛盾：原文清晰有非零数字，但解析后=0
             if parsed == 0 and raw_str.strip():
-                # R2 问题 修复：同上，re 提到模块顶部。
+                # R2 BUG-16 修复（t1 BUG-16）：同上，re 提到模块顶部。
                 _nz = re.search(r'-?\d+(?:\.\d+)?', raw_str)
                 if _nz and re.sub(r'^0+(?=\d)', '', _nz.group()).lstrip('.').lstrip('0'):
                     # 原文有非零数字却被解析为 0
@@ -1984,7 +1985,7 @@ def build_confidence_meta(items, blur_info=None) -> list:
     confidence 字段结构：
         {
             'level': 'high' | 'medium' | 'low',
-            'reasons': [str, ...]  # 每条人类可读原因
+            'reasons': [str, ...]   # 每条人类可读原因
         }
     """
     if not items:
@@ -2006,7 +2007,7 @@ def build_confidence_meta(items, blur_info=None) -> list:
             _is_blur, _var = False, 0.0
         if _is_blur:
             _blur_low = True
-            # R2 问题 修复：原文混入 Laplacian 方差浮点数
+            # R2 BUG-17 修复（t1 BUG-17）：原文混入 Laplacian 方差浮点数
             # 与阈值（技术变量），对终端用户不友好。改为用户文案 + 技术
             # 变量写到 dlog 供排障（已由 detect_blur 自带 _ocr_dlog 输出）。
             _blur_reason = '图片模糊（清晰度过低），建议重新截图'
@@ -2046,35 +2047,38 @@ def build_confidence_meta(items, blur_info=None) -> list:
 
 
 # ============================================================
-# R1 流程效率 — 批量图片识别引擎
+# R1 流程效率 — 批量图片识别引擎（t2 产出）
 # ============================================================
 # 设计目标：把批量图片喂给识别器，**复用现有 ocr_table / ocr_dual_verify_generic**，
 # 单张失败记录 errors 不中断整批；纯 stdlib 逻辑、可单测（接受 callable 识别器参数
 # 便于测试注入）。
-# 契约
-# batch_ocr_images(image_paths, mapping=None, recognizer=None, **kwargs)
-# -> (results, errors)
-# - image_paths: 可迭代（list/tuple）；逐张处理。
-# - mapping: 可选 {field: 列名} 映射；传给识别器（识别器用 parse_items_generic 时
-# 才生效）。None → 调用方配置（默认走 get_ocr_columns()['mapping']）。
-# - recognizer: 可选 callable(image_path, mapping, **kwargs) -> list[dict]。
-# 默认 ocr_dual_verify_generic（与单图识别主路径一致——保留双模型
-# 校验/低置信标记，便于 复用同套复核元数据）。
-# 测试可注入 stub/mock 函数，避免触发真实 API。
-# - **kwargs: 透传给 recognizer（如 forced_model / secondary_model / table_bbox 等）。
-# - results: list[{path: str, items: list[dict], mapping: dict}, ...]，
-# 顺序与 image_paths 一致（成功项；失败项不入 results）。
-# - errors: list[tuple[path, reason_str]]，失败项追加在末尾（保持可追溯顺序）。
-# reason 为截断到 200 字的异常文本（不抛原异常对象，便于序列化）。
-# 失败语义
-# - 单张异常 → 立即捕获、记录 (path, reason)、继续下一张；不打断整批。
-# - 可恢复错误（识别返回空 rows）与不可恢复错误（图片打不开/识别函数异常）行为一致
-# 都收集进 errors；成功路径（含空结果）入 results。
-# - BatchCancelled（F9）→ 立即中断，把当前进度与已收集 errors 一起返回（不抛），
-# 保留调用方对该信号的尊重——批量线程调 set_cancel_check() 后调用本函数，
-# 任意一张识别前 _check_cancel() 抛 BatchCancelled，会被吞掉、记录为 (path, '取消')。
-# 纯函数
-# - 不依赖全局状态（除 _check_cancel()）；不写文件、不调 UI；同输入同结果。
+#
+# 契约（t1 接线 / t8 复核侧按此消费）：
+#   batch_ocr_images(image_paths, mapping=None, recognizer=None, **kwargs)
+#       -> (results, errors)
+#   - image_paths: 可迭代（list/tuple）；逐张处理。
+#   - mapping:    可选 {field: 列名} 映射；传给识别器（识别器用 parse_items_generic 时
+#                 才生效）。None → 调用方配置（默认走 get_ocr_columns()['mapping']）。
+#   - recognizer: 可选 callable(image_path, mapping, **kwargs) -> list[dict]。
+#                 默认 ocr_dual_verify_generic（与单图识别主路径一致——保留双模型
+#                 校验/低置信标记，便于 t8 复用同套复核元数据）。
+#                 测试可注入 stub/mock 函数，避免触发真实 API。
+#   - **kwargs:   透传给 recognizer（如 forced_model / secondary_model / table_bbox 等）。
+#   - results:    list[{path: str, items: list[dict], mapping: dict}, ...]，
+#                 顺序与 image_paths 一致（成功项；失败项不入 results）。
+#   - errors:     list[tuple[path, reason_str]]，失败项追加在末尾（保持可追溯顺序）。
+#                 reason 为截断到 200 字的异常文本（不抛原异常对象，便于序列化）。
+#
+# 失败语义：
+#   - 单张异常 → 立即捕获、记录 (path, reason)、继续下一张；不打断整批。
+#   - 可恢复错误（识别返回空 rows）与不可恢复错误（图片打不开/识别函数异常）行为一致：
+#     都收集进 errors；成功路径（含空结果）入 results。
+#   - BatchCancelled（F9）→ 立即中断，把当前进度与已收集 errors 一起返回（不抛），
+#     保留调用方对该信号的尊重——批量线程调 set_cancel_check() 后调用本函数，
+#     任意一张识别前 _check_cancel() 抛 BatchCancelled，会被吞掉、记录为 (path, '取消')。
+#
+# 纯函数：
+#   - 不依赖全局状态（除 _check_cancel()）；不写文件、不调 UI；同输入同结果。
 # ============================================================
 
 

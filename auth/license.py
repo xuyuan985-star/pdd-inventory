@@ -34,16 +34,16 @@ TIER_FREE = "free"
 TIER_PRO = "pro"
 
 # ============================================================
-# ：Pro 门控阈值常量（仅在 enforce=true 且 tier=free 时生效）
+# t12 P2-C：Pro 门控阈值常量（仅在 enforce=true 且 tier=free 时生效）
 # 用户裁定：默认全免；现有功能永久免费；仅新增高级功能门控
 # ============================================================
 FREE_DAILY_LIVE_SCREENSHOT = 50  # 免费版实时截图识别次数/日
-FREE_HISTORY_DAYS = 30  # 免费版历史趋势查看窗口（天）
-UNLIMITED = 999999  # Pro 实际不限，用大整数表示
+FREE_HISTORY_DAYS = 30           # 免费版历史趋势查看窗口（天）
+UNLIMITED = 999999               # Pro 实际不限，用大整数表示
 
 # 缓存：避免每次 get_tier() 都跑一遍 verify
-# 缓存值改为 (tier, ts) 二元组；TTL=300s 后强制重验，
-# 修复 问题（enforce 热切换/外部改 settings.json 后缓存陈旧至重启）。
+# t24 修复包 A：缓存值改为 (tier, ts) 二元组；TTL=300s 后强制重验，
+# 修复 BUG-1（enforce 热切换/外部改 settings.json 后缓存陈旧至重启）。
 # 注意：缓存值仍可被 reset_cache() 显式清空（外部主动写盘路径调用）
 _CACHE_TTL_SECONDS = 300
 _CACHE: dict[str, tuple] = {}
@@ -144,8 +144,8 @@ def get_tier(license_text: str = "", enforce: bool = False) -> str:
                       即便没有 license 也不限制——本任务硬约束：本任务绝不限制任何现有行为）
     enforce=True  → 按 license 实际校验：有效且非 free → 'pro'；否则 'free'
 
-    缓存：_CACHE[cache_key] = (tier, ts)；命中时若 ts 距今
-    超过 _CACHE_TTL_SECONDS（默认 300s）则强制重验。缓存带时间戳的实质：
+    缓存（t24 修复包 A）：_CACHE[cache_key] = (tier, ts)；命中时若 ts 距今
+    超过 _CACHE_TTL_SECONDS（默认 300s）则强制重验。修复 BUG-1 实质：
     外部改 settings.json 后缓存陈旧至重启的窗口从"无限"缩到 5 分钟。
     """
     if not enforce:

@@ -32,8 +32,8 @@ regions.json 从旧顶层 {region: {product: days}} 升级为按店铺：
 线程约束：本模块不触碰 Tk；内部自持锁串行化"读-改-写"，可任意线程调用。
 
 t6 接入契约（GUI 层改造用，本模块不改 gui.py）：
-    self.regions = store_registry.get_regions()  # 替代 _load_regions
-    store_registry.save_regions(self.regions)  # 替代 _save_regions（写入当前激活店铺）
+    self.regions = store_registry.get_regions()            # 替代 _load_regions
+    store_registry.save_regions(self.regions)              # 替代 _save_regions（写入当前激活店铺）
     store_registry.get_shipping(region, product, regions)  # 可选：与 _get_shipping 同语义的纯函数
     店铺切换 → set_active(id) 后重取 get_regions()；删店 → delete_store(id) 返回店铺名，
     再调 history_db.delete_store(id) 联动清历史。
@@ -105,7 +105,7 @@ def _normalize_stores(raw):
     if isinstance(raw, dict):
         node = raw
     else:
-        node = {}  # 缺失/非 dict（损坏）→ 空节点按需自愈
+        node = {}          # 缺失/非 dict（损坏）→ 空节点按需自愈
         changed = True
     src_list = node.get('list')
     out, seen = [], set()
@@ -119,8 +119,8 @@ def _normalize_stores(raw):
             if not sid or sid in seen:
                 changed = True
                 continue
-            # R2 问题 修复：原代码「if name != it.get('name'): changed = True」
-            # 会把「店 A 」末尾空格（用户原样保存）误判为数据脏——触发自愈写盘、
+            # R2 BUG-8 修复（t1 BUG-8）：原代码「if name != it.get('name'): changed = True」
+            # 会把「店 A  」末尾空格（用户原样保存）误判为数据脏——触发自愈写盘、
             # 静默吞掉用户空格。改为：仅当原值类型非 str 才标 changed（dict 原生
             # 损坏容忍交给 try/except + JSON dump，不在此处抹平用户原值）。
             raw_name = it.get('name')

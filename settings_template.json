@@ -48,7 +48,70 @@
     "enabled": true,
     "batch_budget_cny": 0,
     "monthly_budget_cny": 0,
-    "pricing": {},
+    "pricing": {
+      "qwen": {
+        "qwen3.8-max": {
+          "input_per_million": 12.0,
+          "output_per_million": 36.0
+        },
+        "qwen3.8-flash": {
+          "input_per_million": 0.8,
+          "output_per_million": 2.7
+        },
+        "deepseek-v4-flash-0731": {
+          "input_per_million": 1.5,
+          "output_per_million": 4.5
+        },
+        "kimi-k3": {
+          "input_per_million": 20.0,
+          "output_per_million": 100.0
+        },
+        "qwen3-vl-plus": {
+          "input_per_million": 1.0,
+          "output_per_million": 10.0
+        },
+        "qwen-vl-plus": {
+          "input_per_million": 0.8,
+          "output_per_million": 2.0
+        },
+        "qwen-vl-max": {
+          "input_per_million": 1.6,
+          "output_per_million": 4.0
+        },
+        "qwen3.5-ocr": {
+          "input_per_million": 0.5,
+          "output_per_million": 2.0
+        },
+        "qwen-vl-ocr": {
+          "input_per_million": 0.3,
+          "output_per_million": 0.5
+        },
+        "qwen-vl-ocr-latest": {
+          "input_per_million": 0.3,
+          "output_per_million": 0.5
+        },
+        "qwen3-omni-flash": {
+          "input_per_million": 1.8,
+          "output_per_million": 6.9
+        },
+        "qwen3.5-omni-flash": {
+          "input_per_million": 18.0,
+          "output_per_million": 72.0
+        },
+        "qwen3-max": {
+          "input_per_million": 2.5,
+          "output_per_million": 10.0
+        },
+        "qwen3.7-max": {
+          "input_per_million": 6.0,
+          "output_per_million": 18.0
+        },
+        "qvq-max": {
+          "input_per_million": 8.0,
+          "output_per_million": 32.0
+        }
+      }
+    },
     "debug_archive_enabled": false
   },
   "history": {

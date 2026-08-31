@@ -67,7 +67,7 @@ class TestConfigMerge(unittest.TestCase):
 
 
 class TestDPAPI(unittest.TestCase):
-    """v1.4.8 P1-C：DPAPI 凭据加密 + Config._migrate_secrets + 解密失败降级"""
+    """v1.4.8 ：DPAPI 凭据加密 + Config._migrate_secrets + 解密失败降级"""
 
     def test_is_encrypted_prefix(self):
         """is_encrypted 识别 dpapi:v1: 前缀；空/None/明文 都返回 False。"""
@@ -424,10 +424,10 @@ class TestPrivacy(unittest.TestCase):
 
 
 class TestBugHuntRegressions(unittest.TestCase):
-    """v1.4.5 bug hunt 修复回归（F4/F11 可纯函数断言的部分）"""
+    """v1.4.5  修复回归（F4/F11 可纯函数断言的部分）"""
 
     def test_strip_tail_noise_keeps_pure_date(self):
-        """bug hunt F4：纯日期/整值剥空时保留原文，不再清空更新时间列"""
+        """：纯日期/整值剥空时保留原文，不再清空更新时间列"""
         from ocr import strip_tail_noise
         self.assertEqual(strip_tail_noise('2024-05-04'), '2024-05-04')
         self.assertEqual(strip_tail_noise('2024年5月4日'), '2024年5月4日')
@@ -436,7 +436,7 @@ class TestBugHuntRegressions(unittest.TestCase):
         self.assertEqual(strip_tail_noise('示例仓库查看地址'), '示例仓库')
 
     def test_total_count_prefers_common_n(self):
-        """bug hunt F11（fix-review C14 强化）：直接调生产 helper _parse_total_count"""
+        """（fix-review C14 强化）：直接调生产 helper _parse_total_count"""
         from vision import _parse_total_count
         self.assertEqual(_parse_total_count('每页10条 共有128条'), 128)
         self.assertEqual(_parse_total_count('共有 9 条'), 9)
@@ -457,7 +457,7 @@ class TestUpdaterRegression(unittest.TestCase):
     """fix-review P0/P1 回归：import re / _is_program_dir 版本号分支 / N2 0 值守卫"""
 
     def test_is_program_dir_version_named_no_nameerror(self):
-        """P0-C1：版本号 exe + _internal 应为 True；未 import re 时此调用必然 NameError"""
+        """1：版本号 exe + _internal 应为 True；未 import re 时此调用必然 NameError"""
         import importlib.util, os, tempfile, shutil
         spec = importlib.util.spec_from_file_location('pdd_updater2', os.path.join(HERE, 'updater.py'))
         m = importlib.util.module_from_spec(spec)
@@ -499,7 +499,7 @@ class TestUpdaterRegression(unittest.TestCase):
         self.assertEqual(out2[0].get('stock'), '500', '真空缺应补全')
 
     def test_deleted_files_applied_on_finalize(self):
-        """P2-4（bug hunt F15/R1）：deleted-files.txt 删除生效——do_finalize 覆盖成功后
+        """P2-4（/）：deleted-files.txt 删除生效——do_finalize 覆盖成功后
         目标端旧模板/资源被删；且删除发生在覆盖成功之后（覆盖中途失败时旧文件不删，回滚完整）。"""
         import importlib.util, tempfile, shutil, zipfile
         spec = importlib.util.spec_from_file_location('pdd_updater_df', os.path.join(HERE, 'updater.py'))
@@ -539,7 +539,7 @@ class TestUpdaterRegression(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_deleted_files_whitelist_blocks_unsafe(self):
-        """P2-4（bug hunt F15 白名单）：_apply_deleted_files 拒绝 exe/dll/穿越路径/绝对路径；
+        """P2-4（ 白名单）：_apply_deleted_files 拒绝 exe/dll/穿越路径/绝对路径；
         白名单外的任意文件绝不删。"""
         import importlib.util, tempfile, shutil
         spec = importlib.util.spec_from_file_location('pdd_updater_dfw', os.path.join(HERE, 'updater.py'))
@@ -574,7 +574,7 @@ class TestUpdaterRegression(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_version_comparison_semantics(self):
-        """P2-4（bug hunt F19）：内联版本比较逻辑——远端 < 本地时不应更新（rc 语义为'无需更新'）。
+        """P2-4（）：内联版本比较逻辑——远端 < 本地时不应更新（rc 语义为'无需更新'）。
         直接复算 updater 内联 _version_newer 的算法（无法 import 闭包，按同源逻辑断言）。"""
         def _version_newer(remote, local):
             def _p(v):
@@ -595,7 +595,7 @@ class TestUpdaterRegression(unittest.TestCase):
         self.assertTrue(_version_newer('v1.5', 'v1.4.9'), '次版本优先于补段')
 
     def test_do_replace_oserror_rolls_back(self):
-        """P2-4（bug hunt F22）：copy2 抛 OSError（磁盘满等）时 target 会恢复 .old，
+        """P2-4（）：copy2 抛 OSError（磁盘满等）时 target 会恢复 .old，
         src 保存为 .new——主 exe 不缺失。回归旧 bug：磁盘满时主 exe 被删且无备份。"""
         import importlib.util, tempfile, shutil, os
         from unittest.mock import patch
@@ -624,7 +624,7 @@ class TestUpdaterRegression(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════
-# v1.4.7 商业升级三工作流回归合并（t8：t5 WS-C + t6 WS-B + t7 WS-A）
+# v1.4.7 商业升级三工作流回归合并（表格导入 / 用量采集 / 本地历史库）
 # 来源：test_tmp_wsc.py / test_tmp_wsb.py / test_tmp_wsa.py（合并后删除）。
 # 既有锚点测试保持不动；本段类名与上文无冲突。
 # ══════════════════════════════════════════════════════════════════
@@ -652,7 +652,7 @@ from table_import import (
 
 
 # ──────────────────────────────────────────────────────────────────
-# WS-B 表格导入通道（table_import.py，来源 test_tmp_wsb.py）
+# 表格导入通道（table_import.py）
 # ──────────────────────────────────────────────────────────────────
 def _write_csv(path, content_bytes):
     with open(path, 'wb') as f:
@@ -1222,7 +1222,7 @@ class TestEndToEnd(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────
-# WS-C 用量采集（usage_extractor / usage_store / ocr-vision 三元组，来源 test_tmp_wsc.py）
+# 用量采集（usage_extractor / usage_store / ocr-vision 三元组）
 # ──────────────────────────────────────────────────────────────────
 class TestUsageExtractorExtract(unittest.TestCase):
     """SPEC §2.1 6 步降级链 + §2.2 契约。"""
@@ -1672,11 +1672,11 @@ class TestUsageStoreMonthSummary(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────
-# 2.5 v1.4.7 P3-R2-C1：reset_month 原子写（os.replace）+ 崩溃窗口保护
+# 2.5 v1.4.7 P3--C1：reset_month 原子写（os.replace）+ 崩溃窗口保护
 # ──────────────────────────────────────────────────────────────────
 
 class TestUsageStoreResetMonthAtomic(unittest.TestCase):
-    """v1.4.7 P3-R2-C1：reset_month 改用 os.replace 原子替换。
+    """v1.4.7 P3--C1：reset_month 改用 os.replace 原子替换。
 
     验证要点：
       1. 正常 reset：原 jsonl 被原子替换、当月行被删除、其他月行保留、审计行追加。
@@ -1692,7 +1692,7 @@ class TestUsageStoreResetMonthAtomic(unittest.TestCase):
         self._orig_base = usage_store.get_base_dir
         usage_store.get_base_dir = lambda: self.tmp
         self.us._invalidate_enabled_cache()
-        # v1.4.7 P3-R2：测试隔离——重置所有缓存避免上一测试残留（_MONTH_COST_CACHE
+        # v1.4.7 P3-测试隔离——重置所有缓存避免上一测试残留（_MONTH_COST_CACHE
         # 是模块级且按 year+month key，旧测试数据会被带到新测试）
         try:
             with usage_store._RECORD_LOCK:
@@ -1831,11 +1831,11 @@ class TestUsageStoreResetMonthAtomic(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────
-# 2.6 v1.4.7 P3-R2-M3：_read_jsonl_lines 加 _RECORD_LOCK（防半截行）
+# 2.6 v1.4.7 P3--M3：_read_jsonl_lines 加 _RECORD_LOCK（防半截行）
 # ──────────────────────────────────────────────────────────────────
 
 class TestUsageStoreReadJsonlLock(unittest.TestCase):
-    """v1.4.7 P3-R2-M3：_read_jsonl_lines 加 _RECORD_LOCK 保护。
+    """v1.4.7 P3--M3：_read_jsonl_lines 加 _RECORD_LOCK 保护。
 
     验证要点：
       1. 锁内读 + 锁内写不会死锁（reset_month 改用 _read_jsonl_lines_unlocked）
@@ -1941,7 +1941,7 @@ class TestUsageStoreReadJsonlLock(unittest.TestCase):
 
 
 class TestUsagePanelSummary(unittest.TestCase):
-    """v1.4.7 P3-R2-M1/L1：usage_panel_summary 统一入口（gui + settings_ui 共用）。
+    """v1.4.7 P3--M1/L1：usage_panel_summary 统一入口（gui + settings_ui 共用）。
 
     验证：4 档 + by_model + by_call_site 都齐全；month.cost_cny 与 get_month_cost() 同源。
     """
@@ -2131,7 +2131,7 @@ class TestOcrVisionThreeTupleContract(unittest.TestCase):
     不发起真实 API；通过 mock requests.post 验证：
       - _ocr_api_call_do / _ocr_api_call / _call_vision_api 返回 (text, mdl, usage) 三元组
       - usage=None / dict 都允许，调用方不因 None 中断
-    t8 集成收口补充：漏斗单点落账（T-C5）——mock 调用会真实触发
+     集成收口补充：漏斗单点落账（T-C5）——mock 调用会真实触发
     usage_store.record，setUp 把 usage_store.get_base_dir 重定向到 tmp，
     落账不污染真实数据目录；并新增落账恰一行/口径断言。
     """
@@ -2244,7 +2244,7 @@ class TestOcrVisionThreeTupleContract(unittest.TestCase):
         self.assertEqual(usage['prompt'], 50)
 
     def test_ocr_call_records_single_usage_line(self):
-        """t8 集成收口（T-C5）：mock OCR 调用 → usage_log.jsonl 恰落一行、口径正确。
+        """ 集成收口（T-C5）：mock OCR 调用 → usage_log.jsonl 恰落一行、口径正确。
 
         价格表缺失 → cost_cny=0（面板显示 ?）；call_site='OCR 识别'；实测行非估算。
         """
@@ -2281,7 +2281,7 @@ class TestOcrVisionThreeTupleContract(unittest.TestCase):
         self.assertEqual(row['usage']['total'], 150)
 
     def test_vision_call_records_with_call_site(self):
-        """t8 集成收口（T-C5）：vision 调用落账携带 call_site 审计标签。"""
+        """ 集成收口（T-C5）：vision 调用落账携带 call_site 审计标签。"""
         import vision
         fake_response = MagicMock()
         fake_response.json.return_value = {
@@ -2353,7 +2353,7 @@ class TestEndToEndPipeline(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────
-# WS-A 本地历史库（history_db.py，来源 test_tmp_wsa.py）
+# 本地历史库（history_db.py）
 # ──────────────────────────────────────────────────────────────────
 TODAY = datetime.now().strftime('%Y-%m-%d')
 
@@ -2546,7 +2546,7 @@ class TestHistoryDB(unittest.TestCase):
         self.assertEqual(len(daily), 1)
         self.assertEqual(daily[0]['items'], 3)
 
-    # ── 6. 只读故障注入（R8：绝不外抛）──────────────────────────────
+    # ── 6. 只读故障注入（绝不外抛）──────────────────────────────
     def test_readonly_fault_returns_minus1_without_raise(self):
         sid = self.hdb.record_capture({'云南': PLANS_YN}, 'live')
         self.assertGreater(sid, 0)
@@ -2602,7 +2602,7 @@ class TestHistoryDB(unittest.TestCase):
 
 # ════════════════════════════════════════════════════════════════════════════
 # v1.4.x 导航页重构：📈 历史趋势 / 💰 用量明细 从弹窗独立为导航页
-# t22 验收测试（结构性/静态断言，无 Tk 主循环依赖）
+#  验收测试（结构性/静态断言，无 Tk 主循环依赖）
 # ════════════════════════════════════════════════════════════════════════════
 
 def _read(path):
@@ -2617,7 +2617,7 @@ def _count_defs(src, name):
 
 
 class TestNavRefactorV147(unittest.TestCase):
-    """v1.4.x 导航页重构（t21）—— 验收测试。
+    """v1.4.x 导航页重构（）—— 验收测试。
 
     旧版历史趋势（gui._show_history_dialog）/ 用量明细（settings_ui._show_usage_detail）
     是 Toplevel 弹窗；新版把两个页面整体迁移为 stats_ui.StatsPagesMixin 的导航页，
@@ -2663,7 +2663,7 @@ class TestNavRefactorV147(unittest.TestCase):
     # ── 2. gui.py App 继承 StatsPagesMixin ──────────────────────────
     def test_gui_app_class_inherits_stats_mixin(self):
         src = _read(self.GUI)
-        # v1.6.0 t36 已将 ImportServiceMixin 加入 MRO（class App(...,ImportServiceMixin)）；
+        # v1.6.0  已将 ImportServiceMixin 加入 MRO（class App(...,ImportServiceMixin)）；
         # 匹配两种允许的写法：含/不含 ImportServiceMixin
         self.assertTrue(
             'class App(SettingsUIMixin, StatsPagesMixin, ImportServiceMixin)' in src
@@ -2712,7 +2712,7 @@ class TestNavRefactorV147(unittest.TestCase):
         usage_idx = body.find('self.page_usage')
         self.assertGreater(hist_idx, 0)
         self.assertGreater(usage_idx, 0)
-        # v1.6.0 t38 dashboard 接入后 _show_page 含额外 elif 分支（page_dashboard），
+        # v1.6.0  dashboard 接入后 _show_page 含额外 elif 分支（page_dashboard），
         # after_idle 出现位置后移；扩大搜索窗口到 1200 字符
         self.assertIn('after_idle', body[hist_idx:hist_idx + 1200],
                       'page_history 刷新必须经 after_idle 调度（主线程事件队列）')
@@ -2788,7 +2788,7 @@ class TestNavRefactorV147(unittest.TestCase):
         self.assertRegex(src, r'self\.page_usage\s*=\s*tk\.Frame\(self\.content_frame',
                          'page_usage 必须作为 content_frame 子帧创建')
 
-    # ── 11. P3-R2-M1：_safe_destroy_widget 静态方法存在 + 行为契约 ─────
+    # ── 11. P3--M1：_safe_destroy_widget 静态方法存在 + 行为契约 ─────
     def test_safe_destroy_widget_exists_and_safe(self):
         """M1 修复：_safe_destroy_widget 守卫方法存在，且对 None / 假对象不抛异常。
 
@@ -2810,7 +2810,7 @@ class TestNavRefactorV147(unittest.TestCase):
             except Exception as e:
                 self.fail(f'_safe_destroy_widget({fake!r}) 不应抛异常，实际抛 {e!r}')
 
-    # ── 12. P3-R2-L1：_chart_empty_message 三分支决策（无 Tk 行为级断言）──
+    # ── 12. P3--L1：_chart_empty_message 三分支决策（无 Tk 行为级断言）──
     def test_chart_empty_message_three_branches(self):
         """L1 修复：_chart_empty_message 静态方法的「空 entries / 全 0 / 正常」三分支。
 
@@ -2846,7 +2846,7 @@ class TestNavRefactorV147(unittest.TestCase):
 
 
 class TestKeyDecryptWiring(unittest.TestCase):
-    """v1.4.8 P1-C-fix（t18）：ocr/vision 运行时 api_key 解密接线防回归。
+    """v1.4.8 -fix（）：ocr/vision 运行时 api_key 解密接线防回归。
 
     背景：迁移后 settings.json 里 api_key 是 dpapi:v1: 密文，运行时读取点必须经
     utils.decrypt_secret 解密；否则所有视觉 API 调用拿密文当 key，全线 401。
@@ -2922,7 +2922,7 @@ class TestKeyDecryptWiring(unittest.TestCase):
 
 
 class TestEULA(unittest.TestCase):
-    """t7+t16 EULA 回归测试。"""
+    """+ EULA 回归测试。"""
 
     def test_eula_version_constant(self):
         from eula_text import EULA_VERSION, EULA_CLAUSES
@@ -2937,7 +2937,7 @@ class TestEULA(unittest.TestCase):
         self.assertIn('风险由用户本人承担', text)
 
     def test_gui_eula_dialog_blocks_with_wait_window(self):
-        """t16 修复：_show_eula_dialog 体内必须包含 wait_visibility + wait_window 阻塞序列。"""
+        """ 修复：_show_eula_dialog 体内必须包含 wait_visibility + wait_window 阻塞序列。"""
         import gui
         src = inspect.getsource(gui)
         # 找到 _show_eula_dialog 函数体
@@ -2951,7 +2951,7 @@ class TestEULA(unittest.TestCase):
 
 
 class TestLicense(unittest.TestCase):
-    """t10 P2-A 离线卡密授权测试。"""
+    """  离线卡密授权测试。"""
 
     def test_rfc8032_vector1(self):
         from auth.ed25519_verify import verify, TEST1_PK, TEST1_MSG, TEST1_SIG
@@ -2990,7 +2990,7 @@ class TestLicense(unittest.TestCase):
         self.assertEqual(len(a), 32)  # 16 字节 hex = 32 chars
 
     def test_get_tier_cache_ttl_expires_and_reevaluates(self):
-        """t24 修复包 A (BUG-1)：缓存 TTL=300s 到期后必须重验。
+        """ 修复 ()：缓存 TTL=300s 到期后必须重验。
 
         修前：get_tier('', enforce=True) 第一次返 'free'，缓存永不过期，
         外部修改 settings.json 后该进程内仍返 'free' 直到重启。
@@ -3014,7 +3014,7 @@ class TestLicense(unittest.TestCase):
         _lic.reset_cache()
 
     def test_get_tier_cache_ttl_fresh_hit_uses_cache(self):
-        """t24 修复包 A (BUG-1)：TTL 内命中应直接返缓存，不重验。
+        """ 修复 ()：TTL 内命中应直接返缓存，不重验。
 
         防回归：避免 TTL 实现错误把「同 license_text 重复调用」也走重验路径。
         """
@@ -3032,7 +3032,7 @@ class TestLicense(unittest.TestCase):
         _lic.reset_cache()
 
     def test_settings_ui_enforce_rollback_on_save_failure(self):
-        """t24 修复包 A (BUG-13)：_on_enforce_toggle 写盘失败时必须回滚 UI。
+        """ 修复 ()：_on_enforce_toggle 写盘失败时必须回滚 UI。
 
         直接验证源码：except 分支内必须执行 _enforce_var.set(not bool(_enforce_var.get()))。
         """
@@ -3043,7 +3043,7 @@ class TestLicense(unittest.TestCase):
         self.assertIn('_enforce_var.set(not bool(_enforce_var.get()))', src)
 
     def test_settings_ui_import_rollback_on_save_failure(self):
-        """t24 修复包 A (BUG-14)：_on_import 写盘失败时必须回滚 _key_var 为旧值。
+        """ 修复 ()：_on_import 写盘失败时必须回滚 _key_var 为旧值。
 
         直接验证源码：except 分支内必须执行 _key_var.set(_old_key)。
         """
@@ -3057,7 +3057,7 @@ class TestLicense(unittest.TestCase):
 
 
 class TestGating(unittest.TestCase):
-    """t12 P2-C Pro 门控测试。
+    """  Pro 门控测试。
 
     用户裁定：enforce=false 时所有门控失效（默认全免，永久免费功能不受影响）。
     enforce=true + tier=free 时：实时截图 50 次/日，历史趋势 30 天。
@@ -3173,7 +3173,7 @@ class TestGating(unittest.TestCase):
         self.assertGreaterEqual(n, 0)
 
     def test_license_module_constants(self):
-        """t12 阈值常量正确导出"""
+        """ 阈值常量正确导出"""
         from auth.license import FREE_DAILY_LIVE_SCREENSHOT, FREE_HISTORY_DAYS, UNLIMITED
         self.assertEqual(FREE_DAILY_LIVE_SCREENSHOT, 50)
         self.assertEqual(FREE_HISTORY_DAYS, 30)
@@ -3181,7 +3181,7 @@ class TestGating(unittest.TestCase):
 
 
 class TestReplenishmentModels(unittest.TestCase):
-    """t13 P3-A 补货模型框架：经典原样保留 + 加权新增。
+    """  补货模型框架：经典原样保留 + 加权新增。
 
     用户裁定（最高优先约束）：
     - 经典模式（默认）一行公式逻辑都不许改，行为与改动前完全一致
@@ -3379,7 +3379,7 @@ class TestReplenishmentModels(unittest.TestCase):
 
 
 class TestBatchCostPreview(unittest.TestCase):
-    """t14 P3-B 批量前成本预估确认。
+    """  批量前成本预估确认。
 
     用户裁定：
     - 价格表完整 → 显示金额区间（CNY 区间）
@@ -3488,7 +3488,7 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertIsInstance(pricing, dict)
 
     def test_t24_f1_classic_error_label_distinguishes(self):
-        """t24 修复包 A (F1)：加权 except 回退标注 'classic(error)'。
+        """ 修复 (F1)：加权 except 回退标注 'classic(error)'。
 
         与 utils.calc_replenishment_weighted 的 'classic(no_history)' 区分：
         - classic(no_history) = utils 内部查到空结果主动回退
@@ -3505,7 +3505,7 @@ class TestBatchCostPreview(unittest.TestCase):
         self.assertIn('classic(no_history)', src)
 
     def test_t24_f2_self_tier_dead_code_removed(self):
-        """t24 修复包 A (F2)：gui.py 删除 self._tier 死状态 + _auth_get_tier import。
+        """ 修复 (F2)：gui.py 删除 self._tier 死状态 + _auth_get_tier import。
 
         防回归：避免后续又把死代码加回来。
         """
@@ -3520,14 +3520,14 @@ class TestBatchCostPreview(unittest.TestCase):
 
 
 class TestNavGrouping(unittest.TestCase):
-    """t27 实施包 A：导航默认展开 + 三组分组 + 标题统一 + 导出降权 + 死代码清理。
+    """：导航默认展开 + 三组分组 + 标题统一 + 导出降权 + 死代码清理。
 
-    用户裁定：t25 IA 审计 → t27 实施 4 项定稿（提案 1+2+5+4+6）。
+    用户裁定： IA 审计 →  实施 4 项定稿（提案 1+2+5+4+6）。
     约束：零新配色/字体/token；首页双入口布局不动；业务逻辑零变化。
     """
 
     def test_nav_default_expanded_in_build_ui(self):
-        """t27 ①：gui.py _build_ui 初始即 add(nav_frame, before=content_frame)。
+        """ ①：gui.py _build_ui 初始即 add(nav_frame, before=content_frame)。
 
         修 P-A1（新用户看不到 8 项功能）——main_paned 不能再只 add content_frame。
         """
@@ -3542,20 +3542,20 @@ class TestNavGrouping(unittest.TestCase):
         self.assertGreater(nav_add_pos, 0)
         self.assertGreater(content_add_pos, 0)
         self.assertLess(nav_add_pos, content_add_pos)
-        # 宽度统一 176（t29 迭代R3：字面量已 DPI 化为 int(176 * self.dpi_scale)）
+        # 宽度统一 176（ 迭代：字面量已 DPI 化为 int(176 * self.dpi_scale)）
         self.assertIn('width=int(176 * self.dpi_scale)', src)
         # _toggle_nav 仍保留（提供折叠入口给熟练用户）
         self.assertTrue(hasattr(gui.App, '_toggle_nav'))
 
     def test_nav_three_group_layout(self):
-        """t27 ②：_build_nav 必须按【工作区】【数据】【设置】三组布局。
+        """ ②：_build_nav 必须按【工作区】【数据】【设置】三组布局。
 
         修 P-A2（8 项平铺无分组，命名不一致）。
         """
         import gui
         import inspect
         src = inspect.getsource(gui.App._build_nav)
-        # t29 修 v4f-P3：剥离行内注释后断言——防止断言被注释文本（如文档性提及）满足
+        #  修 -P3：剥离行内注释后断言——防止断言被注释文本（如文档性提及）满足
         src = '\n'.join(line.split('#', 1)[0] for line in src.splitlines())
         # 必须有 groups 列表 + 3 个组名
         self.assertIn('工作区', src)
@@ -3570,7 +3570,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertIn('padx=14, pady=7', src)
 
     def test_page_titles_unified_to_font_heading(self):
-        """t27 ③：所有 page 顶部标题统一 FONT_HEADING + 无 emoji（emoji 在导航）。
+        """ ③：所有 page 顶部标题统一 FONT_HEADING + 无 emoji（emoji 在导航）。
 
         修 P-A4（page 标题字体/pady/emoji 不统一）。
         """
@@ -3607,7 +3607,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertNotIn('💰', usage_title_match.group(1))
 
     def test_export_btn_demoted_weight(self):
-        """t27 ④：「导出 Excel」13pt bold 16w×2h 降为 9pt bold 常规。
+        """ ④：「导出 Excel」13pt bold 16w×2h 降为 9pt bold 常规。
 
         修 P-A3（结果动作视觉权重超过数据入口）。
         """
@@ -3626,7 +3626,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertIn('self._export', src)
 
     def test_calibrate_tab_dead_code_removed(self):
-        """t27 ⑤：_build_calibrate_tab 改名为 _build_calibrate_inline（零外部引用）。"""
+        """ ⑤：_build_calibrate_tab 改名为 _build_calibrate_inline（零外部引用）。"""
         import settings_ui
         import inspect
         # 必须有 _build_calibrate_inline
@@ -3639,7 +3639,7 @@ class TestNavGrouping(unittest.TestCase):
         self.assertNotIn('_build_calibrate_tab', gui_src)
 
     def test_no_new_color_font_token_added(self):
-        """t27 约束：零新配色/字体/token。"""
+        """ 约束：零新配色/字体/token。"""
         import gui
         import settings_ui
         import stats_ui
@@ -3660,7 +3660,7 @@ class TestNavGrouping(unittest.TestCase):
                              f'意外的新 C_ token: {unexpected}')
 
     def test_home_dual_entry_layout_intact(self):
-        """v1.5.7 t27 约束更新：首页 primary_row / btn_row 布局（用户拍板定版）。
+        """v1.5.7  约束更新：首页 primary_row / btn_row 布局（用户拍板定版）。
          ① 第一排 primary_row：批量(居左) + 导入(居左，文件统一入口弹菜单) + 识图(居右) + 导出(居右)
          ② 第二排 btn_row：刷新(居左) + 🛡双模型(居右)
          ③ 识图 = 截取当前窗口（直连 _live_screenshot，不再弹菜单）
@@ -3693,9 +3693,9 @@ class TestNavGrouping(unittest.TestCase):
                                f"kind='dark' 应至少 4 次（截图/导入/刷新/批量），实际 {dark_count}")
 
     def test_build_nav_called_in_build_ui_after_page_frames(self):
-        """t29 冷启动修复回归：_build_ui 函数体内必须存在 self._build_nav() 调用，
+        """ 冷启动修复回归：_build_ui 函数体内必须存在 self._build_nav() 调用，
         且该调用必须位于 8 个 page_* 帧创建之后（_build_nav 引用 page_home 等帧，
-        若先调用会 AttributeError）。修 t27 默认展开后冷启动导航空壳 bug。
+        若先调用会 AttributeError）。修  默认展开后冷启动导航空壳 bug。
         """
         import gui
         import inspect
@@ -3715,13 +3715,13 @@ class TestNavGrouping(unittest.TestCase):
             self.assertGreater(pos, 0, f'_build_ui 内未找到 self.{name} 帧创建')
             page_positions.append(pos)
         max_page_pos = max(page_positions)
-        # t29 修 v4f-F9：必须用 max（晚于【最后一个】帧创建）而非 min——
+        #  修 -F9：必须用 max（晚于【最后一个】帧创建）而非 min——
         # 原断言只要求晚于最早的 page_home，_build_nav 挪到 8 帧中间也绿但启动必 AttributeError
         self.assertGreater(build_nav_pos, max_page_pos,
                           'self._build_nav() 必须晚于所有 8 个 page_* 帧创建（否则 AttributeError）')
 
     def test_toggle_nav_lazy_build_guard_preserved(self):
-        """t29 冷启动修复回归：_toggle_nav 里的懒构建守卫必须保留——
+        """ 冷启动修复回归：_toggle_nav 里的懒构建守卫必须保留——
         `if not self.nav_buttons: self._build_nav()` 防止折叠再展开时重复构建。
         冷启动修复只是新增 _build_ui 内的预构建，_toggle_nav 守卫不能丢。
         """
@@ -3735,7 +3735,7 @@ class TestNavGrouping(unittest.TestCase):
                       '_toggle_nav 内缺少 self._build_nav() 调用')
 
     def test_nav_width_dpi_scaled(self):
-        """t29 迭代R3：nav 宽度三处（frame width / _build_ui minsize / _toggle_nav
+        """ 迭代：nav 宽度三处（frame width / _build_ui minsize / _toggle_nav
         minsize）必须随 dpi_scale 联动，不得残留裸 176 像素字面量。
         背景：nav 是全 UI 唯一 pack_propagate(False) 冻结像素宽的容器，字号随
         tk scaling 缩放而 176px 不缩，200% DPI 下「💰 用量明细」会被裁。
@@ -3754,7 +3754,7 @@ class TestNavGrouping(unittest.TestCase):
                          '残留裸 176 minsize 字面量（DPI 下会裁导航项）')
 
     def test_page_title_margins_unified(self):
-        """t29 迭代R3：页标题边距统一 padx=16, pady=(14, 2)——settings_ui 5 页
+        """ 迭代：页标题边距统一 padx=16, pady=(14, 2)——settings_ui 5 页
         （商品/主题/校准/后台/API）+ stats_ui 2 页（历史/用量，已是基准值）；
         不得残留旧 pady=(15,2) 或 API 页 padx=20。
         """
@@ -3767,18 +3767,18 @@ class TestNavGrouping(unittest.TestCase):
         self.assertIn('font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))', s,
                       'settings_ui 页标题未统一 16/(14,2)')
         self.assertIn('padx=16, pady=(14, 2))', s,
-                      'API 页标题边距未归一到 16/(14,2)')
+                      'API 页标题边距未归一到 16/(14,2) (API 提供商管理标题行)')
         st = inspect.getsource(stats_ui)
         self.assertGreaterEqual(st.count('padx=16, pady=(14, 2)'), 2,
                                 'stats_ui 页标题 16/(14,2) 基准缺失')
 
 
 # ══════════════════════════════════════════════════════════════════
-# t28 GMI-3：UI 实施包 B · 历史页空态行为 + 版式参数源码断言
+# UI 历史页空态行为 + 版式参数源码断言
 # ══════════════════════════════════════════════════════════════════
 
 class TestHistoryEmptyState(unittest.TestCase):
-    """t28 (④高价值)：history_db.query_daily 返回 [] 时，_history_page_refresh
+    """ (④高价值)：history_db.query_daily 返回 [] 时，_history_page_refresh
     不抛、Treeview 插入占位提示行、summary label 切到「暂无历史数据」引导语。
     设计：源码级 mock 模式（不实际起 Tk 窗口），用最小组件模拟 self._hist_page / self._hist_tree / self._hist_summary_label，
     直接调用 monkeypatch 后的 _history_page_refresh。"""
@@ -3883,8 +3883,8 @@ class TestHistoryEmptyState(unittest.TestCase):
 
 
 class TestLayoutParamsSourceAssert(unittest.TestCase):
-    """t28 (③版式参数)：源码断言抽查——settings_ui.py / stats_ui.py 关键 padx/pady
-    与 width 已按 t26 提案落位（防止后续被改回 14/15/5/6/22/60）。"""
+    """ (③版式参数)：源码断言抽查——settings_ui.py / stats_ui.py 关键 padx/pady
+    与 width 已按  提案落位（防止后续被改回 14/15/5/6/22/60）。"""
 
     def _src(self, name):
         with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
@@ -3893,27 +3893,27 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
     def test_stats_ui_padx_aligned_to_16(self):
         """stats_ui.py：用量页 8 个区域 padx 14→16（topbar / mid / cv / 说明 / 价格表标题 / ptree / 双击说明 / pbtns）。
 
-        8 处 padx=14→16 的修改都是带 # t28 (a-5) 注释的形式；源代码里的 padx=14 已被
-        padx=16 替换并加注释。断言：源码里没有任何【未带 t28 注释的】padx=14 残留。
+        8 处 padx=14→16 的修改都是带 #  () 注释的形式；源代码里的 padx=14 已被
+        padx=16 替换并加注释。断言：源码里没有任何【未带  注释的】padx=14 残留。
         """
         import re
         src = self._src('stats_ui.py')
-        # 匹配所有 padx=14 出现位置（t29 修 v4f-F8：切片长度必须等于目标串长度 7，
+        # 匹配所有 padx=14 出现位置（ 修 -F8：长度必须等于目标串长度 7，
         # 原 i:i+8 恒 False 导致断言空洞——永远绿，防回归承诺落空）
         hits = [(i, src[max(0, i-30):i+50]) for i in range(len(src)) if src[i:i+7] == 'padx=14']
-        # 过滤掉被 t28 注释括起来的（注释里写"padx=14→16"是文档化变更）
+        # 过滤掉被  注释括起来的（注释里写"padx=14→16"是文档化变更）
         real_residue = []
         for pos, ctx in hits:
-            # 出现点若位于同行 '# t28' 尾随注释之内（前缀已含 '# t28'）则属文档化变更
+            # 出现点若位于同行 '# ' 尾随注释之内（前缀已含 '# '）则属文档化变更
             line_start = src.rfind('\n', 0, pos) + 1
             line_prefix = src[line_start:pos]
-            if True:  # 注释已清理，任何 padx=14 均为残留
+            if '# ' not in line_prefix:
                 real_residue.append(ctx)
         self.assertEqual(real_residue, [],
-                         f'stats_ui.py 仍有 {len(real_residue)} 处 padx=14 真正残留（不在 t28 注释内）：{real_residue}')
+                         f'stats_ui.py 仍有 {len(real_residue)} 处 padx=14 真正残留（不在  注释内）：{real_residue}')
 
     def test_stats_ui_history_hint_has_padx(self):
-        """stats_ui.py：历史页 hint label 加了 padx=(0, 4) 离左缘 4px（t26 c-3）。"""
+        """stats_ui.py：历史页 hint label 加了 padx=(0, 4) 离左缘 4px（ c-3）。"""
         src = self._src('stats_ui.py')
         # 提示行：双击行看当日明细；明细行双击看单商品库存趋势折线
         self.assertIn('padx=(0, 4)', src, '历史页 hint label 未加 padx=(0, 4)')
@@ -3933,12 +3933,12 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
 
     def test_settings_ui_secondary_row_aligned(self):
         """settings_ui.py：副模型行 sec_row pack 几何 + Combobox width=20、保存按钮 font 7→8。
-        t8 A2 后：sec_row 包入 _sec_card C_BORDER 卡片，几何收紧 padx=16/pady=10/fill=x。
+         A2 后：sec_row 包入 _sec_card C_BORDER 卡片，几何收紧 padx=16/pady=10/fill=x。
         """
         src = self._src('settings_ui.py')
-        # t8 A2：sec_row 现在包在 _sec_card C_BORDER 卡片内；几何应改 padx=16/pady=10/fill='x'
+        #  A2：sec_row 现在包在 _sec_card C_BORDER 卡片内；几何应改 padx=16/pady=10/fill='x'
         self.assertIn("sec_row.pack(padx=16, pady=10, fill='x')", src,
-                      '副模型行 t8 A2 后应 padx=16/pady=10/fill=x（包入 _sec_card 后收紧）')
+                      '副模型行  A2 后应 padx=16/pady=10/fill=x（包入 _sec_card 后收紧）')
         self.assertIn("textvariable=sec_var, state='normal', width=20,", src,
                       '副模型 Combobox width 未从 22 改 20')
         self.assertIn("font=(self.FONT[0], 8)).pack(side=\"left\")", src,
@@ -3986,14 +3986,14 @@ class TestLayoutParamsSourceAssert(unittest.TestCase):
 
 
 class TestLayoutRound1(unittest.TestCase):
-    """t8 布局落地 Round 1：A 级 8 处 + B1 路标源码断言。"""
+    """ 布局落地 Round 1：A 级 8 处 + B1 路标源码断言。"""
 
     def _src(self, name):
         with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
             return f.read()
 
     def test_general_separators_removed(self):
-        """t8 A1：通用页 _build_general_page 函数体内 0 个 ttk.Separator 调用（两行已删）。"""
+        """ A1：通用页 _build_general_page 函数体内 0 个 ttk.Separator 调用（两行已删）。"""
         import inspect, re
         try:
             from settings_ui import SettingsUIMixin
@@ -4006,7 +4006,7 @@ class TestLayoutRound1(unittest.TestCase):
                          f'通用页应已删除 ttk.Separator(...).pack 调用，改用 8px 卡片间 padding（找到 {real_calls} 处）')
 
     def test_skin_2x2_grid_and_C_BORDER(self):
-        """t8 A3+A4：主题页 4 卡 2×2 grid + #E2E8F0→self.C_BORDER。"""
+        """ A3+A4：主题页 4 卡 2×2 grid + #E2E8F0→self.C_BORDER。"""
         src = self._src('settings_ui.py')
         # 2×2 网格：columnconfigure(0/1, weight=1) + grid(row=i//2, column=i%2)
         self.assertIn('cards_frame.columnconfigure(0, weight=1)', src,
@@ -4021,14 +4021,14 @@ class TestLayoutRound1(unittest.TestCase):
         self.assertIn('self.C_BORDER', src, '主题页未使用 self.C_BORDER')
 
     def test_general_anchor_self_references(self):
-        """t8 B1：通用页 canvas 存 self + anchors 字典存在（路标按钮点击的基础）。"""
+        """ B1：通用页 canvas 存 self + anchors 字典存在（路标按钮点击的基础）。"""
         import inspect
         try:
             from settings_ui import SettingsUIMixin
         except ImportError:
             self.skipTest('settings_ui 不可导入')
         src = inspect.getsource(SettingsUIMixin._build_general_page)
-        # canvas 存 self（v4f 修正：build 时存，click 时实时算）
+        # canvas 存 self（ 修正：build 时存，click 时实时算）
         self.assertIn('self._general_canvas = canvas', src,
                       'canvas 未存为 self._general_canvas（实时算 y 缺基础）')
         # anchors 字典存在
@@ -4037,22 +4037,22 @@ class TestLayoutRound1(unittest.TestCase):
         # 跳锚方法存在
         jump_src = inspect.getsource(SettingsUIMixin._jump_to_general_anchor)
         self.assertIn('yview_moveto', jump_src,
-                      '_jump_to_general_anchor 未调 yview_moveto（v4f 修正：实时 fraction 跳转）')
-        # 实时计算 y（v4f 修正：免 resize 重算）
+                      '_jump_to_general_anchor 未调 yview_moveto（ 修正：实时 fraction 跳转）')
+        # 实时计算 y（ 修正：免 resize 重算）
         self.assertIn('winfo_y', jump_src,
-                      '_jump_to_general_anchor 未实时算 anchor.winfo_y（v4f 修正）')
+                      '_jump_to_general_anchor 未实时算 anchor.winfo_y（ 修正）')
 
     def test_usage_reset_btn_red_token(self):
-        """t8 A8：用量页重置本月按钮·复用 _mk_btn 返回值 config(bg=C_RED_BG)。"""
+        """ A8：用量页重置本月按钮·复用 _mk_btn 返回值 config(bg=C_RED_BG)。"""
         src = self._src('stats_ui.py')
-        # 重置按钮存在并配 bg=C_RED_BG（v4f 修正：不新建 _warn_btn）
+        # 重置按钮存在并配 bg=C_RED_BG（ 修正：不新建 _warn_btn）
         self.assertIn('_reset_btn.configure(bg=self.C_RED_BG)', src,
-                      '重置本月按钮未走 C_RED_BG 视觉区分（v4f 修正：_warn_btn 不存在）')
+                      '重置本月按钮未走 C_RED_BG 视觉区分（ 修正：_warn_btn 不存在）')
         # 应仍调 reset_this_month 回调（业务逻辑零变化）
         self.assertIn('reset_this_month', src, '重置回调 reset_this_month 缺失')
 
     def test_product_canvas_no_fixed_height(self):
-        """t8 A6：商品页 canvas 删 height=220（v4f 修正：禁用 winfo_height 方案，纯 fill+expand）。"""
+        """ A6：商品页 canvas 删 height=220（ 修正：禁用 winfo_height 方案，纯 fill+expand）。"""
         import inspect, re
         try:
             from settings_ui import SettingsUIMixin
@@ -4066,14 +4066,14 @@ class TestLayoutRound1(unittest.TestCase):
 
 
 class TestAnimationsRound1(unittest.TestCase):
-    """t9 动效落地：4 项动效（脉冲/批量按钮文案/hover 插值/nav 渐隐）+ 熔断基建源码断言。"""
+    """ 动效落地：4 项动效（脉冲/批量按钮文案/hover 插值/nav 渐隐）+ 熔断基建源码断言。"""
 
     def _src(self, name):
         with open(os.path.join(HERE, name), 'r', encoding='utf-8') as f:
             return f.read()
 
     def test_lerp_hex_pure_function(self):
-        """t9 基建：_lerp_hex 纯函数单测 3 例（同色/异色/越界 t）。"""
+        """ 基建：_lerp_hex 纯函数单测 3 例（同色/异色/越界 t）。"""
         import sys
         sys.path.insert(0, HERE)
         import gui
@@ -4095,7 +4095,7 @@ class TestAnimationsRound1(unittest.TestCase):
         self.assertEqual(gui._lerp_hex('#FF0000', '#00FF00', 0.5), '#7F7F00')
 
     def test_animations_master_switch_and_meltdown(self):
-        """t9 基建：ANIMATIONS_ENABLED 总开关 + 动效回调异常时静默熔断。"""
+        """ 基建：ANIMATIONS_ENABLED 总开关 + 动效回调异常时静默熔断。"""
         src = self._src('gui.py')
         # 总开关
         self.assertIn('ANIMATIONS_ENABLED = True', src,
@@ -4109,7 +4109,7 @@ class TestAnimationsRound1(unittest.TestCase):
                           src, f'{m} 缺总开关检查')
 
     def test_pulse_status_uses_register_redraw_pattern(self):
-        """t9 C：_pulse_status 必须用 self.tc 实时查 C_TEXT（非构造时快照），兼容主题切换。"""
+        """ C：_pulse_status 必须用 self.tc 实时查 C_TEXT（非构造时快照），兼容主题切换。"""
         import inspect
         import gui
         src = inspect.getsource(gui.App._pulse_status)
@@ -4123,7 +4123,7 @@ class TestAnimationsRound1(unittest.TestCase):
         self.assertIn('self._anim_jobs', src, '_pulse_status 缺 _anim_jobs 注册表')
 
     def test_hover_animation_wired_into_mk_btn(self):
-        """t9 A：_CanvasBtn._hover / _leave 必须调 self.owner._animate_btn_hover。"""
+        """ A：_CanvasBtn._hover / _leave 必须调 self.owner._animate_btn_hover。"""
         import inspect
         import gui
         hover_src = inspect.getsource(gui._CanvasBtn._hover)
@@ -4134,13 +4134,13 @@ class TestAnimationsRound1(unittest.TestCase):
         # leave 也走插值
         self.assertIn('self.owner._animate_btn_hover(self, enter=False)', leave_src,
                       '_CanvasBtn._leave 未接 _animate_btn_hover 插值')
-        # disabled 态抢先落终态（v4f 修正）
+        # disabled 态抢先落终态（ 修正）
         self.assertIn("if self._state == 'disabled':",
                       hover_src + leave_src,
-                      'disabled 态应抢先落终态不动画（v4f 修正）')
+                      'disabled 态应抢先落终态不动画（ 修正）')
 
     def test_anim_jobs_init_and_snap_before_cancel(self):
-        """t9 基建：self._anim_jobs 初始化在 __init__，_cancel_after_jobs 先 snap 终态再 cancel。"""
+        """ 基建：self._anim_jobs 初始化在 __init__，_cancel_after_jobs 先 snap 终态再 cancel。"""
         import importlib.util
         spec = importlib.util.spec_from_file_location('pdd_gui_for_anim', os.path.join(HERE, 'gui.py'))
         # 直接读源码验证
@@ -4151,13 +4151,13 @@ class TestAnimationsRound1(unittest.TestCase):
         # _cancel_after_jobs 工具函数
         self.assertIn('def _cancel_after_jobs', src,
                       '_cancel_after_jobs 工具函数缺失（按目标 widget 分键取消）')
-        # v4f 最大漏项：先 snap 终态再 cancel——验证 _cancel_after_jobs 前有终态设置
+        #  最大漏项：先 snap 终态再 cancel——验证 _cancel_after_jobs 前有终态设置
         # 简单模式：验证 _anim_jobs 在每个动效 _do 函数末尾置空
         # （即先 snap 到 _end/_b，再调 _cancel_after_jobs）
         self.assertIn('self._anim_jobs[_key] = []', src,
                       '动效终态 snap 时 _anim_jobs[_key] = [] 应先于 cancel')
 class TestAnimationsFixRound2(unittest.TestCase):
-    """t11 动效修复包：③ 删 canvas gate + _highlight_nav 兜底 / ② disabled snap 禁用色 /
+    """ 动效修复包：③ 删 canvas gate + _highlight_nav 兜底 / ② disabled snap 禁用色 /
     ⑤ 真熔断（_meltdown_animations 翻 ANIMATIONS_ENABLED）/ ⑧a 脉冲实时 self.tc /
     ⑧b 脉冲起拍捕获当前 fg。"""
 
@@ -4166,7 +4166,7 @@ class TestAnimationsFixRound2(unittest.TestCase):
             return f.read()
 
     def test_nav_leave_no_canvas_gate(self):
-        """t11 ③：_animate_nav_leave 不能再用 btn.canvas gate（导航按钮是 tk.Button 无 canvas）。"""
+        """ ③：_animate_nav_leave 不能再用 btn.canvas gate（导航按钮是 tk.Button 无 canvas）。"""
         import sys
         sys.path.insert(0, HERE)
         import gui
@@ -4181,7 +4181,7 @@ class TestAnimationsFixRound2(unittest.TestCase):
                       '_highlight_nav 离开位分支必须显式 configure(bg=C_BG) 兜底')
 
     def test_hover_disabled_snap_uses_disabled_color(self):
-        """t11 ②：hover 链 disabled 分支 snap 到禁用色（btn.disabled tc + C_SURFACE fallback）。"""
+        """ ②：hover 链 disabled 分支 snap 到禁用色（btn.disabled tc + C_SURFACE fallback）。"""
         import sys
         sys.path.insert(0, HERE)
         import gui
@@ -4189,10 +4189,10 @@ class TestAnimationsFixRound2(unittest.TestCase):
         src = inspect.getsource(gui.App._animate_btn_hover)
         # 禁用态 snap 应走 tc('btn.disabled', self.C_SURFACE)，不能硬编码 _end
         self.assertIn("self.tc('btn.disabled', self.C_SURFACE)", src,
-                      'disabled snap 必须走 btn.disabled tc + C_SURFACE fallback（v4f 修正：零新 token）')
+                      'disabled snap 必须走 btn.disabled tc + C_SURFACE fallback（ 修正：零新 token）')
 
     def test_real_meltdown_flips_module_flag(self):
-        """t11 ⑤：真熔断——_meltdown_animations 翻 ANIMATIONS_ENABLED=False；动效 except 分支应调用。"""
+        """ ⑤：真熔断——_meltdown_animations 翻 ANIMATIONS_ENABLED=False；动效 except 分支应调用。"""
         import sys
         sys.path.insert(0, HERE)
         import gui
@@ -4217,10 +4217,10 @@ class TestAnimationsFixRound2(unittest.TestCase):
             nxt = src.find('\n    def ', idx + 1)
             block = src[idx:nxt if nxt > 0 else None]
             self.assertIn('_meltdown_animations()', block,
-                          f'{m} except 分支必须调 _meltdown_animations()（v4f 修正：注释谎言）')
+                          f'{m} except 分支必须调 _meltdown_animations()（ 修正：注释谎言）')
 
     def test_meltdown_triggered_by_lerp_exception(self):
-        """t11 ⑤（v4f 完整示例）：monkeypatch _lerp_hex 抛异常后，_pulse_status 应触发熔断。"""
+        """ ⑤（ 完整示例）：monkeypatch _lerp_hex 抛异常后，_pulse_status 应触发熔断。"""
         import sys
         sys.path.insert(0, HERE)
         import gui
@@ -4229,7 +4229,7 @@ class TestAnimationsFixRound2(unittest.TestCase):
         # monkeypatch _lerp_hex
         _orig = gui._lerp_hex
         def _boom(*a, **k):
-            raise RuntimeError('t11 ⑤测试：lerp 抛异常')
+            raise RuntimeError(' ⑤测试：lerp 抛异常')
         gui._lerp_hex = _boom
         try:
             # 构造一个最简 self-like 对象（不实例化 App，避免 Tk 启动）
@@ -4253,7 +4253,7 @@ class TestAnimationsFixRound2(unittest.TestCase):
             gui.ANIMATIONS_ENABLED = True
 
     def test_pulse_captures_current_fg_and_realtime_theme(self):
-        """t11 ⑧a+⑧b：_pulse_status 终态用实时 self.tc；起拍捕获 label 当前 fg（不硬编码 C_TEXT）。"""
+        """ ⑧a+⑧b：_pulse_status 终态用实时 self.tc；起拍捕获 label 当前 fg（不硬编码 C_TEXT）。"""
         import sys
         sys.path.insert(0, HERE)
         import gui
@@ -4261,10 +4261,10 @@ class TestAnimationsFixRound2(unittest.TestCase):
         src = inspect.getsource(gui.App._pulse_status)
         # ⑧a：_do 内每步 / 终态用 self.tc 实时查
         self.assertIn("self.tc('C_TEXT'", src,
-                      '_pulse_status 终态必须 self.tc(\"C_TEXT\") 实时查（v4f 修正：200ms 内切主题不残留）')
+                      '_pulse_status 终态必须 self.tc(\"C_TEXT\") 实时查（ 修正：200ms 内切主题不残留）')
         # ⑧b：起拍捕获 _lbl.cget('fg')
         self.assertIn("_lbl.cget('fg')", src,
-                      '_pulse_status 起拍必须捕获 label 当前 fg（v4f 修正：不硬编码 C_TEXT）')
+                      '_pulse_status 起拍必须捕获 label 当前 fg（ 修正：不硬编码 C_TEXT）')
 
 
 if __name__ == '__main__':

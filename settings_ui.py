@@ -20,7 +20,7 @@ except Exception:
 class SettingsUIMixin:
     """混入 App 类，提供所有设置页面构建方法。"""
 
-    # ─────────────── R1 布局优化：纯逻辑助手（无 Tk 依赖，便于单测） ───────────────
+    # ─────────────── 布局优化：纯逻辑助手（无 Tk 依赖，便于单测） ───────────────
     # 这些 helper 与 widget 解耦——只接受 plain 数据 → 返回 plain 结果；test_layout_logic
     # 直接 import settings_ui 即可断言（不需要创建 Tk 根窗口）。
 
@@ -57,10 +57,10 @@ class SettingsUIMixin:
         sel = int(selected_idx) if selected_idx is not None and int(selected_idx) >= 0 else -1
         only_one = n <= 1
         return {
-            'add': False,  # 新增永远可点
-            'rename': only_one or sel < 0,  # 单店/未选 → 禁
-            'activate': only_one or sel < 0,  # 单店/未选 → 禁
-            'delete': only_one or sel < 0,  # 单店/未选 → 禁
+            'add': False,                              # 新增永远可点
+            'rename': only_one or sel < 0,             # 单店/未选 → 禁
+            'activate': only_one or sel < 0,           # 单店/未选 → 禁
+            'delete': only_one or sel < 0,             # 单店/未选 → 禁
         }
 
     @staticmethod
@@ -94,9 +94,9 @@ class SettingsUIMixin:
         def _mw(e): canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
         canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _mw))
         canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
-        # 实施 B1：canvas 提升为 self 属性，供 5 段锚点按钮实时计算 winfo_y
+        # 1：canvas 提升为 self 属性，供 5 段锚点按钮实时计算 winfo_y
         self._general_canvas = canvas
-        # 实施 B1：5 段段名→锚点 Frame 引用字典（build 时填，click 时实时算 y）
+        # 1：5 段段名→锚点 Frame 引用字典（build 时填，click 时实时算 y）
         self._general_anchors = {}
 
         # ── 导出路径模块（浅灰白卡片容器）──
@@ -137,7 +137,7 @@ class SettingsUIMixin:
         self._mk_btn(_m1, '保存', lambda: self._save_settings(None), kind='primary', font=(self.FONT[0], 9, 'bold'), width=12).pack_configure(pady=(5,12))
 
         # ── 定位校准（AI 智能定位，v1.3 起唯一模式）──
-        # ：原 _build_calibrate_tab 改名为 _build_calibrate_inline
+        # ⑤：原 _build_calibrate_tab 改名为 _build_calibrate_inline
         # B1：校准段锚点——取该函数内创建并 pack 的 ai_card 作为锚
         self._build_calibrate_inline(content)
         try:
@@ -152,7 +152,7 @@ class SettingsUIMixin:
                 self._general_anchors['定位校准'] = _cal_anchor
         except Exception:
             pass
-        # 实施 A1：删两条 ttk.Separator，padding 8 承担段间距
+        # 1：删两条 ttk.Separator，padding 8 承担段间距
 
         # ── 识别列配置模块（浅灰白卡片容器）──
         _m3 = tk.Frame(content, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
@@ -173,7 +173,7 @@ class SettingsUIMixin:
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(pady=(0,10))
 
         # ── 副模型（双模型验证用，🛡 勾选时生效）──
-        # 实施 A2：sec_row 裸行包 C_BORDER 卡片，与上方识别列配置同形
+        # 2：sec_row 裸行包 C_BORDER 卡片，与上方识别列配置同形
         _sec_card = tk.Frame(content, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         _sec_card.pack(fill="x", padx=20, pady=8)
         self._general_anchors['副模型'] = _sec_card
@@ -224,7 +224,7 @@ class SettingsUIMixin:
                         _sec_models.append(_v)
         except Exception:
             pass
-        ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=20,  # (b-1): 22→20
+        ttk.Combobox(sec_row, textvariable=sec_var, state='normal', width=20,   # (): 22→20
                      values=_sec_models,
                      font=(self.FONT[0], 8)).pack(side="left", padx=8)
         def _save_sec():
@@ -233,11 +233,11 @@ class SettingsUIMixin:
             self.col_status_var.set(f"副模型已保存：{_v}")
             self.status_text.set(f"副模型已保存：{_v}")
         self._mk_btn(sec_row, '保存', _save_sec, kind='primary',
-                  font=(self.FONT[0], 8)).pack(side="left")  # (b-1): 7→8 视觉对齐
+                  font=(self.FONT[0], 8)).pack(side="left")   # (): 7→8 视觉对齐
         self._lbl(content, text="双模型验证时主模型识别后由副模型复核（不一致标 ⚠）",
-                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(padx=20, pady=(0, 8))  # (b-1/a-3): 左缘对齐+8px
+                 font=(self.FONT[0], 8), fg=self.C_MUTED).pack(padx=20, pady=(0, 8))   # (): 左缘对齐+8px
 
-        # ── 授权管理──
+        # ── 授权管理（ ）──
         # B1：授权管理段锚点——取该函数创建的最后一个 pack(fill=x) 子 Frame
         self._build_license_card(content)
         try:
@@ -253,7 +253,7 @@ class SettingsUIMixin:
         except Exception:
             pass
 
-        # ── 补货策略──
+        # ── 补货策略（ ）──
         # B1：补货策略段锚点——同上取最后一个 fill=x 卡片
         self._build_replenishment_card(content)
         try:
@@ -269,7 +269,7 @@ class SettingsUIMixin:
         except Exception:
             pass
 
-        # ── 店铺管理──
+        # ── 店铺管理（ 多店铺隔离）──
         # B1：店铺管理段锚点——同上取最后一个 fill=x 卡片
         self._build_store_card(content)
         try:
@@ -285,7 +285,7 @@ class SettingsUIMixin:
         except Exception:
             pass
 
-        # ── 导入与窗口（R1 流程效率 产出）──
+        # ── 导入与窗口（ 流程效率 产出）──
         # 设置页卡：上次导入映射摘要 + 清除映射按钮 + 恢复上次窗口位置开关。
         # 状态变更走 Config.save（失败静默 + 状态栏提示）；settings_ui 本身
         # 在主线程可直调——不开 worker 线程。
@@ -303,7 +303,7 @@ class SettingsUIMixin:
         except Exception:
             pass
 
-        # ── 备份与恢复（R3 健壮闭环 产出）──
+        # ── 备份与恢复（ 健壮闭环 产出）──
         # 三个按钮：导出设置备份 / 从备份恢复 / 历史库快照；恢复前 confirm 弹窗。
         self._build_backup_card(content)
         try:
@@ -332,8 +332,8 @@ class SettingsUIMixin:
             pass
 
     def _jump_to_general_anchor(self, name):
-        """t8 B1：点击锚点按钮→实时计算目标段在 canvas scrollregion 内的 fraction，
-        调 yview_moveto 跳转。免 resize 重算（v4f 修正）。"""
+        """B1：点击锚点按钮→实时计算目标段在 canvas scrollregion 内的 fraction，
+        调 yview_moveto 跳转。免 resize 重算（ 修正）。"""
         try:
             _cv = getattr(self, '_general_canvas', None)
             _anchor = self._general_anchors.get(name)
@@ -359,11 +359,11 @@ class SettingsUIMixin:
     # ─────────────── 多店铺隔离：店铺管理卡片 ───────────────
 
     def _build_store_card(self, parent):
-        """店铺管理卡片（t6 R1 布局优化版）：店铺列表（★=当前 + 行高亮）/
+        """店铺管理卡片（  布局优化版）：店铺列表（★=当前 + 行高亮）/
         新增 / 重命名 / 删除 / 设为当前。
 
         删除三选（askyesnocancel）：【是】删配置并清该店识别历史（history_db.
-        delete_store，t1 产出）；【否】仅删配置保留历史；【取消】放弃。
+        delete_store， 产出）；【否】仅删配置保留历史；【取消】放弃。
         default 店铺禁删（store_registry 拒绝 + UI 前置提示，双保险）。
 
         布局要点：
@@ -392,7 +392,7 @@ class SettingsUIMixin:
             highlightcolor="#EAEAEA", bg="#FFFFFF", fg=self.C_TEXT,
             exportselection=False, selectbackground="#FFF3B0")
         self._store_listbox.pack(side='left', fill='both', expand=True)
-        # R1：列表选中态 → 重算 4 按钮禁用态（焦点切换时也响应）
+        # 列表选中态 → 重算 4 按钮禁用态（焦点切换时也响应）
         self._store_listbox.bind('<<ListboxSelect>>',
                                   lambda _e: self._refresh_store_button_states())
 
@@ -429,7 +429,7 @@ class SettingsUIMixin:
         self._refresh_store_card()
 
     def _refresh_store_button_states(self):
-        """R1：根据店铺总数 + 当前列表选中 → 同步 4 按钮禁用态（不依赖业务回调）。"""
+        """根据店铺总数 + 当前列表选中 → 同步 4 按钮禁用态（不依赖业务回调）。"""
         try:
             # 店铺数
             if store_registry is None:
@@ -475,7 +475,7 @@ class SettingsUIMixin:
     def _refresh_store_card(self):
         """重绘店铺列表 + 当前店铺显示；同步主界面切换器（App 方法，容错）。
 
-        R1：列表行文本走 store_list_row_label 统一（与 ★ 高亮规则一致），
+        列表行文本走 store_list_row_label 统一（与 ★ 高亮规则一致），
         当前店铺直接 selection_set 让 selectbackground 立即生效（用户进设置页
         就能看见高亮，不用先点一次），并触发按钮禁用态同步。
         """
@@ -487,7 +487,7 @@ class SettingsUIMixin:
             return
         stores = store_registry.get_stores()
         active = store_registry.get_active()
-        # R1：列表填充 + 当前店铺高亮（selectbackground）
+        # 列表填充 + 当前店铺高亮（selectbackground）
         try:
             self._store_listbox.delete(0, 'end')
             for s in stores:
@@ -579,7 +579,7 @@ class SettingsUIMixin:
         """删除选中店铺：三选（删配置+清历史 / 仅删配置保留历史 / 取消）。
 
         - 【是】store_registry.delete_store 成功后调 history_db.delete_store(id)
-          联动清历史（t1 契约：返回删行数）；
+          联动清历史（ 契约：返回删行数）；
         - 若删的是当前店铺，注册表已把 active 回落 default，主界面同步切换重建；
         - default 店铺 UI 前置拒绝 + store_registry 兜底拒绝（双保险）。
         """
@@ -623,7 +623,7 @@ class SettingsUIMixin:
             self._apply_store_switch(store_registry.get_active())
         self._refresh_store_card()
 
-    # ─────────────── R1 流程效率：导入与窗口卡片 ───────────────
+    # ─────────────── 流程效率：导入与窗口卡片（ 产出） ───────────────
 
     @staticmethod
     def _import_summary_lines(mapping, saved_at):
@@ -657,7 +657,7 @@ class SettingsUIMixin:
         return lines
 
     def _build_import_window_card(self, parent):
-        """R1 流程效率 t2：导入与窗口设置卡。
+        """流程效率 导入与窗口设置卡。
 
         内容：
         - 上次导入映射摘要（多行 Label，刷新逻辑内置）。
@@ -767,7 +767,7 @@ class SettingsUIMixin:
                 except Exception:
                     pass
             except Exception:
-                # -13) 同款风格：写盘失败回滚 UI（避免"显示新值但磁盘未写入"）
+                # 修复 () 同款风格：写盘失败回滚 UI（避免"显示新值但磁盘未写入"）
                 try:
                     self._restore_win_pos_var.set(not bool(self._restore_win_pos_var.get()))
                 except Exception:
@@ -787,10 +787,10 @@ class SettingsUIMixin:
                   font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED,
                   wraplength=560, justify='left').pack(pady=(4, 12), padx=20, anchor='w')
 
-    # ─────────────── R3 健壮闭环：备份与恢复卡片 ───────────────
+    # ─────────────── 健壮闭环：备份与恢复卡片（ 产出） ───────────────
 
     def _build_backup_card(self, parent):
-        """R3 健壮闭环 t9：备份与恢复卡。
+        """健壮闭环 备份与恢复卡。
 
         三个动作按钮 + 结果状态行：
         - 「导出设置备份」：弹保存对话框 → 调 backup_store.export_settings_zip
@@ -947,7 +947,7 @@ class SettingsUIMixin:
                     parent=self.win)
             except Exception:
                 pass
-            # R3 遗留修复（R3-Risk-B）：恢复写盘后显式失效进程内缓存——
+            # 遗留修复（-Risk-B）：恢复写盘后显式失效进程内缓存——
             # license tier 缓存（TTL 300s，reset_cache 显式清空）、usage enabled 缓存、
             # Config mtime 缓存由 save 自清。均失败安全（缓存不失效也只是短暂陈旧）。
             try:
@@ -1019,9 +1019,9 @@ class SettingsUIMixin:
                                                        anchor='w')
 
     def _build_replenishment_card(self, parent):
-        """t13 P3-A 补货策略卡片：模型单选（经典/加权/高级）+ safety_days + in_transit_qty。
+        """补货策略卡片：模型单选（经典/加权/高级）+ safety_days + in_transit_qty。
 
-        t8 P2-C：新增「高级」选项（calc_replenishment_advanced），展开四因子编辑区：
+         ：新增「高级」选项（calc_replenishment_advanced），展开四因子编辑区：
         - 大促日历（日期文本框 + boost + lead_days）
         - 滞销阈值（threshold_per_day + stock_ratio）
         - 季节系数（开关）
@@ -1088,14 +1088,14 @@ class SettingsUIMixin:
         self._lbl(sd_row, text="安全库存天数：", font=(self.FONT[0], 9),
                   bg=self.C_BG, fg=self.C_TEXT).pack(side='left', padx=(0, 6))
         _sd_var = tk.IntVar(self.win, value=int(cur.get('safety_days', 2) or 0))
-        tk.Spinbox(sd_row, from_=0, to=30, textvariable=_sd_var, width=8,  # (e-2): 6→8
+        tk.Spinbox(sd_row, from_=0, to=30, textvariable=_sd_var, width=8,   # (): 6→8
                    font=(self.FONT[0], 9), relief='flat', bd=0, highlightthickness=1,
                    highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                    bg="#FFFFFF", fg=self.C_TEXT, buttonbackground=self.C_BG).pack(side='left')
         self._lbl(sd_row, text="（加权/高级模式：运输+此值=到货覆盖天数）",
                   font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(side='left', padx=(8, 0))
 
-        # R2 安全库存推荐 — 显示上次缓存 + 一键应用按钮
+        # 安全库存推荐 — 显示上次缓存 + 一键应用按钮
         # 写入方：fix-glm 在 _calc_from_items 后把 recommend_safety_days 结果写
         # settings['replenishment']['recommendation']；本卡读出展示。
         rec_row = tk.Frame(card, bg=self.C_BG)
@@ -1202,7 +1202,7 @@ class SettingsUIMixin:
                   font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_MUTED).pack(side='left', padx=(8, 0))
 
         # 高级模式编辑区（折叠在独立 Frame，按 radio 切换可见）
-        # R1 布局优化：四个 LabelFrame 走统一 padx=8 / pady=(0, 6) + 内层 padx=8 / pady=4
+        # 布局优化：四个 LabelFrame 走统一 padx=8 / pady=(0, 6) + 内层 padx=8 / pady=4
         # 三档节奏；标题统一前缀「▌ <name>（<desc>）」便于快速扫读；季节+超卖同
         # 行仍保留（节省垂直空间，但季节/超卖 box 内部都用 pack，与其他两卡同节奏）。
         adv_frame = tk.Frame(card, bg=self.C_BG)
@@ -1240,7 +1240,7 @@ class SettingsUIMixin:
                  bg="#FFFFFF", fg=self.C_TEXT,
                  insertbackground=self.C_TEXT).pack(side='left', padx=(6, 0))
 
-        # R2 批量粘贴入口（多行 YYYY-MM-DD 一次粘入）——
+        # 批量粘贴入口（多行 YYYY-MM-DD 一次粘入）——
         # 弹文本域对话框，按行解析 + 逐行错误标注；合法行替换到 _promo_dates_var。
         def _on_bulk_paste():
             try:
@@ -1418,7 +1418,7 @@ class SettingsUIMixin:
             row=0, column=2, padx=(0, 4), pady=4, sticky='w')
 
         # 高级区块的显示切换：根据当前 model
-        # R1：visible → pack(pady=(6,4), padx=20, fill='x')；hidden → pack_forget。
+        # visible → pack(pady=(6,4), padx=20, fill='x')；hidden → pack_forget。
         # 显隐决策由 adv_frame_visibility_for_model 统一，调用方按表操作。
         def _toggle_adv_visibility(*_):
             try:
@@ -1518,7 +1518,7 @@ class SettingsUIMixin:
                   wraplength=560, justify='left').pack(pady=(0, 12), padx=20, anchor='w')
 
     def _build_license_card(self, parent):
-        """t12 P2-C 授权管理卡片：显示 tier/到期/导入 license 文本/enforce 开关。
+        """授权管理卡片：显示 tier/到期/导入 license 文本/enforce 开关。
 
         用户裁定：enforce=false 默认全免，状态下显示「试用期：所有限制未启用」；
         enforce=true + 无 license → 免费版；
@@ -1566,7 +1566,7 @@ class SettingsUIMixin:
         _refresh()
 
         # enforce 开关
-        enf_row = tk.Frame(card, bg=self.C_BG); enf_row.pack(pady=(6, 2), padx=20, fill='x')  # (b-4): (8,2)→(6,2) 紧凑
+        enf_row = tk.Frame(card, bg=self.C_BG); enf_row.pack(pady=(6, 2), padx=20, fill='x')   # (): (8,2)→(6,2) 紧凑
         _enforce_var = tk.BooleanVar(self.win, value=False)
         def _on_enforce_toggle():
             try:
@@ -1580,7 +1580,7 @@ class SettingsUIMixin:
                 reset_cache()
                 _refresh()
             except Exception as e:
-                # -13)：写盘失败时回滚 UI 到旧值，
+                # 修复 ()：写盘失败时回滚 UI 到旧值，
                 # 避免「UI 显示新值但磁盘未写入」的不一致状态
                 try:
                     _enforce_var.set(not bool(_enforce_var.get()))
@@ -1611,7 +1611,7 @@ class SettingsUIMixin:
             _key_var.set((_cur2.get("license") or {}).get("key", "") or "")
         except Exception:
             pass
-        _key_entry = tk.Entry(in_row, textvariable=_key_var, font=self.FONT, width=48,  # (b-4): 60→48 留位按钮
+        _key_entry = tk.Entry(in_row, textvariable=_key_var, font=self.FONT, width=48,   # (): 60→48 留位按钮
                               relief='flat', bd=0, highlightthickness=1,
                               highlightbackground="#EAEAEA", highlightcolor="#EAEAEA",
                               bg="#FFFFFF", fg=self.C_TEXT, insertbackground=self.C_TEXT)
@@ -1619,7 +1619,7 @@ class SettingsUIMixin:
 
         def _on_import():
             try:
-                # -14)：写盘失败时回滚 _key_var 为旧值；
+                # 修复 ()：写盘失败时回滚 _key_var 为旧值；
                 # 进入 try 前快照旧文本，失败时还原（避免「UI 显示新文本但磁盘未写入」）
                 _old_key = _key_var.get()
                 text = _key_var.get().strip()
@@ -1644,7 +1644,7 @@ class SettingsUIMixin:
                 messagebox.showinfo("导入 license",
                                     f"已导入：tier={lic.get('tier')}  到期={lic.get('expire_at')}")
             except Exception as e:
-                # -14)：写盘失败时回滚 _key_var 为旧值
+                # 修复 ()：写盘失败时回滚 _key_var 为旧值
                 try:
                     _key_var.set(_old_key)
                 except Exception:
@@ -1829,7 +1829,7 @@ class SettingsUIMixin:
 
     def _build_product_region_tab(self, parent, dlg=None):
         """商品运输时效设置：选地区 → 显示商品列表 → 逐商品调运输天数"""
-        self._lbl(parent, text="商品运输时效设置", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))  # 页标题边距统一 16/(14,2)
+        self._lbl(parent, text="商品运输时效设置", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # 迭代：页标题边距统一 16/(14,2)
         self._lbl(parent, text="不同商品发往不同地区，运输时间可能不同", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         # 地区选择
@@ -1892,7 +1892,7 @@ class SettingsUIMixin:
         canvas_frame = tk.Frame(parent, bg=self.C_BG)
         canvas_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
-        # 实施 A6：删 height=220 改 fill+expand 自适应（v4f 修正：禁用 winfo_height//2 方案）
+        # 6：删 height=220 改 fill+expand 自适应（ 修正：禁用 winfo_height//2 方案）
         canvas = tk.Canvas(canvas_frame, highlightthickness=0, bg=self.C_BG)
         scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
         self._settings_list_frame = tk.Frame(canvas, bg=self.C_BG)
@@ -1965,7 +1965,7 @@ class SettingsUIMixin:
                 self.regions[region] = {}
             for prod, spin in spinboxes.items():
                 try:
-                    # v1.4.6（bug hunt L8/L14 clamp）：readonly 框可输入任意文本/小数/越界值，
+                    # v1.4.6（clamp）：readonly 框可输入任意文本/小数/越界值，
                     # 收紧为 1..30 整数（int(float(s)) 容忍 "3.0"、去空白；越界/clamp 兜底 3）
                     _raw = str(spin.get()).strip()
                     _val = int(float(_raw)) if _raw.replace('.', '', 1).isdigit() else -1
@@ -1992,7 +1992,7 @@ class SettingsUIMixin:
                 messagebox.showwarning("无商品", "该地区暂无商品可设置", parent=self.win)
                 return
             for prod, spin in spinboxes.items():
-                # v1.4.6（bug hunt L8 clamp）：批量设置同样收紧到 1..30
+                # v1.4.6（clamp）：批量设置同样收紧到 1..30
                 _days = 3 if not (1 <= int(days) <= 30) else int(days)
                 spin.delete(0, "end")
                 spin.insert(0, str(_days))
@@ -2005,12 +2005,12 @@ class SettingsUIMixin:
 
     def _build_skin_tab(self, parent):
         """主题选择：四套主题 2×2 网格，点击预览卡即切换"""
-        self._lbl(parent, text="选择界面主题", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))  # 页标题边距统一 16/(14,2)
+        self._lbl(parent, text="选择界面主题", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # 迭代：页标题边距统一 16/(14,2)
         self._lbl(parent, text="点击卡片即时切换，自动保存偏好", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         cards_frame = tk.Frame(parent, bg=self.C_BG)
         cards_frame.pack(fill="x", padx=15, pady=10)
-        # 实施 A3：4 卡 2×2 网格（列等权）
+        # 3：4 卡 2×2 网格（列等权）
         cards_frame.columnconfigure(0, weight=1)
         cards_frame.columnconfigure(1, weight=1)
 
@@ -2036,11 +2036,11 @@ class SettingsUIMixin:
             ac = theme_data['C_ACCENT']
 
             is_sel = name == self._theme_name
-            # 实施 A4：#E2E8F0 → self.C_BORDER（零新 token）
+            # 4：#E2E8F0 → self.C_BORDER（零新 token）
             card = tk.Frame(cards_frame, bg="#FFFFFF",
                            highlightbackground=ac if is_sel else self.C_BORDER,
                            highlightthickness=2 if is_sel else 1)
-            # 实施 A3：2×2 网格（行 = i//2, 列 = i%2）
+            # 3：2×2 网格（行 = i//2, 列 = i%2）
             card.grid(row=i // 2, column=i % 2, padx=4, pady=6, sticky="nsew")
             card._skin_name = name
             card._skip_theme = True
@@ -2062,7 +2062,7 @@ class SettingsUIMixin:
                     pass
 
     def _build_calibrate_inline(self, parent):
-        """校准页构建函数更名 _build_calibrate_inline。
+        """(⑤)：原 _build_calibrate_tab 改名为 _build_calibrate_inline。
         原因：grep 显示零外部引用（仅 _build_general_page L76 调用），
         命名 "tab" 误导（实际是 _build_general_page 内的 section，不是独立 nav page）。
         保留为私有 method 而非 inline 函数体，因为函数体 200+ 行，inline 改动太大。
@@ -2070,7 +2070,7 @@ class SettingsUIMixin:
         import json, time as _time
         from datetime import datetime
 
-        self._lbl(parent, text="定位校准", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))  # 页标题边距统一 16/(14,2)
+        self._lbl(parent, text="定位校准", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # 迭代：页标题边距统一 16/(14,2)
 
         from utils import Config as _Cfg3
         s = _Cfg3.load()  # 安全回退
@@ -2136,7 +2136,7 @@ class SettingsUIMixin:
         def do_ai_locate():
             """手动定位：锁定商家后台窗口截图（自动前置该窗口），AI 识别坐标后转全屏坐标保存。
             失败一律弹窗提示，绝不静默。
-            v1.4.5（bug hunt F28）：AI 多采样（每轮最长 180s）移入 worker 线程，弱网不冻结
+            v1.4.5（）：AI 多采样（每轮最长 180s）移入 worker 线程，弱网不冻结
             主线程；_minimize/恢复/status 等 Tk 交互仍在主线程（after 回填）。"""
             try:
                 # v1.4.6（fix-review C11 尾项）：定位运行中重入守卫，连点只跑一次
@@ -2144,7 +2144,7 @@ class SettingsUIMixin:
                     ai_status_lbl.configure(text="定位进行中，请等待完成...")
                     return
                 self._ai_locating = True
-                import os  # v1.4.5（bug hunt F3）：此前无模块级 import os，此处裸 os 必 NameError（被下方 except 吞成"定位失败"）
+                import os  # v1.4.5（）：此前无模块级 import os，此处裸 os 必 NameError（被下方 except 吞成"定位失败"）
                 import tempfile, threading
                 import pyautogui as pg
                 from vision import ai_locate_elements
@@ -2204,7 +2204,7 @@ class SettingsUIMixin:
                         _result = ai_locate_elements(_shot)
                         self.win.after(0, lambda: _finish(_result, _pos))
                     except Exception as _e:
-                        # v1.4.5（bug hunt F28 + fix-review C11）：异常透传具体原因，
+                        # v1.4.5（ + fix-review C11）：异常透传具体原因，
                         # 不要无捕获变量丢弃细节（否则 API/网络错误全误报"未识别到后台元素"）
                         self.win.after(0, lambda e=_e: _finish(None, _pos, str(e)))
                 threading.Thread(target=_work, daemon=True).start()
@@ -2263,20 +2263,20 @@ class SettingsUIMixin:
 
     def _build_backend_tab(self, parent, dlg=None):
         """配置拼多多商家后台链接和登录凭据"""
-        self._lbl(parent, text="商家后台快捷入口", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))  # 页标题边距统一 16/(14,2)
+        self._lbl(parent, text="商家后台快捷入口", font=self.FONT_HEADING).pack(padx=16, pady=(14, 2))   # 迭代：页标题边距统一 16/(14,2)
         self._lbl(parent, text="设置后可通过主页「🏪 商家后台」按钮一键打开", font=(self.FONT[0], 8), fg=self.C_MUTED).pack()
 
         config = self._get_backend_config()
 
         url_frame = tk.Frame(parent, bg=self.C_BG)
-        url_frame.pack(fill="x", padx=20, pady=(14, 4))  # (b-2): (15,5)→(14,4) 与其它页标题距对齐
-        self._lbl(url_frame, text="后台地址:", font=self.FONT, width=9, anchor="e").pack(side="left")  # (b-2): 10→9
+        url_frame.pack(fill="x", padx=20, pady=(14, 4))   # (): (15,5)→(14,4) 与其它页标题距对齐
+        self._lbl(url_frame, text="后台地址:", font=self.FONT, width=9, anchor="e").pack(side="left")   # (): 10→9
         url_var = tk.StringVar(self.win, value=config.get('url', 'https://mms.pinduoduo.com/'))
         tk.Entry(url_frame, textvariable=url_var, font=self.FONT, width=40, bg=self.C_BG,
                  fg=self.C_TEXT, relief='flat', bd=0, highlightthickness=1,
                  highlightbackground="#EAEAEA").pack(side="left", padx=5)
 
-        # 实施 A5：账号+密码合凭据卡（公开信息 URL 在卡外，隐私凭据在卡内）
+        # 5：账号+密码合凭据卡（公开信息 URL 在卡外，隐私凭据在卡内）
         _cred_card = tk.Frame(parent, bg=self.C_BG, highlightthickness=1, highlightbackground=self.C_BORDER)
         _cred_card.pack(fill="x", padx=20, pady=(6, 6))
         acc_frame = tk.Frame(_cred_card, bg=self.C_BG)
@@ -2307,7 +2307,7 @@ class SettingsUIMixin:
         pwd_frame = tk.Frame(_cred_card, bg=self.C_BG)
         pwd_frame.pack(fill="x", padx=10, pady=(4, 10))
         self._lbl(pwd_frame, text="登录密码:", font=self.FONT, width=9, anchor="e").pack(side="left")
-        # v1.4.8 P1-A：默认不保存密码——初始值永远不读已存密码（即便 config 里还有 legacy 值）
+        # v1.4.8 ：默认不保存密码——初始值永远不读已存密码（即便 config 里还有 legacy 值）
         # 仅当用户主动勾选「记住密码」且点保存时才落盘。已存密码提示用户可手动清除。
         pwd_var = tk.StringVar(self.win, value='')  # 永远从空开始，不预填
         pwd_entry = tk.Entry(pwd_frame, textvariable=pwd_var, font=self.FONT, width=40, show="", bg=self.C_BG)
@@ -2328,7 +2328,7 @@ class SettingsUIMixin:
                        font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
                        selectcolor=self.C_BG, activebackground=self.C_BG).pack(side="left")
 
-        # v1.4.8 P1-A：「记住密码」默认关——勾选才落盘；取消勾选则清空已存密码
+        # v1.4.8 ：「记住密码」默认关——勾选才落盘；取消勾选则清空已存密码
         remember_var = tk.BooleanVar(dlg, value=False)
         tk.Checkbutton(pwd_frame, text="记住密码", variable=remember_var,
                        font=(self.FONT[0], 8), bg=self.C_BG, fg=self.C_TEXT,
@@ -2344,7 +2344,7 @@ class SettingsUIMixin:
                 s = {}  # 顶层合法 JSON 但不是 dict（如 []）时防 TypeError
             # 关键判定：只有勾选「记住密码」才把密码写入；否则强制为空
             typed_pwd = '' if pwd_var.get() == '输入密码' else pwd_var.get()
-            # v1.4.8 P1-C：勾选记住 → DPAPI 加密落盘（防明文 settings.json 被拷走即丢账号）
+            # v1.4.8 ：勾选记住 → DPAPI 加密落盘（防明文 settings.json 被拷走即丢账号）
             if remember_var.get() and typed_pwd:
                 try:
                     from dpapi_utils import enc as _dpapi_enc, is_available as _dpi_avail
@@ -2387,16 +2387,16 @@ class SettingsUIMixin:
             'glm':     {'name': '智谱清言（GLM）',   'endpoint': 'https://open.bigmodel.cn/api/paas/v4/chat/completions'},
         }
 
-        # page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
+        # (③)：page 标题统一 FONT_HEADING + 无 emoji（emoji 保留在导航项）
         self._lbl(parent, text="API 提供商管理", font=self.FONT_HEADING, bg=self.C_BG, fg=self.C_TEXT).pack(
-            padx=16, pady=(14, 2))  # 页标题边距统一 16/(14,2)（原 b-3 的 20 归一）
+            padx=16, pady=(14, 2))   # 迭代：页标题边距统一 16/(14,2)（原 b-3 的 20 归一）
         self._lbl(parent, text="每个提供商独立配置 Key 和模型名，数据仅保存在本机",
                  font=(self.FONT[0], 8), fg=self.C_MUTED, bg=self.C_BG).pack(
             padx=16, pady=(0, 4))
 
         # 活跃提供商选择（机能单选：选中圆点填充亮黄）
         active_frame = tk.Frame(parent, bg=self.C_BG)
-        active_frame.pack(fill="x", padx=20, pady=(8, 4))  # (b-3): padx=24→20, pady=(14,6)→(8,4)
+        active_frame.pack(fill="x", padx=20, pady=(8, 4))   # (): padx=24→20, pady=(14,6)→(8,4)
         self._lbl(active_frame, text="当前使用:", font=self.FONT_BOLD, bg=self.C_BG, fg=self.C_TEXT).pack(side="left", padx=(0,8))
         active_var = tk.StringVar(self.win, value=active)
         for key, info in PRESET_PROVIDERS.items():
@@ -2404,7 +2404,7 @@ class SettingsUIMixin:
                           value=key, font=self.FONT, bg=self.C_BG, fg=self.C_TEXT,
                           selectcolor=self.C_ACCENT, activebackground=self.C_BG,
                           bd=0, relief='flat', highlightthickness=0,
-                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=(12, 0))  # (b-3): padx=12→(12,0) 与左缘对齐
+                          command=lambda: self._refresh_model_badge()).pack(side="left", padx=(12, 0))   # (): padx=12→(12,0) 与左缘对齐
 
         # 三张提供商卡片（浅灰机能卡片 + 细黑切角边框，带滚轮）
         canvas = tk.Canvas(parent, highlightthickness=0, bg=self.C_BG)
@@ -2438,17 +2438,17 @@ class SettingsUIMixin:
             # 浅灰机能卡片（细黑边框 + 内边距）
             card = tk.Frame(cards_frame, bg=self.C_BG, highlightthickness=1,
                             highlightbackground="#EAEAEA", bd=0)
-            card.pack(fill="x", padx=8, pady=8)  # (b-3): padx=4→8 卡片间 8px
+            card.pack(fill="x", padx=8, pady=8)   # (): padx=4→8 卡片间 8px
             self._lbl(card, text=info['name'], font=(self.FONT[0], 10, 'bold'),
                      bg=self.C_BG, fg=self.C_TEXT, anchor="w").pack(
-                fill="x", padx=16, pady=(8, 2))  # (b-3): padx=12→16
+                fill="x", padx=16, pady=(8, 2))   # (): padx=12→16
 
             # API Key 行
             kf = tk.Frame(card, bg=self.C_BG)
-            kf.pack(fill="x", padx=16, pady=6)  # (b-3): padx=12→16, pady=4→6
+            kf.pack(fill="x", padx=16, pady=6)   # (): padx=12→16, pady=4→6
             self._lbl(kf, text="API Key:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
-            # v1.4.8 P1-C：若存的是 dpapi:v1: 密文，解密后填入；解密失败（跨机/损坏）
+            # v1.4.8 ：若存的是 dpapi:v1: 密文，解密后填入；解密失败（跨机/损坏）
             # → Config.decrypt_value 返回空串 → 提示用户重填，绝不让界面卡住
             from utils import Config as _CfgKey
             _stored_key = cfg.get('api_key', '')
@@ -2487,7 +2487,7 @@ class SettingsUIMixin:
                 history.insert(0, cfg['model'])
 
             mf = tk.Frame(card, bg=self.C_BG)
-            mf.pack(fill="x", padx=16, pady=6)  # (b-3)
+            mf.pack(fill="x", padx=16, pady=6)   # ()
             self._lbl(mf, text="模型名称:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             mv = tk.StringVar(self.win, value=cfg.get('model', ''))
@@ -2499,7 +2499,7 @@ class SettingsUIMixin:
 
             # Endpoint 行（预填，可改，完全由用户控制）
             ef = tk.Frame(card, bg=self.C_BG)
-            ef.pack(fill="x", padx=16, pady=6)  # (b-3)
+            ef.pack(fill="x", padx=16, pady=6)   # ()
             self._lbl(ef, text="Endpoint:", font=self.FONT, width=9, anchor="e",
                      bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
             ev = tk.StringVar(self.win, value=cfg.get('endpoint', info['endpoint']))
@@ -2509,7 +2509,7 @@ class SettingsUIMixin:
             # 豆包专属：自定义推理接入点（可选）
             if key == 'doubao':
                 cef = tk.Frame(card, bg=self.C_BG)
-                cef.pack(fill="x", padx=16, pady=6)  # (b-3)
+                cef.pack(fill="x", padx=16, pady=6)   # ()
                 self._lbl(cef, text="推理接入点:", font=self.FONT, width=9, anchor="e",
                          bg=self.C_BG, fg=self.C_TEXT).pack(side="left")
                 cev = tk.StringVar(self.win, value=cfg.get('custom_endpoint', ''))
@@ -2521,7 +2521,7 @@ class SettingsUIMixin:
         def save_all():
             import json
             from utils import Config
-            # v1.4.8 P1-C：用户键入的明文 API Key 在落盘前用 DPAPI 加密；
+            # v1.4.8 ：用户键入的明文 API Key 在落盘前用 DPAPI 加密；
             # 已加密的（用户复制粘贴回原值）直接跳过；空串明文不加密。
             try:
                 from dpapi_utils import enc as _dpapi_enc, is_available as _dpi_avail

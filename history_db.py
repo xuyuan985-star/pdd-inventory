@@ -23,7 +23,7 @@ WS-A 本地历史库（SQLite · 纯 stdlib，零新增依赖）
 
 输入契约（供 gui 集成任务 T-A2/A3 使用，gui._calc_from_items 产物 plans）：
     record_capture({地区: [plans 字典, ...]}, source)
-    record_capture({店铺id: {地区: [plans 字典, ...]}}, source)  # 双层：多店铺一次入账
+    record_capture({店铺id: {地区: [plans 字典, ...]}}, source)   # t1 双层：多店铺一次入账
     record_capture({地区: [plans 字典, ...]}, source, store_id=当前店铺)  # 单层显式指定店铺
     - 双层/单层自动判别（按顶层值类型逐项：list/tuple=单层地区→store_id 参数
       （缺省 default）；dict=双层店铺映射）。旧调用方零改动，行为不变。
@@ -89,10 +89,10 @@ _BUSY_TIMEOUT_MS = 5000
 """写锁等待上限（毫秒）：多进程双开/批量与实时极端并发时最多等 5s，超时报锁不崩。"""
 
 # ── 模块级状态（进程内一次初始化 / 一次健康检查；写入全局串行）──────────
-_DB_OVERRIDE = {'path': None}  # 测试/重定向用；None = 走 get_base_dir() 默认
-_READY = set()  # 已确认健康且 schema 就绪的库路径（quick_check 每进程每路径只做一次）
-_INIT_LOCK = threading.Lock()  # 串行化"健康检查 + 建表"，防并发重复初始化
-_WRITE_LOCK = threading.RLock()  # 写操作全局串行（record/prune/delete/clear），读不加锁（WAL 允许并发读）
+_DB_OVERRIDE = {'path': None}       # 测试/重定向用；None = 走 get_base_dir() 默认
+_READY = set()                      # 已确认健康且 schema 就绪的库路径（quick_check 每进程每路径只做一次）
+_INIT_LOCK = threading.Lock()       # 串行化"健康检查 + 建表"，防并发重复初始化
+_WRITE_LOCK = threading.RLock()     # 写操作全局串行（record/prune/delete/clear），读不加锁（WAL 允许并发读）
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -318,12 +318,12 @@ def _migrate_store_column(conn):
         _dlog('[history] 老库迁移完成：history_rows 补 store 列（旧行归 default 店铺语义）')
 
 
-# v1.6.0 数据资产扩展（TC-B1 + TC-Q4 协作）
+# v1.6.0 数据资产扩展（TC-B1 + TC-Q4 协作）：
 # 旧库可能缺这些列——ALTER TABLE 兼容补列（与 _migrate_store_column 同模式）。
 # 所有新列都带 DEFAULT，旧行 NULL/0/'' 自动兼容；不丢任何老数据。
 _V16_HISTORY_ROW_COLS = (
     # (column_name, sql_type, default_sql_literal)
-    ('forecast',          'REAL',                         None),  # NULL 容忍：未预测/回退经典
+    ('forecast',          'REAL',                         None),                       # NULL 容忍：未预测/回退经典
     ('replenishment_qty', 'INTEGER',                      'NOT NULL DEFAULT 0'),
     ('confidence',        'TEXT',                         "NOT NULL DEFAULT ''"),
     ('trust_level',       'TEXT',                         "NOT NULL DEFAULT ''"),
@@ -412,8 +412,8 @@ def _ensure_ready() -> bool:
                 except sqlite3.Error:
                     pass  # 只读库等场景不阻塞初始化（后续写入会显式失败并被吞）
                 conn.executescript(_SCHEMA)
-                _migrate_store_column(conn)  # 老库 ALTER 补 store 列（新库 no-op）
-                _migrate_v16_columns(conn)  # v1.6.0：补 forecast/confidence/run_id 等
+                _migrate_store_column(conn)   # t1：老库 ALTER 补 store 列（新库 no-op）
+                _migrate_v16_columns(conn)    # v1.6.0：补 forecast/confidence/run_id 等
                 conn.executescript(_SCHEMA_EXTRA)  # store 列就绪后才能建店铺索引
             finally:
                 conn.close()
@@ -490,7 +490,7 @@ def _store_where(store, params) -> str:
         return ''
     if s == DEFAULT_STORE_ID:
         params.extend([DEFAULT_STORE_ID, ''])
-        # R2 问题 修复：末位空格去除。当前所有调用方都 .rstrip()
+        # R2 BUG-18 修复（t1 BUG-18）：末位空格去除。当前所有调用方都 .rstrip()
         # 但调用方有遗漏风险——函数自身保证无尾随空格最稳。
         return 'AND store IN (?, ?)'
     params.append(s)
@@ -528,7 +528,7 @@ def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID,
             return -1
         ts = _now_ts()
         src = _to_str(source)[:32] or 'live'
-        # R2 问题 修复：删除「if default_store == '': default_store = DEFAULT_STORE_ID」
+        # R2 BUG-7 修复（t1 BUG-7）：删除「if default_store == '': default_store = DEFAULT_STORE_ID」
         # 死分支。_to_str(store_id) or DEFAULT_STORE_ID 已经把空值（None/''）兜底
         # 成 'default'，下面的 == '' 永远 False，是无副作用的死代码。
         default_store = _to_str(store_id) or DEFAULT_STORE_ID
@@ -538,8 +538,8 @@ def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID,
         stl = _to_str(trust_level)[:16]
         if stl and stl not in ('GREEN', 'YELLOW', 'RED'):
             stl = ''  # 非法值静默归零（不外抛）
-        rows = []  # (store, region, sku_id, name, stock, sales, days_left, status, qty, warehouse, forecast, replenishment_qty, confidence, trust_level, model_tag)
-        first_region = ''  # session 首地区（取第一个非空地区，跨店铺按入参顺序）
+        rows = []           # (store, region, sku_id, name, stock, sales, days_left, status, qty, warehouse, forecast, replenishment_qty, confidence, trust_level, model_tag)
+        first_region = ''   # session 首地区（取第一个非空地区，跨店铺按入参顺序）
 
         def _collect(store, region, plans):
             """把一个 (店铺, 地区) 的 plans 拼成行；脏数据逐条跳过。"""
@@ -584,7 +584,7 @@ def record_capture(plans_by_region, source='live', store_id=DEFAULT_STORE_ID,
                 # 旧契约（单层）：{region: [plans]} → store_id 参数指定店铺
                 _collect(default_store, top_key, sub)
             elif isinstance(sub, dict):
-                # 新契约（双层）：{store_id: {region: [plans]}}
+                # t1 新契约（双层）：{store_id: {region: [plans]}}
                 sid = _to_str(top_key) or DEFAULT_STORE_ID
                 for region, plans in sub.items():
                     _collect(sid, region, plans)
@@ -771,7 +771,7 @@ def query_daily(days=30, region=None, store=None) -> list:
     用户裁定：默认全免（enforce=false），所有用户不受限；Pro 也不受限。
     """
     try:
-        # P2-C：免费版历史趋势窗口钳制（仅 enforce=true 时生效）
+        # t12 P2-C：免费版历史趋势窗口钳制（仅 enforce=true 时生效）
         try:
             from auth.license import get_history_days_limit, is_pro
             # 默认 enforce=false，所有人 unlimited；显式 enforce=true 才钳制

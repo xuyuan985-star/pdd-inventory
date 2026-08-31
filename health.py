@@ -59,7 +59,7 @@ def _item(item: str, level: str, detail: str, started: float) -> HealthItem:
 
 
 # ============================================================
-# config —— 配置可读性
+# ① config —— 配置可读性
 # ============================================================
 
 def check_config(config_loader: Optional[Callable[[], object]] = None) -> HealthItem:
@@ -83,7 +83,7 @@ def _default_config_loader():
 
 
 # ============================================================
-# db —— 历史库 quick_check（只读）
+# ② db —— 历史库 quick_check（只读）
 # ============================================================
 
 def check_db(db_path: Optional[str] = None, prober: Optional[Callable[[str], str]] = None) -> HealthItem:
@@ -126,7 +126,7 @@ def _default_db_probe(path: str) -> str:
 
 
 # ============================================================
-# model —— 模型配置（active provider 的 model / api_key）
+# ③ model —— 模型配置（active provider 的 model / api_key）
 # ============================================================
 
 def check_model(api_cfg: Optional[dict] = None) -> HealthItem:
@@ -164,7 +164,7 @@ def _default_api_cfg() -> dict:
 
 
 # ============================================================
-# license —— 授权状态
+# ④ license —— 授权状态
 # ============================================================
 
 def check_license(license_cfg: Optional[dict] = None) -> HealthItem:
@@ -204,7 +204,7 @@ def _default_license_cfg() -> dict:
 
 
 # ============================================================
-# updater —— 更新器残留
+# ⑤ updater —— 更新器残留
 # ============================================================
 
 def _updater_leftovers(base_dir: str = None) -> tuple:
@@ -250,7 +250,7 @@ def check_updater(base_dir: str = None, prober: Optional[Callable[[str], tuple]]
 
 
 # ============================================================
-# updater_pending —— 更新健康状态（TC-C3，读 update_health.json）
+# ⑥ updater_pending —— 更新健康状态（TC-C3，读 update_health.json）
 # ============================================================
 
 def _read_update_health_stub(target_dir: str) -> dict:  # pragma: no cover - 替身锚点

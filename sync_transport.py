@@ -1,4 +1,4 @@
-# !/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """sync_transport.py — 云同步传输协议空壳（TC-C5 · v1.6.0 架构预留）。
 

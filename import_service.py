@@ -159,7 +159,7 @@ class ImportServiceMixin:
         if not path:
             return
         if str(path).lower().endswith('.xls'):
-            # 归类为 legacy_xls 文案（与 table_import 一致）
+            # t9：归类为 legacy_xls 文案（与 table_import 一致）
             from ocr_review import categorize_error as _ce
             _cat, _msg, _title = _ce('暂不支持 .xls 老格式')
             messagebox.showerror(_title, _msg, parent=self.win)
@@ -167,7 +167,7 @@ class ImportServiceMixin:
         try:
             headers, _rows = table_import.read_table_rows(path)
         except Exception as e:
-            # 异常归类（编码失败 / XLSX 损坏 / 文件不存在 / 行超限）
+            # t9：异常归类（编码失败 / XLSX 损坏 / 文件不存在 / 行超限）
             self._friendly_error(e, popup=True)
             return
         if not headers:
@@ -186,12 +186,12 @@ class ImportServiceMixin:
         def task(_progress=None):
             # v1.5.9.4-hotfix：TaskQueue 契约 fn(progress)——旧 def task() 无参
             # 导致表格导入任务一执行即 TypeError（导入一直静默失败的真凶）
-            # 异常由 TaskQueue 捕获并通过 on_error 回调
+            # t5: 异常由 TaskQueue 捕获并通过 on_error 回调
             items, issues = table_import.import_items(path, mapping=mapping)
             self.win.after(0, lambda i=items, s=issues: self._import_done(i, s, has_region))
 
-        # 使用 TaskQueue 执行任务
-        # 导入异常用 _friendly_error 归类（编码失败 / 损坏 / 行超限 / 列映射缺失）
+        # t5: 使用 TaskQueue 执行任务
+        # t9：导入异常用 _friendly_error 归类（编码失败 / 损坏 / 行超限 / 列映射缺失）
         self._task_queue.submit(
             "表格导入",
             task,
@@ -213,7 +213,7 @@ class ImportServiceMixin:
         # （import_memory.last_mapping_matches：核心 name/stock/sales 经
         # normalize_col_name 全命中）则用 resolve_last_mapping 对位预填下拉；
         # 读取失败/模块缺失降级为无记忆（guess_mapping 结果照旧），不阻塞导入。
-        # 清除入口在设置页，gui 这里只读写。
+        # 清除入口在设置页（t2 settings_ui），gui 这里只读写。
         _prefill = {}
         try:
             if import_memory is not None:
@@ -311,7 +311,7 @@ class ImportServiceMixin:
         try:
             if issues:
                 self._import_report_dialog(issues)
-            # 强制复用点 （R7）：导入侧公式注入清洗——name/region/warehouse 过 _sanitize_cell
+            # 强制复用点②（R7）：导入侧公式注入清洗——name/region/warehouse 过 _sanitize_cell
             from export_xlsx import _sanitize_cell
             for p in items:
                 if isinstance(p, dict):

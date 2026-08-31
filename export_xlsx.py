@@ -114,10 +114,10 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = 
             break
     if not sel_cols:
         sel_cols = ['商品信息', '仓库总库存', '仓库预估总销售数']
-    # 「店铺」列固定紧跟「地区」（store_name 未提供时留空，列结构保持稳定）
-    # 「预警」列紧跟「模型」（滞销⚠/超卖🔥/超卖⚠/低置信⚠，' / '分隔；旧数据无字段默认空）
-    # R2 预测：「预测日销」紧跟「可售卖天数」（与 GUI 结果表列序一致； forecast_next_period，
-    # 旧缓存 plans 无 forecast 字段 → 空单元格，便于 Excel 数值处理）
+    # t6：「店铺」列固定紧跟「地区」（store_name 未提供时留空，列结构保持稳定）
+    # t8：「预警」列紧跟「模型」（滞销⚠/超卖🔥/超卖⚠/低置信⚠，' / '分隔；旧数据无字段默认空）
+    # R2 预测：「预测日销」紧跟「可售卖天数」（与 GUI 结果表列序一致；t5 forecast_next_period，
+    #          旧缓存 plans 无 forecast 字段 → 空单元格，便于 Excel 数值处理）
     # v1.5.13：结果列开关（预警/预测/模型可关）——列表与导出共用 filter_result_cols
     try:
         from utils import filter_result_cols, get_result_cols_cfg
@@ -190,10 +190,10 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = 
                     _exp_status = '⛔' + _exp_status
             vals += [_sanitize_cell(_exp_status), _exp_qty]
             if _has_model:
-                # P3-A：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
+                # t13 P3-A：补货模型列（'classic' / 'weighted' / 'classic(no_history)'）；旧数据无此字段默认 'classic'
                 vals.append(_sanitize_cell(p.get('model', 'classic')))
             if _has_warn:
-                # 预警列（高级模式预警标签：滞销⚠/超卖🔥/超卖⚠/低置信⚠；旧数据无此字段默认空字符串）
+                # t8：预警列（高级模式预警标签：滞销⚠/超卖🔥/超卖⚠/低置信⚠；旧数据无此字段默认空字符串）
                 vals.append(_sanitize_cell(p.get('warning', '') or ''))
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(row=row, column=ci, value=v)
@@ -204,7 +204,7 @@ def export_cache_to_xlsx(cache: dict, export_dir: str = None, store_name: str = 
                     c.fill = styles['fills'][p['color']]
             row += 1
 
-    # 列宽同步加「店铺」列（地区10 / 店铺14 / 仓库12）； 在「模型」后追加「预警」(16)
+    # t6：列宽同步加「店铺」列（地区10 / 店铺14 / 仓库12）；t8 在「模型」后追加「预警」(16)
     # R2 预测：「预测日销」10（「可售卖天数」后第二位）；v1.5.13 列开关后按 kept 列对齐
     _width_map = {'可售卖天数': 10, '预测日销': 10, '状态': 12, '补货量': 10, '模型': 10, '预警': 16}
     widths = [10, 14, 12] + [20 if '名称' in c or '商品' in c else 12 for c in sel_cols] \

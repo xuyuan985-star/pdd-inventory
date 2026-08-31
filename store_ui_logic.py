@@ -100,7 +100,7 @@ def store_choices(stores, all_label=None):
 
     - all_label 非 None（如 '全部店铺'）→ 作为首项，映射 id=None（=查全部店铺）；
     - 重名店铺自动消歧：第二个重名项 label 追加完整 sid，保证 name→id 唯一
-      （id 权威；label 只用于显示与反查）；原用
+      （id 权威；label 只用于显示与反查）；R2 BUG-15 修复（t1 BUG-15）原用
       sid[:8] 极端碰撞下仍撞名则丢，改为完整 sid + 序号兜底，绝不丢店；
     - 脏条目（非 dict / 缺 id）跳过。
     """
@@ -116,7 +116,7 @@ def store_choices(stores, all_label=None):
             continue
         nm = str(s.get('name') or '').strip() or sid
         if nm in name2id:
-            # R2 问题 修复：用完整 sid 消歧，理论碰撞概率
+            # R2 BUG-15 修复（t1 BUG-15）：用完整 sid 消歧，理论碰撞概率
             # 极低（UUID v4 128 bit）；若仍撞（实际不可能）则追加循环序号
             # 兜底，绝不丢店——原代码「continue 丢弃」是数据丢失。
             candidate = f"{nm}({sid})"
